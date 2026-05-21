@@ -1,0 +1,42 @@
+{
+  "name": "wevibe-dashboard",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit",
+    "test:mcp": "tsx e2e/mcp-tools.test.ts",
+    "test:e2e": "playwright test --reporter=list",
+    "test:e2e:headed": "playwright test --headed",
+    "test:all": "npm run test:mcp && npm run test:e2e"
+  },
+  "dependencies": {
+    "@cosmjs/amino": "0.39.0",
+    "@cosmjs/crypto": "0.39.0",
+    "@cosmjs/encoding": "0.39.0",
+    "@cosmjs/proto-signing": "0.39.0",
+    "@cosmjs/stargate": "0.39.0",
+    "better-sqlite3": "^11.0.0",
+    "cosmjs-types": "0.11.0",
+    "next": "14.2.3",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.2.3",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "tsx": "4.21.0",
+    "typescript": "^5.4.0"
+  }
+}

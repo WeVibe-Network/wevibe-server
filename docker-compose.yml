@@ -1,0 +1,201 @@
+# WeVibe Network — Unified Docker Compose
+#
+# This file brings up the WeVibe stack for testing + dogfood.
+#
+# Containerized services:
+#   - wevibe-postgres:    PostgreSQL 16, schema bootstrapped from ../db/schema.sql
+#   - wevibe-qdrant:      Qdrant vector DB
+#   - wevibe-chain:       WeVibe chain validator (Cosmos SDK)
+#   - wevibe-umbral:      Umbral PRE gRPC sidecar
+#   - wevibe-hub:         WeVibe hub API (Go)
+#   - wevibe-dashboard:   WeVibe dashboard UI (Next.js)
+#   - wevibe-mcp:         WeVibe MCP HTTP gateway
+#
+# Host process exception (see DECISIONS.md D-13.10):
+#   - Ollama:      Runs as macOS host app for Metal GPU acceleration.
+#                  Containers reach it via host.docker.internal:11434.
+#
+# Usage:
+#   make dogfood        # Full test cycle (orchestrates everything)
+#   make docker-up      # Bring up the containerized stack
+#   make docker-down    # Tear down + WIPE volumes
+#
+# Schema changes are migration-driven. Add SQL files under ./db/migrations/
+# and hub applies them automatically at startup.
+
+services:
+  wevibe-postgres:
+    image: postgres:16-alpine
+    container_name: wevibe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wevibe
+      POSTGRES_PASSWORD: wevibe_dev
+      POSTGRES_DB: wevibe_hub
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wevibe -d wevibe_hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wevibe-qdrant:
+    image: qdrant/qdrant:v1.9.0
+    container_name: wevibe-qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: "${WEVIBE_QDRANT_API_KEY:-wevibe_dev_qdrant_key_32chars_minimum}"
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/localhost/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  wevibe-chain:
+    build:
+      context: ../wevibe-chain
+      dockerfile: Dockerfile
+    container_name: wevibe-chain
+    restart: unless-stopped
+    environment:
+      CHAIN_ID: wevibe-local-1
+      MONIKER: wevibe-validator
+      WEVIBED_HOME: /root/.wevibed
+    entrypoint: ["/usr/local/bin/init-chain.sh", "start"]
+    ports:
+      - "26656:26656"
+      - "26657:26657"
+      - "1317:1317"
+      - "9090:9090"
+    volumes:
+      - wevibe_chain_data:/root/.wevibed
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:26657/status || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  wevibe-umbral:
+    build:
+      context: ..
+      dockerfile: wevibe-server/Dockerfile.umbral-sidecar
+    container_name: wevibe-umbral
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4460"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  wevibe-hub:
+    build:
+      context: ..
+      dockerfile: wevibe-server/Dockerfile.hub
+    container_name: wevibe-hub
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://wevibe:wevibe_dev@wevibe-postgres:5432/wevibe_hub?sslmode=disable
+      QDRANT_ADDR: wevibe-qdrant:6333
+      WEVIBE_QDRANT_API_KEY: "${WEVIBE_QDRANT_API_KEY:-wevibe_dev_qdrant_key_32chars_minimum}"
+      WEVIBE_CHAIN_ENABLED: "true"
+      WEVIBE_CHAIN_ID: "wevibe-local-1"
+      WEVIBE_CHAIN_GRPC_URL: "tcp://wevibe-chain:9090"
+      WEVIBE_CHAIN_SUBMITTER_MNEMONIC: "${WEVIBE_CHAIN_SUBMITTER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}"
+      OLLAMA_URL: http://host.docker.internal:11434
+      WEVIBE_CHAIN_RPC_URL: tcp://wevibe-chain:26657
+      WEVIBE_UMBRAL_SIDECAR_ADDR: "wevibe-umbral:4460"
+      WEVIBE_HUB_PORT: "4440"
+      WEVIBE_TEST_MODE: "true"
+      HUB_NODE_PRIVKEY: "${HUB_NODE_PRIVKEY:-0000000000000000000000000000000000000000000000000000000000000000}"
+    ports:
+      - "4440:4440"
+    depends_on:
+      wevibe-postgres:
+        condition: service_healthy
+      wevibe-qdrant:
+        condition: service_healthy
+      wevibe-chain:
+        condition: service_healthy
+      wevibe-umbral:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4440/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+
+
+  wevibe-dashboard:
+    build:
+      context: ./wevibe-dashboard
+      dockerfile: Dockerfile
+    container_name: wevibe-dashboard
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_WEVIBE_HUB_URL: http://localhost:4440
+      NEXT_PUBLIC_WEVIBE_MCP_URL: http://localhost:4450
+      NEXT_PUBLIC_WEVIBE_CHAIN_RPC: http://localhost:26657
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      wevibe-hub:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+
+  wevibe-mcp:
+    build:
+      context: ..
+      dockerfile: wevibe-server/Dockerfile.wevibe-mcp
+    container_name: wevibe-mcp
+    restart: unless-stopped
+    environment:
+      WEVIBE_HUB_URL: http://wevibe-hub:4440
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      WEVIBE_KEYSTORE_PATH: /root/.wevibe/keys
+    ports:
+      - "4450:4450"
+    depends_on:
+      wevibe-hub:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - wevibe_mcp_keys:/root/.wevibe
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const fs=require('fs');const http=require('http');let t='';try{t=fs.readFileSync('/root/.wevibe/mcp-session-token','utf8').trim();}catch{process.exit(1);}if(!t){process.exit(1);}const req=http.request({host:'127.0.0.1',port:4450,path:'/v1/health',headers:{Authorization:'Bearer '+t}},res=>process.exit(res.statusCode===200?0:1));req.on('error',()=>process.exit(1));req.end();\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  wevibe_chain_data:
+  wevibe_mcp_keys:

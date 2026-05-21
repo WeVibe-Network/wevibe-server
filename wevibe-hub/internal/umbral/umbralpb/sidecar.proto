@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package umbral.v1;
+
+option go_package = "github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral/umbralpb";
+
+// UmbralSidecar provides Proxy Re-Encryption operations via the umbral-pre crate.
+// This service runs as a separate process to maintain GPL-3.0 / Apache-2.0 license boundary.
+// All byte fields are serialized Umbral types using MessagePack (DefaultSerialize/DefaultDeserialize).
+service UmbralSidecar {
+  // GenerateKeyPair generates a new random Umbral keypair (epoch keypair).
+  // Called by the leader during epoch creation.
+  rpc GenerateKeyPair(GenerateKeyPairRequest) returns (GenerateKeyPairResponse);
+
+  // GenerateKFrags generates re-encryption key fragments for a member.
+  // Called by the leader when adding a member or rotating epochs.
+  // The sidecar stores the kfrag internally, keyed by (org_id, epoch_id, member_pubkey).
+  rpc GenerateKFrags(GenerateKFragsRequest) returns (GenerateKFragsResponse);
+
+  // ReEncrypt applies a stored kfrag to a capsule, producing a cfrag.
+  // Called by the hub during memory retrieval.
+  // Returns an error if no kfrag exists for the specified (org_id, epoch_id, member_pubkey).
+  rpc ReEncrypt(ReEncryptRequest) returns (ReEncryptResponse);
+
+  // DeleteKFrags deletes all stored kfrags for a member across all epochs in an org.
+  // Called by the hub when a member is removed (triggered by MemberRemoved chain event).
+  // Idempotent — returns success even if no kfrags exist.
+  rpc DeleteKFrags(DeleteKFragsRequest) returns (DeleteKFragsResponse);
+
+  // DeleteOrgKFrags deletes ALL stored kfrags for an entire org.
+  // Called during org dissolution.
+  rpc DeleteOrgKFrags(DeleteOrgKFragsRequest) returns (DeleteOrgKFragsResponse);
+
+  // Health returns the sidecar's status.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message GenerateKeyPairRequest {}
+
+message GenerateKeyPairResponse {
+  // Serialized Umbral SecretKey (32 bytes, big-endian).
+  // SENSITIVE — must be handled as secret material by the caller.
+  bytes secret_key = 1;
+  // Serialized Umbral PublicKey (33 bytes, compressed secp256k1 point).
+  bytes public_key = 2;
+}
+
+message GenerateKFragsRequest {
+  // Org identifier — used as storage key prefix.
+  string org_id = 1;
+  // Epoch identifier — used as storage key component.
+  uint64 epoch_id = 2;
+  // Serialized Umbral SecretKey of the epoch (delegating key).
+  // SENSITIVE — the sidecar uses this transiently and does NOT store it.
+  bytes delegating_sk = 3;
+  // Serialized Umbral PublicKey of the member (receiving key).
+  bytes receiving_pk = 4;
+  // Serialized Umbral SecretKey used for signing kfrags.
+  // SENSITIVE — the sidecar uses this transiently and does NOT store it.
+  bytes signer_sk = 5;
+  // Serialized Umbral PublicKey corresponding to signer_sk (verifying key).
+  bytes verifying_pk = 6;
+}
+
+message GenerateKFragsResponse {
+  // Serialized VerifiedKeyFrag. Stored internally by the sidecar.
+  // Returned to caller for backup/audit purposes only.
+  bytes kfrag = 1;
+}
+
+message ReEncryptRequest {
+  // Identifies which stored kfrag to use.
+  string org_id = 1;
+  uint64 epoch_id = 2;
+  bytes member_pk = 3;
+  // Serialized Umbral Capsule from the encrypted content.
+  bytes capsule = 4;
+}
+
+message ReEncryptResponse {
+  // Serialized VerifiedCapsuleFrag — the re-encrypted capsule fragment.
+  bytes cfrag = 1;
+}
+
+message DeleteKFragsRequest {
+  string org_id = 1;
+  // Member's PRE public key (serialized Umbral PublicKey).
+  bytes member_pk = 2;
+}
+
+message DeleteKFragsResponse {
+  // Number of kfrags deleted.
+  uint32 deleted_count = 1;
+}
+
+message DeleteOrgKFragsRequest {
+  string org_id = 1;
+}
+
+message DeleteOrgKFragsResponse {
+  uint32 deleted_count = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+  // Number of kfrags currently stored.
+  uint64 kfrag_count = 2;
+  // Umbral library version.
+  string umbral_version = 3;
+}

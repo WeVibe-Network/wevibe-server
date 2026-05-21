@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+build/
+*.log
+tests/
+coverage/
+.git/
+.vscode/
+.DS_Store
+.env.local

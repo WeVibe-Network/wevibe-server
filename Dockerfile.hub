@@ -1,0 +1,39 @@
+# Dockerfile.hub — WeVibe Hub development image
+# Build context: repo root (/)
+FROM golang:1.26-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /build
+
+# Copy wevibe-chain first (required by replace directive)
+COPY wevibe-chain/ ./wevibe-chain/
+
+# Copy hub go.mod and go.sum - put them directly in /build
+COPY wevibe-server/wevibe-hub/go.mod wevibe-server/wevibe-hub/go.sum ./
+
+# Fix replace directive to use local path inside container
+RUN sed -i 's|/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-chain|./wevibe-chain|g' go.mod
+
+# Verify the fix
+RUN cat go.mod | grep replace
+
+WORKDIR /build/wevibe-chain
+RUN go mod download
+WORKDIR /build
+
+# Now copy hub source (exclude go.mod/go.sum - already patched above)
+COPY wevibe-server/wevibe-hub/cmd ./cmd
+COPY wevibe-server/wevibe-hub/internal ./internal
+COPY wevibe-server/wevibe-hub/tests ./tests
+COPY wevibe-server/wevibe-hub/docs ./docs
+COPY wevibe-server/db/migrations ./db/migrations
+
+RUN CGO_ENABLED=0 go build -o wevibe-hub ./cmd/wevibe-hub
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates wget
+COPY --from=builder /build/wevibe-hub /usr/local/bin/wevibe-hub
+COPY --from=builder /build/db/migrations /db/migrations
+EXPOSE 4440
+CMD ["wevibe-hub"]

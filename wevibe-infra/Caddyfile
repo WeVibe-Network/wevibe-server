@@ -1,0 +1,18 @@
+# WeVibe Hub — Caddy reverse proxy
+# For local dev: HTTP only, reverse proxy to wevibe-hub:4440
+# For production: set WEVIBE_DOMAIN env var for automatic HTTPS
+
+{$WEVIBE_DOMAIN:localhost} {
+    reverse_proxy wevibe-hub:4440
+    
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+    
+    log {
+        output stdout
+        format console
+    }
+}

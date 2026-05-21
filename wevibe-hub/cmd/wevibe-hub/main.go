@@ -1,0 +1,243 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/config"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/social"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+)
+
+func corsOrigins() []string {
+	env := os.Getenv("CORS_ALLOWED_ORIGINS")
+	if env == "" {
+		return []string{"http://*", "https://*"}
+	}
+	origins := strings.Split(env, ",")
+	for i := range origins {
+		origins[i] = strings.TrimSpace(origins[i])
+	}
+	return origins
+}
+
+func main() {
+	cfg := config.Load()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := db.RunMigrations(cfg.DatabaseURL); err != nil {
+		log.Fatalf("FATAL: database migration failed: %v", err)
+	}
+
+	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("FATAL: database connection failed: %v", err)
+	}
+	defer pool.Close()
+	handlers.SetPool(pool)
+
+	var chainClient *chain.GrpcClient
+	if !cfg.ChainEnabled {
+		log.Fatalf("FATAL: WEVIBE_CHAIN_ENABLED must be true — chain is the sole content store")
+	}
+	if cfg.ChainGRPCURL == "" || cfg.ChainID == "" || cfg.ChainSubmitterMnemonic == "" {
+		log.Fatalf("FATAL: chain config incomplete — WEVIBE_CHAIN_GRPC_URL, WEVIBE_CHAIN_ID, and WEVIBE_CHAIN_SUBMITTER_MNEMONIC are all required")
+	}
+	chainClient, err = chain.NewGrpcClient(cfg.ChainGRPCURL, cfg.ChainID, cfg.ChainSubmitterMnemonic)
+	if err != nil {
+		log.Fatalf("FATAL: chain client: %v", err)
+	}
+	defer chainClient.Close()
+	log.Printf("chain client initialized for chain %s, submitter %s", cfg.ChainID, chainClient.SubmitterAddress())
+
+	handlers.SetChainClient(chainClient)
+	handlers.SetSocialClient(social.NewClient(cfg.SocialGraphURL))
+
+	umbralClient, err := umbral.NewClient(cfg.UmbralSidecarAddr)
+	if err != nil {
+		log.Fatalf("FATAL: umbral sidecar client: %v", err)
+	}
+	umbralService := umbral.NewService(umbralClient)
+	handlers.SetUmbralService(umbralService)
+	log.Printf("umbral service initialized (sidecar at %s)", cfg.UmbralSidecarAddr)
+
+	qdrantClient, err := retrieval.NewQdrantClient(cfg.QdrantAddr, cfg.QdrantAPIKey)
+	if err != nil {
+		log.Printf("WARNING: qdrant unavailable: %v", err)
+	} else {
+		defer qdrantClient.Close()
+		handlers.SetQdrantClient(qdrantClient)
+	}
+
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := chain.SyncEpochData(ctx, chainClient, qdrantClient, pool); err != nil {
+					log.Printf("ERROR: epoch sync failed: %v", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	handlers.SetNodePrivkey(cfg.NodePrivkey)
+
+	notifHub := notifications.NewHub()
+	handlers.SetNotificationHub(notifHub)
+	prefStore := notifications.NewPreferenceStore(pool)
+	notificationDispatcher := notifications.NewDispatcher(prefStore, slog.Default())
+	if smtpChannel, enabled, smtpErr := notifications.NewSMTPChannelFromEnv(); smtpErr != nil {
+		log.Printf("WARNING: smtp channel disabled: %v", smtpErr)
+	} else if enabled {
+		notificationDispatcher.Register(smtpChannel)
+	}
+	notificationDispatcher.Register(notifications.NewWebhookChannel())
+	handlers.SetNotificationDispatcher(notificationDispatcher)
+
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Recoverer)
+
+	allowedOrigins := corsOrigins()
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   allowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		ExposedHeaders:   []string{},
+		AllowCredentials: false,
+		MaxAge:           300,
+	}))
+
+	r.Get("/health", handlers.Health)
+
+	r.Get("/v1/members/{pubkey}/orgs", handlers.GetMemberOrgs)
+	r.Get("/v1/profile/notifications", handlers.GetNotificationPreferences)
+	r.Patch("/v1/profile/notifications", handlers.UpdateNotificationPreferences)
+	r.Get("/v1/profile/{wallet}", handlers.GetProfile)
+
+	r.Get("/v1/notifications", handlers.ListNotifications)
+	r.Get("/v1/notifications/unread-count", handlers.GetUnreadCount)
+	r.Post("/v1/notifications/mark-read", handlers.MarkRead)
+	r.Get("/v1/notifications/ws", handlers.NotificationWebSocket)
+
+	r.Post("/v1/orgs", handlers.CreateOrg)
+	r.Get("/v1/orgs/discover", handlers.DiscoverOrgs)
+	r.Get("/v1/orgs/{orgID}", handlers.GetOrg)
+	r.Post("/v1/orgs/{orgID}/join", handlers.SubmitJoinRequest)
+	r.Get("/v1/orgs/{orgID}/epoch/{epochID}/manifest", handlers.GetEpochManifest)
+
+	r.Route("/v1/orgs/{orgID}", func(r chi.Router) {
+		r.Use(auth.RequireOrgMembership(handlers.GetPool()))
+
+		r.Patch("/config", handlers.UpdateOrgConfig)
+		r.Post("/epoch/rotate", handlers.RotateEpoch)
+
+		r.Post("/members", handlers.InviteMember)
+		r.Get("/members", handlers.ListMembers)
+		r.Get("/members/{pubkey}", handlers.GetMember)
+		r.Post("/members/{pubkey}/pre-key", handlers.RegisterPreKey)
+		r.Get("/members/{pubkey}/pre-key", handlers.GetPreKey)
+		r.Delete("/members/{pubkey}", handlers.RemoveMember)
+		r.Patch("/members/{pubkey}/role", handlers.UpdateMemberRole)
+		r.Post("/members/wallet", handlers.LinkWallet)
+		r.Post("/members/delegate-key", handlers.RegisterDelegateKey)
+		r.Get("/keys/envelope", handlers.GetKeyEnvelope)
+
+		r.Post("/dashboard/keys", handlers.RegisterDashboardKey)
+		r.Delete("/dashboard/keys/{pubkey}", handlers.RevokeDashboardKey)
+
+		r.Post("/recovery/shares", handlers.StoreRecoveryShares)
+		r.Get("/recovery/shares", handlers.GetRecoveryShare)
+
+		r.Post("/submit", handlers.SubmitMemory)
+		r.Post("/submit/batch", handlers.SubmitMemoryBatch)
+		r.Route("/reports", func(r chi.Router) {
+			r.Post("/", handlers.CreateReport)
+			r.Get("/", handlers.ListReports)
+			r.Get("/{reportID}", handlers.GetReport)
+			r.Patch("/{reportID}", handlers.UpdateReport)
+			r.Post("/{reportID}/vote", handlers.VoteOnReport)
+			r.Post("/{reportID}/commit", handlers.CommitReport)
+		})
+
+		r.Get("/moderation/queue", handlers.GetPendingQueue)
+		r.Post("/moderation/{submissionHash}/vote", handlers.VoteOnSubmission)
+		r.Post("/moderation/{submissionHash}/approve", handlers.ApproveSubmission)
+		r.Post("/moderation/{submissionHash}/deny", handlers.DenySubmission)
+		r.Post("/moderation/{submissionHash}/undo-approve", handlers.UndoApproveSubmission)
+		r.Post("/moderation/batch-submit", handlers.BatchSubmitToChain)
+
+		r.Post("/serves", handlers.RecordServeEvent)
+		r.Post("/serves/batch-submit", handlers.BatchSubmitServes)
+		r.Post("/denials", handlers.RecordDenialEvent)
+		r.Post("/denials/batch-submit", handlers.BatchSubmitDenials)
+
+		r.Post("/query", handlers.QueryMemories)
+		r.Get("/memories", handlers.ListMemories)
+		r.Get("/memories/{cid}", handlers.GetMemory)
+
+		r.Get("/keywords", handlers.ListKeywords)
+		r.Post("/keywords", handlers.AddKeyword)
+		r.Put("/keywords/merge", handlers.MergeKeywords)
+		r.Put("/keywords/{keyword}/rename", handlers.RenameKeyword)
+		r.Delete("/keywords/{keyword}", handlers.DeprecateKeyword)
+
+		r.Post("/submit-keyword-results", handlers.SubmitKeywordResults)
+		r.Post("/verify-keywords", handlers.VerifyKeywords)
+		r.Post("/submissions/{hash}/rerun-keywords", handlers.RerunKeywords)
+		r.Put("/submissions/{hash}/update-keywords", handlers.UpdateKeywords)
+		r.Delete("/submissions/{hash}", handlers.RemoveSubmission)
+		r.Get("/submissions", handlers.ListSubmissions)
+		r.Get("/my-submissions", handlers.ListMySubmissions)
+
+		r.Post("/batch-chain-submit", handlers.BatchChainSubmit)
+		r.Get("/health", handlers.OrgHealth)
+
+		r.Get("/credits", handlers.GetOrgCredits)
+		r.Get("/finances", handlers.GetOrgFinances)
+		r.Get("/chain-config", handlers.GetOrgChainConfig)
+		r.Put("/chain-config", handlers.UpdateOrgChainConfig)
+		r.Post("/transfer-leadership", handlers.TransferLeadership)
+		r.Post("/close", handlers.CloseOrg)
+
+		r.Get("/join-requests", handlers.ListJoinRequests)
+		r.Post("/join-requests/{requestID}/approve", handlers.ApproveJoinRequest)
+		r.Post("/join-requests/{requestID}/deny", handlers.DenyJoinRequest)
+	})
+
+	r.Post("/v1/billing/topup", handlers.TopUpCredits)
+
+	if os.Getenv("WEVIBE_TEST_MODE") == "true" {
+		log.Printf("TEST MODE ENABLED — test endpoints registered at /v1/test/*")
+		r.Get("/v1/test/health", handlers.TestHealth)
+
+		r.Post("/v1/test/embed", handlers.TestEmbed)
+		r.Get("/v1/test/orgs/{orgID}/queue", handlers.TestGetQueue)
+	}
+
+	addr := fmt.Sprintf(":%d", cfg.Port)
+	log.Printf("wevibe-hub starting on %s", addr)
+	if err := http.ListenAndServe(addr, r); err != nil {
+		log.Fatalf("wevibe-hub: %v", err)
+	}
+}
