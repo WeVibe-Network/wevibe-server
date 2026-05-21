@@ -1,10 +1,10 @@
-# Echo Hub Whitepaper
+# WeVibe Hub Whitepaper
 
 Version: 1.2 · Sprint 27
 
 ## Mission
 
-Echo Hub is the managed Go API server that bridges wevibe-chain state, PostgreSQL relational data, and Qdrant vector search into a unified REST interface for dashboards, MCP clients, and operational tooling. It signs and broadcasts chain transactions on behalf of authenticated org leaders and moderators, but never holds org private keys — only a derived submitter key for proxying approved actions.
+WeVibe Hub is the managed Go API server that bridges wevibe-chain state, PostgreSQL relational data, and Qdrant vector search into a unified REST interface for dashboards, MCP clients, and operational tooling. It signs and broadcasts chain transactions on behalf of authenticated org leaders and moderators, but never holds org private keys — only a derived submitter key for proxying approved actions.
 
 ## Key Responsibilities
 

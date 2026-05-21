@@ -129,6 +129,8 @@ services:
         condition: service_healthy
       wevibe-umbral:
         condition: service_healthy
+      wevibe-social-graph:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -137,6 +139,27 @@ services:
       timeout: 3s
       retries: 15
       start_period: 10s
+
+
+  wevibe-social-graph:
+    build:
+      context: ../wevibe-social-graph
+      dockerfile: Dockerfile
+    container_name: wevibe-social-graph
+    restart: unless-stopped
+    environment:
+      SOCIAL_GRAPH_DB_PATH: /data/social-graph.db
+      SOCIAL_GRAPH_PORT: "4470"
+    ports:
+      - "4470:4470"
+    volumes:
+      - wevibe_social_graph_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4470/v1/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 
   wevibe-dashboard:
@@ -199,3 +222,4 @@ volumes:
   qdrant_data:
   wevibe_chain_data:
   wevibe_mcp_keys:
+  wevibe_social_graph_data:

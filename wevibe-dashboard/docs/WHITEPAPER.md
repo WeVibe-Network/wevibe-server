@@ -1,4 +1,4 @@
-# Echo Dashboard Whitepaper
+# WeVibe Dashboard Whitepaper
 
 Version: 0.5 · Sprint 24
 

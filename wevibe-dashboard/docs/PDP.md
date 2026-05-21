@@ -1,4 +1,4 @@
-# Echo Dashboard PDP
+# WeVibe Dashboard PDP
 
 ## Technology Stack (target)
 

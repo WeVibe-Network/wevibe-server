@@ -1,4 +1,4 @@
-# Echo Hub PDP
+# WeVibe Hub PDP
 
 ## Service Layout
 
@@ -104,7 +104,7 @@ The canonical chain client is `GrpcClient` (gRPC only). There is no CometBFT RPC
 | `DATABASE_URL` | — | PostgreSQL connection string |
 | `QDRANT_ADDR` | localhost:6333 | Qdrant gRPC address |
 | `OLLAMA_URL` | http://localhost:11434 | Embedding service URL |
-| `WEVIBE_S3_BUCKET` | echo-memories | S3 bucket for ciphertext storage |
+| `WEVIBE_S3_BUCKET` | wevibe-memories | S3 bucket for ciphertext storage |
 | `HUB_NODE_PRIVKEY` | — | Ed25519 node key for receipt signing |
 | `WEVIBE_CHAIN_GRPC_URL` | — | wevibe-chain gRPC endpoint |
 | `WEVIBE_CHAIN_ID` | — | Chain ID |

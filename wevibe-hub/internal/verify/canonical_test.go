@@ -26,8 +26,8 @@ func TestCreateOrgMessage_Deterministic(t *testing.T) {
 
 	result := string(msg)
 
-	if result[:22] != "wevibe.create_org.v1\ndom" {
-		t.Fatalf("unexpected prefix: %q", result[:22])
+	if result[:24] != "wevibe.create_org.v1\ndom" {
+		t.Fatalf("unexpected prefix: %q", result[:24])
 	}
 
 	lines := splitLines(result)

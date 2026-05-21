@@ -1,4 +1,4 @@
-# Echo Dashboard Topology (Updated: CO-266)
+# WeVibe Dashboard Topology (Updated: CO-266)
 
 ## Runtime Diagram
 
@@ -398,9 +398,9 @@ Uses `HubClient`, `encryptMemory`, `signSubmission`, test identities for leader/
 
 The dashboard integrates with Keplr and Leap Cosmos wallets via the browser extension injection pattern. No `@keplr-wallet` npm packages are used — only TypeScript type declarations for `window.keplr` and `window.leap`.
 
-**Flow:** User clicks "Connect Keplr" or "Connect Leap" → `experimentalSuggestChain` registers Echo chain with the wallet → `enable` requests access → `getKey` returns the bech32 address → wallet address is stored in IndexedDB alongside the Ed25519 delegate key → `linkWallet` call registers the address with the hub.
+**Flow:** User clicks "Connect Keplr" or "Connect Leap" → `experimentalSuggestChain` registers WeVibe chain with the wallet → `enable` requests access → `getKey` returns the bech32 address → wallet address is stored in IndexedDB alongside the Ed25519 delegate key → `linkWallet` call registers the address with the hub.
 
-**Chain config:** `NEXT_PUBLIC_WEVIBE_CHAIN_ID`, `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, `NEXT_PUBLIC_WEVIBE_CHAIN_REST`, `NEXT_PUBLIC_WEVIBE_BECH32_PREFIX`, `NEXT_PUBLIC_WEVIBE_COIN_DENOM`, `NEXT_PUBLIC_WEVIBE_COIN_MIN_DENOM`. Defaults reflect wevibe-chain values: chain ID `wevibe-local-1`, bech32 prefix `echo`, coin `uvibe`.
+**Chain config:** `NEXT_PUBLIC_WEVIBE_CHAIN_ID`, `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, `NEXT_PUBLIC_WEVIBE_CHAIN_REST`, `NEXT_PUBLIC_WEVIBE_BECH32_PREFIX`, `NEXT_PUBLIC_WEVIBE_COIN_DENOM`, `NEXT_PUBLIC_WEVIBE_COIN_MIN_DENOM`. Defaults reflect wevibe-chain values: chain ID `wevibe-local-1`, bech32 prefix `wevibe`, coin base `uvibe` (display `VIBE`).
 
 **IndexedDB storage:** The `StoredIdentity` object in `lib/wevibe-auth.ts` stores `walletAddress` alongside the Ed25519 keypair. `getWalletAddress()` and `setWalletAddress()` manage this field.
 
@@ -416,7 +416,7 @@ The dashboard uses a two-tier identity model:
 ### Module Architecture
 
 **`lib/delegate-key.ts`** — secp256k1 delegate key generation and encrypted storage.
-- `generateDelegateKey(walletAddress)` — generates a new secp256k1 keypair via `DirectSecp256k1HdWallet.generate()`, returns `{ address, pubkey, mnemonic }`. Address is bech32-encoded with `echo` prefix.
+- `generateDelegateKey(walletAddress)` — generates a new secp256k1 keypair via `DirectSecp256k1HdWallet.generate()`, returns `{ address, pubkey, mnemonic }`. Address is bech32-encoded with `wevibe` prefix.
 - `storeDelegateKey(walletAddress, delegateAddress, mnemonic)` — encrypts mnemonic with AES-GCM (key derived from walletAddress via PBKDF2) and stores in IndexedDB under `delegate-keys` store.
 - `getDelegateKey(walletAddress)` — retrieves and decrypts stored delegate key, returns `{ delegateAddress, pubkey }`.
 - `getDelegateWallet(walletAddress)` — reconstructs `DirectSecp256k1HdWallet` from stored mnemonic for signing.
@@ -427,7 +427,7 @@ The dashboard uses a two-tier identity model:
 - `getChainRpcEndpoint()` — reads `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, normalizes `tcp://` to `http://` for CosmJS compatibility.
 - `buildMsgGrant(granter, grantee, msgTypeUrl, expirationDays)` — builds `MsgGrant` with `GenericAuthorization` for a specific message TypeURL.
 - `buildMsgRevoke(granter, grantee, msgTypeUrl)` — builds `MsgRevoke`.
-- `WEVIBE_MSG_TYPE_URLS` — array of 15 Echo message TypeURLs authorized for delegation.
+- `WEVIBE_MSG_TYPE_URLS` — array of 15 WeVibe message TypeURLs authorized for delegation.
 
 **`lib/delegation.ts`** — delegation orchestrator.
 - `setupDelegation(walletAddress)` — generates delegate key → signs 15 MsgGrant transactions from wallet (one Keplr popup) → stores delegate key locally. Returns `{ delegateAddress, txHash, grantCount }`.
@@ -450,21 +450,21 @@ Added to `package.json`: `@cosmjs/stargate`, `@cosmjs/proto-signing`, `@cosmjs/a
 ### TypeURLs Authorized for Delegation
 
 ```
-/echo.memory.v1.MsgSubmitCommitment
-/echo.memory.v1.MsgApproveMemory
-/echo.memory.v1.MsgRejectMemory
-/echo.memory.v1.MsgReportMemory
-/echo.serve.v1.MsgSubmitServeBatch
-/echo.org.v1.MsgRegisterOrg
-/echo.org.v1.MsgAddMember
-/echo.org.v1.MsgRemoveMember
-/echo.org.v1.MsgSetOrgConfig
-/echo.org.v1.MsgSetRepTiers
-/echo.org.v1.MsgFundTreasury
-/echo.org.v1.MsgWithdrawTreasury
-/echo.reputation.v1.MsgIncrementContribution
-/echo.reputation.v1.MsgIncrementServe
-/echo.reputation.v1.MsgRecordBan
+/wevibe.memory.v1.MsgSubmitCommitment
+/wevibe.memory.v1.MsgApproveMemory
+/wevibe.memory.v1.MsgRejectMemory
+/wevibe.memory.v1.MsgReportMemory
+/wevibe.serve.v1.MsgSubmitServeBatch
+/wevibe.org.v1.MsgRegisterOrg
+/wevibe.org.v1.MsgAddMember
+/wevibe.org.v1.MsgRemoveMember
+/wevibe.org.v1.MsgSetOrgConfig
+/wevibe.org.v1.MsgSetRepTiers
+/wevibe.org.v1.MsgFundTreasury
+/wevibe.org.v1.MsgWithdrawTreasury
+/wevibe.reputation.v1.MsgIncrementContribution
+/wevibe.reputation.v1.MsgIncrementServe
+/wevibe.reputation.v1.MsgRecordBan
 ```
 
 Grant expiration: 90 days. Gas: 400,000 per transaction batch. Fee: 5,000 uvibe.

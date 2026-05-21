@@ -1,4 +1,4 @@
-# Echo Hub Topology (Updated: CO-266)
+# WeVibe Hub Topology (Updated: CO-266)
 
 ## Multi-Org Isolation (CO-246)
 
@@ -435,7 +435,7 @@ GET /v1/orgs/{orgID}/health (leader-only)
 **ApproveSubmission handler (CO-238):**
 - Simplified to only change status to `pending_keyword` and record moderator
 - Removed: keyword extraction, embedding computation, Qdrant insert, chain TX at approval time
-- Canonical message: `echo.approve_submission.v2` (simpler format without keywords/capsule)
+- Canonical message: `wevibe.approve_submission.v2` (simpler format without keywords/capsule)
 
 ## Qdrant Chain Parity (CO-224)
 
@@ -861,7 +861,7 @@ The hub supports linking a Cosmos wallet address to a member's Ed25519 delegate 
 
 The hub maintains a mapping between wallet addresses and their authorized secp256k1 delegate keys (chain addresses authorized via Cosmos SDK `x/authz` MsgGrant).
 
-**New endpoint:** `POST /v1/orgs/{orgID}/members/delegate-key` — registers a delegate key for the caller's wallet address. Must be signed by the caller's Ed25519 key. Canonical message: `echo.register_delegate_key.v1\norg_id:{orgID}\nwallet_address:{walletAddress}\ndelegate_address:{delegateAddress}\nsigned_by:{pubkeyHex}`.
+**New endpoint:** `POST /v1/orgs/{orgID}/members/delegate-key` — registers a delegate key for the caller's wallet address. Must be signed by the caller's Ed25519 key. Canonical message: `wevibe.register_delegate_key.v1\norg_id:{orgID}\nwallet_address:{walletAddress}\ndelegate_address:{delegateAddress}\nsigned_by:{pubkeyHex}`.
 
 **`delegate_keys` table schema:**
 ```sql
