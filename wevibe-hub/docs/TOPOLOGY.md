@@ -25,6 +25,12 @@ func OrgCollectionName(orgID string) string {
 - `internal/retrieval/retrieval_test.go` — updated tests
 - `cmd/wevibe-hub/main.go` — removed startup `EnsureCollection` call
 
+### Required Qdrant API credentials
+
+- The hub loader (`internal/config/config.go`) now reads the API key from `QDRANT_API_KEY` and aborts on startup if the variable is missing or shorter than 32 characters.
+- Docker Compose exports `QDRANT_API_KEY` from the developer-friendly `WEVIBE_QDRANT_API_KEY` variable so existing `.env` files continue to work.
+- This guarantees both the hub runtime and its e2e tests use the same credential contract as `wevibe-mcp`, preventing accidental anonymous access after the Qdrant rename work in CO-001.
+
 ### Authz Middleware (CO-246)
 
 **Location:** `internal/auth/middleware.go`

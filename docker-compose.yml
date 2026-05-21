@@ -107,7 +107,7 @@ services:
     environment:
       DATABASE_URL: postgres://wevibe:wevibe_dev@wevibe-postgres:5432/wevibe_hub?sslmode=disable
       QDRANT_ADDR: wevibe-qdrant:6333
-      WEVIBE_QDRANT_API_KEY: "${WEVIBE_QDRANT_API_KEY:-wevibe_dev_qdrant_key_32chars_minimum}"
+      QDRANT_API_KEY: "${WEVIBE_QDRANT_API_KEY:-wevibe_dev_qdrant_key_32chars_minimum}"
       WEVIBE_CHAIN_ENABLED: "true"
       WEVIBE_CHAIN_ID: "wevibe-local-1"
       WEVIBE_CHAIN_GRPC_URL: "tcp://wevibe-chain:9090"

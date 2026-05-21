@@ -6,14 +6,19 @@ RUN apk add --no-cache git
 
 WORKDIR /build
 
-# Copy wevibe-chain first (required by replace directive)
+# Copy repos referenced by go.mod replace directives
 COPY wevibe-chain/ ./wevibe-chain/
+COPY wevibe-sdk/ ./wevibe-sdk/
 
 # Copy hub go.mod and go.sum - put them directly in /build
 COPY wevibe-server/wevibe-hub/go.mod wevibe-server/wevibe-hub/go.sum ./
 
-# Fix replace directive to use local path inside container
-RUN sed -i 's|/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-chain|./wevibe-chain|g' go.mod
+# Fix replace directives to use local paths inside container
+RUN sed -i \
+    -e 's|/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-chain|./wevibe-chain|g' \
+    -e 's|/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-sdk|./wevibe-sdk|g' \
+    -e 's|../../wevibe-chain|./wevibe-chain|g' \
+    -e 's|../../wevibe-sdk|./wevibe-sdk|g' go.mod
 
 # Verify the fix
 RUN cat go.mod | grep replace

@@ -25,8 +25,8 @@ const (
 	DefaultFeeAmount = int64(2000)
 	BroadcastTimeout = 30 * time.Second
 	retryAttempts    = 8
-	minGasPriceNum   = int64(1)
-	minGasPriceDen   = int64(100)
+	minGasPriceNum   = int64(25)
+	minGasPriceDen   = int64(1000)
 )
 
 func isTransientStoreStateError(err error) bool {
