@@ -231,6 +231,29 @@ func (c *GrpcClient) BroadcastMsgs(ctx context.Context, msgs ...types.Msg) (stri
 			accNum = baseAccount.GetAccountNumber()
 			accSeq = baseAccount.GetSequence()
 
+			// CO-005d: Cross-check the queried account sequence against our local
+			// post-broadcast cache. If a previous broadcast incremented our local
+			// fallbackSequence but the chain query still reports the pre-broadcast
+			// sequence (because the tx is in mempool but not yet committed in a
+			// block), use the local cache — otherwise we race the previous
+			// broadcast's commit and the ante handler rejects us with
+			// "incorrect account sequence". See DECISIONS.md D-S29-HUB-SEQUENCE-RACE.
+			c.fallbackMu.Lock()
+			if c.fallbackStateLoaded && c.fallbackSequence > accSeq {
+				accSeq = c.fallbackSequence
+			}
+			c.fallbackMu.Unlock()
+
+			// Known limitation (Sprint 30+ backlog per D-S29-HUB-SEQUENCE-RACE):
+			// fallbackSequence is incremented post-broadcast without confirmation
+			// that the broadcast actually committed. If a prior broadcast was
+			// rejected (e.g., insufficient fee), fallbackSequence is stale-ahead
+			// and using it here will cause subsequent broadcasts to fail with
+			// the inverse sequence-mismatch ("expected 0, got 1"). The proper fix
+			// is an in-flight counter pattern that decrements on broadcast
+			// confirmation/rejection. For Sprint 29 dogfood (sequential
+			// always-successful broadcasts), max-of-two is sufficient.
+
 			c.fallbackMu.Lock()
 			c.fallbackAccountNumber = accNum
 			c.fallbackSequence = accSeq
