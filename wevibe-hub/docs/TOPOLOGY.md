@@ -670,8 +670,69 @@ const (
 - **submit.go** — `SubmitMemoryToChain` and `SubmitMemoryBatch` build and broadcast `MsgSubmitMemory`; `SubmitServeBatch` for serve event attestation.
 - **merkle.go** — binary SHA-256 Merkle tree for epoch root computation.
 - **sync.go** — `SyncEpochData` polling loop logic: compares chain confidence/state to Qdrant payload and updates changed records.
+- **cometbft_subscriber.go** — CometBFT RPC subscriber for new block events.
 
 CometBFT RPC is not consumed yet, but config now includes optional `WEVIBE_CHAIN_RPC_URL` (`ChainRPCURL`) for Sprint 23 WebSocket work.
+
+## ChainWatcher (CO-011a.3)
+
+The ChainWatcher detects confirmed transactions on-chain and performs post-confirmation bookkeeping. It is defined in `internal/chain/` but is NOT started — activation is deferred to CO-011a.4.
+
+### File Inventory
+
+```
+internal/chain/watcher.go            — ChainWatcher struct, Start(), catchUp(), processTx(), existing handlers
+internal/chain/watcher_memory.go     — processApproveMemoryBookkeeping()
+internal/chain/watcher_serve.go      — processServeBatchBookkeeping(), processDenialBatchBookkeeping()
+internal/chain/watcher_report_org.go — processReportBookkeeping(), processRegisterOrgBookkeeping()
+```
+
+### Handler Coverage Table
+
+| Msg Type | Handler | Bookkeeping |
+|---------|---------|-------------|
+| `MsgApproveMemory` | `processApproveEvent` + `processApproveMemoryBookkeeping` | Qdrant upsert, memory_keywords, pending_submissions status, orgs timestamp, approval_votes cleanup |
+| `MsgSubmitCommitment` | companion data extraction only | Extracts keywords/contributor_id/wallet for MsgApproveMemory bookkeeping |
+| `MsgReportMemory` | `processReportEvent` + `processReportBookkeeping` | reports status → upheld, Qdrant delete, pending_submissions ban |
+| `MsgSubmitServeBatch` | `processServeBatchBookkeeping` | serve_events marking, keyword weight boost, Qdrant sync |
+| `MsgSubmitDenialBatch` | `processDenialBatchBookkeeping` | serve_events marking, keyword weight decay, Qdrant sync |
+| `MsgRegisterOrg` | `processRegisterOrgBookkeeping` | orgs chain_registered = true |
+| `MsgSubmitCommitment` | debug log only | No bookkeeping (reputation handled by chain) |
+| `MsgIncrementContribution` | debug log only | No bookkeeping (chain-side) |
+| `MsgIncrementServe` | debug log only | No bookkeeping (chain-side) |
+| `MsgRecordBan` | debug log only | No bookkeeping (chain-side) |
+| `MsgSetOrgConfig` | debug log only | No bookkeeping (chain-side) |
+| `MsgSetRepTiers` | debug log only | No bookkeeping (chain-side) |
+
+### Dependencies
+
+- **Qdrant client:** `*retrieval.QdrantClient` — injected via `NewChainWatcher`; used for upsert, delete, and keyword weight sync
+- **Embedding service:** `embedURL` string (default `"http://localhost:11434"`) — used to compute memory embeddings at commit time
+- **PostgreSQL:** `*pgxpool.Pool` — direct SQL for all bookkeeping operations
+
+### catchUp Mechanism
+
+`Start()` reads `lastHeight` from `watcher_state` table. If `lastHeight > 0`, it calls `catchUp(ctx, lastHeight)` before subscribing to new blocks. `catchUp()` iterates blocks from `lastSeen+1` to current height and calls `processTx()` for each transaction — ensuring missed blocks between shutdown and restart are backfilled.
+
+### Struct Fields (ChainWatcher)
+
+```go
+type ChainWatcher struct {
+    chainClient   *GrpcClient
+    db            *pgxpool.Pool
+    logger        *slog.Logger
+    subscriber    *CometBFTSubscriber
+    txDecoder     TxDecoderFunc
+    notifHub      *notifications.NotificationHub
+    dispatcher    *notifications.Dispatcher
+    qdrantClient  *retrieval.QdrantClient
+    embedURL      string
+}
+```
+
+### Activation Note
+
+The ChainWatcher is NOT started in this CO. `NewChainWatcher` is defined but never called from `main()` or server init. CO-011a.4 will wire `NewChainWatcher` into hub startup and delete the old API handler bookkeeping paths atomically.
 
 ## API Components
 

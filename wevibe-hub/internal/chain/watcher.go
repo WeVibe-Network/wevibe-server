@@ -2,28 +2,37 @@ package chain
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/cometbft/cometbft/crypto/tmhash"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
+	orgtypes "github.com/wevibe-network/wevibe-chain/x/org/types"
+	reputationtypes "github.com/wevibe-network/wevibe-chain/x/reputation/types"
+	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 )
 
 type ChainWatcher struct {
-	chainClient *GrpcClient
-	db          *pgxpool.Pool
-	logger      *slog.Logger
-	subscriber  *CometBFTSubscriber
-	txDecoder   TxDecoderFunc
-	notifHub    *notifications.NotificationHub
-	dispatcher  *notifications.Dispatcher
+	chainClient  *GrpcClient
+	db           *pgxpool.Pool
+	logger       *slog.Logger
+	subscriber   *CometBFTSubscriber
+	txDecoder    TxDecoderFunc
+	notifHub     *notifications.NotificationHub
+	dispatcher   *notifications.Dispatcher
+	qdrantClient *retrieval.QdrantClient
+	embedURL     string
 }
 
 type TxDecoderFunc func(txBytes []byte) (TxInterface, error)
@@ -32,12 +41,14 @@ type TxInterface interface {
 	GetMsgs() []interface{}
 }
 
-func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, notifHub *notifications.NotificationHub) *ChainWatcher {
+func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, embedURL string) *ChainWatcher {
 	return &ChainWatcher{
-		chainClient: chainClient,
+		chainClient:  chainClient,
 		db:          db,
 		logger:      logger,
 		notifHub:    notifHub,
+		qdrantClient: qdrantClient,
+		embedURL:    embedURL,
 	}
 }
 
@@ -54,6 +65,12 @@ func (w *ChainWatcher) Start(ctx context.Context) error {
 		lastHeight = 0
 	}
 	w.logger.Info("chain watcher resuming", "last_height", lastHeight)
+
+	if lastHeight > 0 {
+		if err := w.catchUp(ctx, lastHeight); err != nil {
+			w.logger.Error("catchUp failed", "err", err, "lastHeight", lastHeight)
+		}
+	}
 
 	eventCh, err := w.subscribe(ctx)
 	if err != nil {
@@ -123,6 +140,18 @@ func (w *ChainWatcher) catchUp(ctx context.Context, lastSeen int64) error {
 	return nil
 }
 
+func (w *ChainWatcher) computeEmbedding(ctx context.Context, keywords []string) ([]float32, error) {
+	if len(keywords) == 0 {
+		return make([]float32, embed.EMBED_DIM), nil
+	}
+	combinedText := strings.Join(keywords, " ")
+	vector, err := embed.GetEmbedding(ctx, w.embedURL, combinedText)
+	if err != nil || len(vector) == 0 {
+		return make([]float32, embed.EMBED_DIM), nil
+	}
+	return vector, nil
+}
+
 func (w *ChainWatcher) reconnect(ctx context.Context) error {
 	backoff := time.Second
 	maxBackoff := 30 * time.Second
@@ -180,7 +209,10 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 		return fmt.Errorf("decode tx: %w", err)
 	}
 
-	for _, msg := range decoded.GetMsgs() {
+	txHashHex := fmt.Sprintf("%X", txHash)
+	allMsgs := decoded.GetMsgs()
+
+	for _, msg := range allMsgs {
 		switch m := msg.(type) {
 		case *memorytypes.MsgApproveMemory:
 			event := MemoryApprovedEvent{
@@ -192,9 +224,32 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 				EncryptedBlob:     m.EncryptedBlob,
 				MemoryType:        m.MemoryType.String(),
 			}
-			if err := w.processApproveEvent(ctx, fmt.Sprintf("%X", txHash), height, timestamp, event); err != nil {
+			if err := w.processApproveEvent(ctx, txHashHex, height, timestamp, event); err != nil {
 				return err
 			}
+
+			var keywords []string
+			var contributorID, contributorWallet string
+			for _, innerMsg := range allMsgs {
+				if sc, ok := innerMsg.(*memorytypes.MsgSubmitCommitment); ok {
+					if sc.OrgId == m.OrgId && string(sc.ContentHash) == string(m.ContentHash) {
+						keywords = make([]string, len(sc.Keywords))
+						for i, kw := range sc.Keywords {
+							keywords[i] = kw.Keyword
+						}
+						contributorID = sc.ContributorId
+						contributorWallet = sc.ContributorWallet
+						break
+					}
+				}
+			}
+
+			if err := w.processApproveMemoryBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.ContentHash, keywords, contributorID, contributorWallet,
+				m.MemoryType.String(), m.EncryptedBlob, m.WrappedDekEnc); err != nil {
+				w.logger.Error("processApproveMemoryBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
 		case *memorytypes.MsgReportMemory:
 			event := ReportUpheldEvent{
 				OrgID:               m.OrgId,
@@ -205,9 +260,58 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 				ReporterPubkey:      m.ReporterPubkey,
 				Reason:              m.Reason,
 			}
-			if err := w.processReportEvent(ctx, fmt.Sprintf("%X", txHash), height, timestamp, event); err != nil {
+			if err := w.processReportEvent(ctx, txHashHex, height, timestamp, event); err != nil {
 				return err
 			}
+
+			if err := w.processReportBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.ContentHash, m.ReporterPubkey); err != nil {
+				w.logger.Error("processReportBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
+		case *servetypes.MsgSubmitServeBatch:
+			serves := make([]ServeEntry, len(m.Serves))
+			for i, s := range m.Serves {
+				serves[i] = ServeEntry{
+					MemoryContentHash: s.MemoryContentHash,
+					ContributorWallet: s.ContributorWallet,
+					ServeCount:        uint64(s.TurnCount),
+					Nullifier:         hex.EncodeToString(s.Nullifier),
+					ModelID:           s.ModelId,
+				}
+			}
+			if err := w.processServeBatchBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Epoch, serves); err != nil {
+				w.logger.Error("processServeBatchBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
+		case *servetypes.MsgSubmitDenialBatch:
+			denials := make([]DenialEntry, len(m.Entries))
+			for i, d := range m.Entries {
+				denials[i] = DenialEntry{
+					MemoryContentHash: d.MemoryHash,
+					ContributorWallet: d.DenyKey,
+					DenialCount:       1,
+				}
+			}
+			if err := w.processDenialBatchBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Epoch, denials); err != nil {
+				w.logger.Error("processDenialBatchBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
+		case *orgtypes.MsgRegisterOrg:
+			if err := w.processRegisterOrgBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Leader); err != nil {
+				w.logger.Error("processRegisterOrgBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
+		case *memorytypes.MsgSubmitCommitment,
+			*reputationtypes.MsgIncrementContribution,
+			*reputationtypes.MsgIncrementServe,
+			*reputationtypes.MsgRecordBan,
+			*orgtypes.MsgSetOrgConfig,
+			*orgtypes.MsgSetRepTiers:
+			w.logger.Debug("processed msg type with no bookkeeping", "msg_type", fmt.Sprintf("%T", msg))
 		}
 	}
 	return nil
