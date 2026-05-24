@@ -232,6 +232,18 @@ func BatchSubmitServes(w http.ResponseWriter, r *http.Request) {
 		seen[cid] = true
 		if boostErr := retrieval.ApplyServeBoostLocal(r.Context(), pool, cid, orgID); boostErr != nil {
 			log.Printf("ApplyServeBoostLocal failed for cid %s: %v", cid, boostErr)
+			continue
+		}
+		weights, err := retrieval.GetKeywordWeights(r.Context(), pool, orgID, cid)
+		if err != nil {
+			log.Printf("GetKeywordWeights failed for cid %s: %v", cid, err)
+			continue
+		}
+		if err := qdrantClient.UpdateKeywordWeights(r.Context(), orgID, cid, weights); err != nil {
+			// Non-fatal: PostgreSQL is the source of truth for keyword weights.
+			// Qdrant will be reconciled by SyncKeywordWeightsFromChain on next
+			// hub startup, or by the next serve/denial TX that touches this cid.
+			log.Printf("UpdateKeywordWeights failed for cid %s: %v", cid, err)
 		}
 	}
 
@@ -462,6 +474,18 @@ func BatchSubmitDenials(w http.ResponseWriter, r *http.Request) {
 		seen[cid] = true
 		if decayErr := retrieval.ApplyDenialDecayLocal(r.Context(), pool, cid, orgID); decayErr != nil {
 			log.Printf("ApplyDenialDecayLocal failed for cid %s: %v", cid, decayErr)
+			continue
+		}
+		weights, err := retrieval.GetKeywordWeights(r.Context(), pool, orgID, cid)
+		if err != nil {
+			log.Printf("GetKeywordWeights failed for cid %s: %v", cid, err)
+			continue
+		}
+		if err := qdrantClient.UpdateKeywordWeights(r.Context(), orgID, cid, weights); err != nil {
+			// Non-fatal: PostgreSQL is the source of truth for keyword weights.
+			// Qdrant will be reconciled by SyncKeywordWeightsFromChain on next
+			// hub startup, or by the next serve/denial TX that touches this cid.
+			log.Printf("UpdateKeywordWeights failed for cid %s: %v", cid, err)
 		}
 	}
 

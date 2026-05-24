@@ -84,6 +84,17 @@ func main() {
 		handlers.SetQdrantClient(qdrantClient)
 	}
 
+	if qdrantClient != nil {
+		if err := chain.SyncEpochData(ctx, chainClient, qdrantClient, pool); err != nil {
+			log.Printf("WARNING: startup SyncEpochData failed: %v — hub will retry on the next epoch tick", err)
+		}
+		if err := chain.SyncKeywordWeightsFromChain(ctx, chainClient, qdrantClient, pool); err != nil {
+			log.Printf("WARNING: SyncKeywordWeightsFromChain failed: %v — hub will operate with potentially stale keyword weights; the next serve/denial TX will update individual memories", err)
+		}
+	} else {
+		log.Printf("WARNING: skipping startup chain syncs — qdrant client unavailable")
+	}
+
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
