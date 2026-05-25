@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
 func injectGaussianNoise(vector []float32, sigma float64) []float32 {
@@ -74,8 +74,16 @@ func NewQdrantClient(addr string, apiKey string) (*QdrantClient, error) {
 }
 
 type QdrantClient struct {
-	restURL string
-	apiKey  string
+	restURL         string
+	apiKey          string
+	pendingDenialDB DBQueryer
+}
+
+func (c *QdrantClient) SetPendingDenialDB(db DBQueryer) {
+	if c == nil {
+		return
+	}
+	c.pendingDenialDB = db
 }
 
 func (c *QdrantClient) Close() error {
@@ -125,7 +133,7 @@ func (c *QdrantClient) EnsureCollection(ctx context.Context, orgID string, vecto
 		return fmt.Errorf("marshal create request: %w", err)
 	}
 
-url = fmt.Sprintf("%s/collections/%s", c.restURL, OrgCollectionName(orgID))
+	url = fmt.Sprintf("%s/collections/%s", c.restURL, OrgCollectionName(orgID))
 	req, err = c.newRequest(ctx, "PUT", url, reqBody)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
@@ -317,6 +325,25 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		return nil, false, fmt.Errorf("decode search response: %w", err)
 	}
 
+	memoryIdentifiers := make([]string, 0, len(searchResp.Result))
+	seenMemoryIdentifiers := make(map[string]struct{}, len(searchResp.Result))
+	for _, r := range searchResp.Result {
+		cid, _ := r.Payload["cid"].(string)
+		if cid == "" {
+			continue
+		}
+		if _, exists := seenMemoryIdentifiers[cid]; exists {
+			continue
+		}
+		seenMemoryIdentifiers[cid] = struct{}{}
+		memoryIdentifiers = append(memoryIdentifiers, cid)
+	}
+
+	pendingDenialCounts, err := getPendingDenialCounts(ctx, c.pendingDenialDB, orgID, memoryIdentifiers)
+	if err != nil {
+		return nil, false, fmt.Errorf("load pending denial counts: %w", err)
+	}
+
 	type scoredResult struct {
 		result        protocol.MemoryResult
 		weightedScore float64
@@ -359,6 +386,11 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 
 		keywordBoost, _, _ := computeKeywordScore(storedWeights, storedKeywords, queryWeightsMap)
 		finalScore := vectorScore + keywordBoost*keywordBoostFactor
+		if count := pendingDenialCounts[cid]; count > 0 {
+			// D-2026-05-25-A invariant: consumer denials must impact ranking
+			// immediately, before chain confirmation settles keyword weights.
+			finalScore = applyPendingDenialDecay(finalScore, count)
+		}
 
 		lifecycleState, _ := payload["lifecycle_state"].(string)
 		lifecycleState = strings.ToUpper(strings.TrimSpace(lifecycleState))
@@ -417,6 +449,60 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 
 	return memoryResults, contested, nil
+}
+
+func getPendingDenialCounts(ctx context.Context, db DBQueryer, orgID string, memoryIdentifiers []string) (map[string]int, error) {
+	counts := make(map[string]int, len(memoryIdentifiers))
+	if len(memoryIdentifiers) == 0 {
+		return counts, nil
+	}
+	if db == nil {
+		return nil, fmt.Errorf("database unavailable")
+	}
+
+	// Pending counts come from serve_events and naturally drop when
+	// processDenialBatchBookkeeping transitions matching rows to status='submitted'.
+	rows, err := db.Query(ctx, `
+		SELECT memory_content_hash, COUNT(*)
+		FROM serve_events
+		WHERE event_type = 'denial'
+		  AND status = 'pending'
+		  AND org_id = $1
+		  AND memory_content_hash = ANY($2)
+		GROUP BY memory_content_hash
+	`, orgID, memoryIdentifiers)
+	if err != nil {
+		return nil, fmt.Errorf("query pending denial counts: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var memoryIdentifier string
+		var count int
+		if err := rows.Scan(&memoryIdentifier, &count); err != nil {
+			return nil, fmt.Errorf("scan pending denial count: %w", err)
+		}
+		counts[memoryIdentifier] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending denial counts: %w", err)
+	}
+
+	return counts, nil
+}
+
+func applyPendingDenialDecay(score float64, pendingDenialCount int) float64 {
+	if pendingDenialCount <= 0 {
+		return score
+	}
+
+	adjustment := float64(pendingDenialCount) * (float64(DenialDecayBPS) / 10000.0)
+	adjustedScore := score - adjustment
+	if adjustedScore < 0 {
+		return 0
+	}
+
+	return adjustedScore
 }
 
 func (c *QdrantClient) CountPoints(ctx context.Context, orgID string) (int64, error) {

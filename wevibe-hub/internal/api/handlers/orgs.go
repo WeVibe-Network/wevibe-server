@@ -12,16 +12,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func CreateOrg(w http.ResponseWriter, r *http.Request) {
@@ -143,14 +143,12 @@ func GetOrg(w http.ResponseWriter, r *http.Request) {
 
 	resp := struct {
 		*protocol.OrgInfo
-		MemberCount             int        `json:"member_count"`
-		LastActivityAt          *time.Time `json:"last_activity_at"`
-		LeaderLastChainCommitAt *time.Time `json:"leader_last_chain_commit_at"`
+		MemberCount    int        `json:"member_count"`
+		LastActivityAt *time.Time `json:"last_activity_at"`
 	}{
-		OrgInfo:                  org,
-		MemberCount:             memberCount,
-		LastActivityAt:          lastActivity,
-		LeaderLastChainCommitAt: lastActivity,
+		OrgInfo:        org,
+		MemberCount:    memberCount,
+		LastActivityAt: lastActivity,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

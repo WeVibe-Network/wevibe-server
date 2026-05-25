@@ -10,19 +10,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/relay"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/config"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/social"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/config"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/relay"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/social"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
 )
 
 func corsOrigins() []string {
@@ -81,6 +81,7 @@ func main() {
 	if err != nil {
 		log.Printf("WARNING: qdrant unavailable: %v", err)
 	} else {
+		qdrantClient.SetPendingDenialDB(pool)
 		defer qdrantClient.Close()
 		handlers.SetQdrantClient(qdrantClient)
 	}
@@ -212,6 +213,8 @@ func main() {
 
 		r.Post("/serves", handlers.RecordServeEvent)
 		r.Post("/denials", handlers.RecordDenialEvent)
+		r.Get("/denials/pending-count", handlers.GetPendingDenialCount)
+		r.Get("/denials/pending", handlers.GetPendingDenials)
 
 		r.Post("/query", handlers.QueryMemories)
 		r.Get("/memories", handlers.ListMemories)

@@ -548,11 +548,11 @@ Hub mirrors that metadata into Qdrant for fast lookup and ranking.
 **Query behavior (`QueryPoints`):**
 - Always excludes `ARCHIVED`
 - Excludes `DORMANT` by default; caller can include via `include_dormant=true`
-- Ranks by weighted score: vector similarity + keyword overlap boost + confidence weighting
+- Ranks by weighted score: base `vector_similarity + keyword_overlap_boost*0.1`, then applies optimistic denial decay `pending_denial_count*0.05` (floored at zero)
 - Uses Qdrant payload metadata directly (no PostgreSQL keyword read on query path)
 
 **Scroll behavior (`ScrollApprovedMemories`):**
-- Reads `keywords`, `confidence_bps`, and `lifecycle_state` from Qdrant payload
+- Reads keyword/lifecycle metadata from Qdrant payload
 - No PostgreSQL keyword lookup in scroll path
 
 ## Deployment Diagram (CO-258)
@@ -838,14 +838,19 @@ All previous API-handler-side eager Category B broadcasting paths from the hub h
 ## Retrieval & Trust System (Sprint 28)
 
 - `POST /v1/orgs/{orgID}/query` returns memory candidates enriched with trust stats.
-- Query scoring uses vector similarity, keyword overlap boost, and confidence weighting.
+- Query scoring uses a two-step ranking formula:
+  - `base_score = vector_similarity + (keyword_overlap_boost * 0.1)`
+  - `optimistic_score = max(0, base_score - (pending_denial_count * 0.05))`
+- `pending_denial_count` is computed from `serve_events` rows where `event_type='denial'` and `status='pending'`, grouped by `memory_content_hash` for the candidate CIDs returned by Qdrant.
+- `DenialDecayBPS` is a hardcoded retrieval constant: `500` (0.05 per pending denial).
+- This optimistic adjustment is load-bearing per D-2026-05-25-A: denial impact appears at query time immediately, then naturally disappears from pending counts when watcher bookkeeping flips rows to `status='submitted'`.
 - Retrieval lifecycle tiers are enforced in Qdrant filtering: `ARCHIVED` is hard-excluded, `DORMANT` is hidden by default and only included when requested.
 - Every result includes `retrieval_count`, `acceptance_count`, and `contributor_stats` (account age, contributions, reports upheld, false reports against).
 - Trust panel formatting is handled client-side by wevibe-mcp via `trust-panel.ts`.
 - **Banned memories filtered:** Results exclude memories where `pending_submissions.banned = TRUE`.
 - **No quarantine system:** Memories are never auto-removed based on rejection counts.
 - Chain is only contacted when a memory accumulates enough upheld reports to trigger a ban (quorum via `report_ban_threshold` per org).
-- `GET /v1/orgs/{orgID}/memories` (`ScrollApprovedMemories`) sources keywords/confidence/lifecycle from Qdrant payload (chain mirror), not PostgreSQL keyword joins.
+- `GET /v1/orgs/{orgID}/memories` (`ScrollApprovedMemories`) sources keyword/lifecycle metadata from Qdrant payload (chain mirror), not PostgreSQL keyword joins.
 
 ### PRE Retrieval Pipeline (CO-218, CO-221)
 
@@ -874,52 +879,36 @@ All previous API-handler-side eager Category B broadcasting paths from the hub h
 - The memory is unretrievable until re-encrypted under Umbral (background job, future CO)
 - For dogfood/development: wipe and re-seed memories after PRE ships
 
-## Denial Event Recording (CO-225, CO-011a.4 Update)
+## Denial Event Recording (CO-225, CO-013)
 
-Hub records denial events (incorrect/harmful memory outputs reported by consumers) into the `serve_events` table. **Chain submission is no longer a hub responsibility** — the dashboard relays `MsgSubmitDenialBatch` via `POST /v1/relay/broadcast`, and the ChainWatcher's `processDenialBatchBookkeeping` handler marks `submitted = TRUE` on confirmation.
+Hub records denial events (incorrect/harmful memory outputs reported by consumers) in `serve_events` and exposes leader-facing pending-denial APIs for denial-batch submission.
 
-**Endpoint (REMAINING):**
-- `POST /v1/orgs/{orgID}/denials` (`RecordDenialEvent`) — records a single denial for a served memory
+**Endpoints:**
+- `POST /v1/orgs/{orgID}/denials` (`RecordDenialEvent`) — records one denial event (`status='pending'`)
+- `GET /v1/orgs/{orgID}/denials/pending-count` (`GetPendingDenialCount`) — returns `{ "pending_count": N }`
+- `GET /v1/orgs/{orgID}/denials/pending` (`GetPendingDenials`) — leader-only, returns `{ "denials": [...], "total_count": N }`
 
-**REMOVED in CO-011a.4:**
-- Chain submission of accumulated denials is performed by the dashboard, which relays `MsgSubmitDenialBatch` directly through the relay endpoint. There is no hub-side denial batch-submit handler.
+**`serve_events` denial fields used by CO-013:**
+- `memory_content_hash` — memory identifier used for optimistic denial counting
+- `event_type` — `serve | denial`
+- `status` — `pending | submitted | failed`
+- `nullifier`, `reason`, `created_at`
 
-**Schema (`serve_events` table, CO-225):**
-```sql
-CREATE TABLE serve_events (
-    id              BIGSERIAL PRIMARY KEY,
-    org_id          TEXT NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
-    contributor_id  TEXT NOT NULL,
-    memory_hash     TEXT NOT NULL,
-    serve_id        TEXT NOT NULL,
-    reason          TEXT,
-    event_type      TEXT NOT NULL CHECK (event_type IN ('serve', 'denial')),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    submitted       BOOLEAN NOT NULL DEFAULT FALSE,
-    submitted_at    TIMESTAMPTZ,
-    UNIQUE (org_id, serve_id, event_type)
-);
-```
-- `event_type IN ('serve', 'denial')` differentiates serve attestations from denial attestations
-- `reason` captures consumer-provided context for the denial
-- `submitted` flag is set by the ChainWatcher on confirmation of the relayed `MsgSubmitDenialBatch`
+**Flow:**
+1. Consumer denial is recorded by `POST /v1/orgs/{orgID}/denials`.
+2. Retrieval query path computes pending counts from `serve_events` (`event_type='denial'`, `status='pending'`) and applies optimistic decay to candidate memory scores.
+3. Leader dashboard reads:
+   - `GET /v1/orgs/{orgID}/denials/pending-count`
+   - `GET /v1/orgs/{orgID}/denials/pending` (ordered by `created_at DESC`, capped at 200 rows, includes `total_count`).
+4. Leader submits denial batch on-chain.
+5. `processDenialBatchBookkeeping` updates matching rows to `status='submitted'`; pending counts naturally drop and optimistic decay clears for settled denials.
 
-**Flow (CO-011a.4):**
-1. Consumer reports a denial via `POST /v1/orgs/{orgID}/denials` with `memory_hash`, `serve_id`, `reason`
-2. Hub persists to `serve_events` with `event_type = 'denial'`, `submitted = FALSE`
-3. Dashboard reads pending denials (via existing read endpoints) and builds an `MsgSubmitDenialBatch`
-4. Dashboard relays via `POST /v1/relay/broadcast`
-5. wevibe-chain `MsgSubmitDenialBatch` handler persists `StoredDenialAttestation` per memory/epoch
-6. ChainWatcher's `processDenialBatchBookkeeping` marks the matching `serve_events` rows as `submitted = TRUE` and applies keyword weight decay
+**Serve attestation parity:** serve and denial events share the same `serve_events` ledger/status lifecycle and are reconciled by watcher bookkeeping after on-chain confirmation.
 
-**Key functions in `internal/serves/serves.go`:**
-- `RecordDenial(ctx, pool, orgID, req)` — inserts denial event, returns ID
-- `GetPendingDenials(ctx, pool, orgID)` — reads all unsubmitted denials for an org (now consumed by dashboard, not by a hub batch-submit handler)
-- `MarkDenialsSubmitted(ctx, pool, orgID, serveIDs)` — called by the ChainWatcher after confirmation
-
-**Serve attestation parity (CO-011a.4):** the same pattern applies to serve attestations — there is no hub-side serve batch-submit handler. The dashboard relays `MsgSubmitServeBatch` via the relay endpoint, and the ChainWatcher's `processServeBatchBookkeeping` finalizes `submitted = TRUE` and applies keyword weight boost on confirmation.
-
-**Route registration:** Only `POST /v1/orgs/{orgID}/denials` (recording) is registered in `cmd/wevibe-hub/main.go`.
+**Route registration (`cmd/wevibe-hub/main.go`):**
+- `POST /v1/orgs/{orgID}/denials`
+- `GET /v1/orgs/{orgID}/denials/pending-count`
+- `GET /v1/orgs/{orgID}/denials/pending`
 
 ## Report Flow (CO-231, CO-233)
 

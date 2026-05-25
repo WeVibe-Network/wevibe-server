@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
 func qdrantAvailable() bool {
@@ -20,6 +22,32 @@ func qdrantAvailable() bool {
 	return true
 }
 
+type emptyPendingDenialDB struct{}
+
+func (emptyPendingDenialDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return &emptyPendingDenialRows{}, nil
+}
+
+type emptyPendingDenialRows struct{}
+
+func (r *emptyPendingDenialRows) Close() {}
+
+func (r *emptyPendingDenialRows) Err() error { return nil }
+
+func (r *emptyPendingDenialRows) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
+
+func (r *emptyPendingDenialRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+
+func (r *emptyPendingDenialRows) Next() bool { return false }
+
+func (r *emptyPendingDenialRows) Scan(...any) error { return fmt.Errorf("no rows") }
+
+func (r *emptyPendingDenialRows) Values() ([]any, error) { return nil, fmt.Errorf("no rows") }
+
+func (r *emptyPendingDenialRows) RawValues() [][]byte { return nil }
+
+func (r *emptyPendingDenialRows) Conn() *pgx.Conn { return nil }
+
 func TestAddToIndex_WithQdrant(t *testing.T) {
 	if !qdrantAvailable() {
 		t.Skip("Qdrant not available on localhost:6333 — skipping")
@@ -30,6 +58,7 @@ func TestAddToIndex_WithQdrant(t *testing.T) {
 		t.Fatalf("failed to create Qdrant client: %v", err)
 	}
 	defer client.Close()
+	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	ctx := context.Background()
 	if err := EnsureCollection(ctx, client, "test-org"); err != nil {
@@ -62,6 +91,7 @@ func TestQueryByKeywords_WithQdrant(t *testing.T) {
 		t.Fatalf("failed to create Qdrant client: %v", err)
 	}
 	defer client.Close()
+	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	ctx := context.Background()
 	_, _, err = QueryByKeywords(ctx, client, "test-org", []int32{1}, []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 1.0}}, make([]float32, EMBED_DIM), "", 10, false)
@@ -80,6 +110,7 @@ func TestAddAndQueryRoundtrip(t *testing.T) {
 		t.Fatalf("failed to create Qdrant client: %v", err)
 	}
 	defer client.Close()
+	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	ctx := context.Background()
 	if err := EnsureCollection(ctx, client, "roundtrip-org"); err != nil {
