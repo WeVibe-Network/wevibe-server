@@ -627,10 +627,10 @@ func RegisterDelegateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := members.RegisterDelegateKey(r.Context(), pool, orgID, &req); err != nil {
+	if err := members.RegisterDelegateKey(r.Context(), pool, &req); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			http.Error(w, `{"error":"delegate key already exists for this org"}`, http.StatusConflict)
+			http.Error(w, `{"error":"delegate address already registered"}`, http.StatusConflict)
 			return
 		}
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

@@ -1,8 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { listMembers, inviteMember, removeMember, updateMemberRole, transferLeadership, closeOrg, getOrg, type MemberRecord } from '@/lib/hub-client'
+import { listMembers, transferLeadership, closeOrg, getOrg, type MemberRecord } from '@/lib/hub-client'
 import { getOrCreateIdentity, getIdentity } from '@/lib/wevibe-auth'
-import { updateMemberRoleCanonical, transferLeadershipCanonical, closeOrgCanonical } from '@/lib/wevibe-signing'
+import { relayBroadcast } from '@/lib/relay-client'
+import { connectWallet } from '@/lib/wallet-connect'
+import type { EncodeObject } from '@/lib/chain-client'
 import Button from '@/components/ui/button'
 import Card from '@/components/ui/card'
 
@@ -90,7 +92,17 @@ export default function MembersPage() {
     setInviteError('')
     setInviteSuccess('')
     try {
-      await inviteMember(ORG_ID, invitePubkey, inviteX25519Pubkey, inviteRole)
+      const walletConn = await connectWallet()
+      const msgAddMember = {
+        typeUrl: '/wevibe.org.v1.MsgAddMember',
+        value: Buffer.from(JSON.stringify({
+          signer: walletConn.address,
+          org_id: ORG_ID,
+          pubkey: invitePubkey,
+          role: inviteRole,
+        })),
+      } as unknown as EncodeObject;
+      await relayBroadcast(ORG_ID, walletConn.address, [msgAddMember])
       setInviteSuccess(`Invited ${invitePubkey.slice(0, 12)}... as ${inviteRole}`)
       setInvitePubkey('')
       setInviteX25519Pubkey('')
@@ -106,7 +118,17 @@ export default function MembersPage() {
   async function handleRoleChange(pubkey: string, newRole: string) {
     setRoleChangeLoading(true)
     try {
-      await updateMemberRole(ORG_ID, pubkey, newRole)
+      const walletConn = await connectWallet()
+      const msgUpdateMemberRole = {
+        typeUrl: '/wevibe.org.v1.MsgUpdateMemberRole',
+        value: Buffer.from(JSON.stringify({
+          signer: walletConn.address,
+          org_id: ORG_ID,
+          pubkey,
+          new_role: newRole,
+        })),
+      } as unknown as EncodeObject;
+      await relayBroadcast(ORG_ID, walletConn.address, [msgUpdateMemberRole])
       setRoleChangeTarget(null)
       await refreshMembers()
     } catch (err) {
@@ -119,7 +141,16 @@ export default function MembersPage() {
   async function handleRemove(pubkey: string) {
     setRemoveLoading(true)
     try {
-      await removeMember(ORG_ID, pubkey)
+      const walletConn = await connectWallet()
+      const msgRemoveMember = {
+        typeUrl: '/wevibe.org.v1.MsgRemoveMember',
+        value: Buffer.from(JSON.stringify({
+          signer: walletConn.address,
+          org_id: ORG_ID,
+          pubkey,
+        })),
+      } as unknown as EncodeObject;
+      await relayBroadcast(ORG_ID, walletConn.address, [msgRemoveMember])
       setRemoveTarget(null)
       await refreshMembers()
     } catch (err) {

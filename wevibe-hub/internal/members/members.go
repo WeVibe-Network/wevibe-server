@@ -234,7 +234,7 @@ func ListOrgsForMember(ctx context.Context, pool *pgxpool.Pool, pubkey string) (
 	return entries, nil
 }
 
-func RegisterDelegateKey(ctx context.Context, pool *pgxpool.Pool, orgID string, req *protocol.RegisterDelegateKeyRequest) error {
+func RegisterDelegateKey(ctx context.Context, pool *pgxpool.Pool, req *protocol.RegisterDelegateKeyRequest) error {
 	var grantExp *time.Time
 	if req.GrantExpiration != "" {
 		t, err := time.Parse(time.RFC3339, req.GrantExpiration)
@@ -245,20 +245,20 @@ func RegisterDelegateKey(ctx context.Context, pool *pgxpool.Pool, orgID string, 
 	}
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO delegate_keys (wallet_address, delegate_address, org_id, delegate_pubkey, grant_tx_hash, grant_expiration)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, req.WalletAddress, req.DelegateAddress, orgID, req.DelegatePubkey, req.GrantTxHash, grantExp)
+		INSERT INTO delegate_keys (wallet_address, delegate_address, delegate_pubkey, grant_tx_hash, grant_expiration)
+		VALUES ($1, $2, $3, $4, $5)
+	`, req.WalletAddress, req.DelegateAddress, req.DelegatePubkey, req.GrantTxHash, grantExp)
 	return err
 }
 
-func GetDelegateKey(ctx context.Context, pool *pgxpool.Pool, orgID, delegateAddress string) (*protocol.DelegateKeyRecord, error) {
+func GetDelegateKey(ctx context.Context, pool *pgxpool.Pool, delegateAddress string) (*protocol.DelegateKeyRecord, error) {
 	var r protocol.DelegateKeyRecord
 	var grantExp *time.Time
 	err := pool.QueryRow(ctx, `
-		SELECT wallet_address, delegate_address, org_id, delegate_pubkey, grant_tx_hash, grant_expiration, active, created_at
-		FROM delegate_keys WHERE org_id = $1 AND delegate_address = $2
-	`, orgID, delegateAddress).Scan(
-		&r.WalletAddress, &r.DelegateAddress, &r.OrgID, &r.DelegatePubkey,
+		SELECT wallet_address, delegate_address, delegate_pubkey, grant_tx_hash, grant_expiration, active, created_at
+		FROM delegate_keys WHERE delegate_address = $1
+	`, delegateAddress).Scan(
+		&r.WalletAddress, &r.DelegateAddress, &r.DelegatePubkey,
 		&r.GrantTxHash, &grantExp, &r.Active, &r.CreatedAt,
 	)
 	if err != nil {
@@ -271,23 +271,23 @@ func GetDelegateKey(ctx context.Context, pool *pgxpool.Pool, orgID, delegateAddr
 	return &r, nil
 }
 
-func ResolveDelegateToWallet(ctx context.Context, pool *pgxpool.Pool, delegateAddress string) (string, string, error) {
-	var walletAddress, orgID string
+func ResolveDelegateToWallet(ctx context.Context, pool *pgxpool.Pool, delegateAddress string) (string, error) {
+	var walletAddress string
 	err := pool.QueryRow(ctx, `
-		SELECT wallet_address, org_id FROM delegate_keys
+		SELECT wallet_address FROM delegate_keys
 		WHERE delegate_address = $1 AND active = true
-	`, delegateAddress).Scan(&walletAddress, &orgID)
+	`, delegateAddress).Scan(&walletAddress)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	return walletAddress, orgID, nil
+	return walletAddress, nil
 }
 
-func RevokeDelegateKey(ctx context.Context, pool *pgxpool.Pool, orgID, walletAddress string) error {
+func RevokeDelegateKey(ctx context.Context, pool *pgxpool.Pool, walletAddress string) error {
 	_, err := pool.Exec(ctx, `
 		UPDATE delegate_keys SET active = false
-		WHERE org_id = $1 AND wallet_address = $2 AND active = true
-	`, orgID, walletAddress)
+		WHERE wallet_address = $1 AND active = true
+	`, walletAddress)
 	return err
 }
 

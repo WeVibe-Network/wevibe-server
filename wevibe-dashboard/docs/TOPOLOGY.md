@@ -1,4 +1,4 @@
-# WeVibe Dashboard Topology (Updated: CO-266)
+# WeVibe Dashboard Topology (Updated: CO-011a.4)
 
 ## Runtime Diagram
 
@@ -19,6 +19,74 @@ Browser (Next.js App)
 4. Actions (approve/reject/relate/archive/contest) call hub endpoints that in turn broadcast transactions to wevibe-chain.
 5. WebSocket stream pushes serve metrics, confidence decay alerts, and contest updates in real time.
 6. Rotation page uploads anchor manifest; hub validates and submits rotation completion to wevibe-chain.
+
+## CO-011a.4 — Category A / Category B Broadcast Split (Decision C, F)
+
+All chain-bound writes from the dashboard go through one of two paths. The hub no longer brokers chain writes for the dashboard.
+
+### Category A — Direct Keplr Broadcast (`lib/chain-client.ts :: directBroadcast`)
+
+Messages that MUST originate from the wallet itself (no authz delegation) are signed via the connected Keplr/Leap wallet:
+
+- `MsgGrant` / `MsgRevoke` (authz wiring — the grant cannot be self-delegated)
+- `MsgSetOrgConfig` when ONLY `required_approvals` and/or `report_vote_threshold` changed (the two Category A org-config fields)
+
+`directBroadcast(walletAddress, msgs)`:
+1. Reads `chainId` from `NEXT_PUBLIC_WEVIBE_CHAIN_ID` and calls `window.keplr.getOfflineSigner(chainId)`.
+2. `SigningStargateClient.connectWithSigner(rpc, signer)`.
+3. `signAndBroadcast(walletAddress, msgs, fee, memo)` — Keplr popup prompts the user for each invocation.
+4. Returns the broadcast tx hash.
+
+### Category B — Authz Relay Broadcast (`lib/relay-client.ts :: relayBroadcast`)
+
+Messages permitted under the active authz grant set are signed by the local delegate key and submitted through the hub relay. No Keplr popup. Covers `MsgApproveMemory`, `MsgReportMemory`, `MsgAddMember`, `MsgRemoveMember`, `MsgUpdateMemberRole`, `MsgSetOrgConfig` (Category B fields only), `MsgSetRepTiers`, and the other authz-eligible TypeURLs.
+
+`relayBroadcast(orgId, walletAddress, innerMsgs)`:
+1. Wraps `innerMsgs` in a Cosmos SDK `authz.MsgExec` where the grantee is the delegate address derived from the local HD wallet (recovered via `getDelegateWallet(walletAddress)`).
+2. Signs the resulting tx with the delegate's secp256k1 key.
+3. Base64-encodes the raw tx bytes.
+4. Builds the WV-RELAY-v1 canonical body via `lib/canonical-body.ts :: buildRelayCanonicalBody(orgId, walletAddress, txBytesBase64)`:
+   ```
+   WV-RELAY-v1\n
+   org_id:<value>\n
+   wallet_address:<value>\n
+   tx_bytes_base64:<value>\n
+   ```
+5. Signs the canonical body string with the delegate key (secp256k1 over sha256 of the body).
+6. `POST ${hubUrl}/v1/relay/broadcast` with `Authorization: Delegate <base64-sig>` and `Content-Type: text/plain; charset=utf-8`. The body is the raw canonical string.
+7. Returns the `tx_hash` field from the relay response.
+
+### Merkle Root Parity (`lib/merkle.ts`)
+
+Dashboard-side computation of batch Merkle roots maintains byte-for-byte parity with `wevibe-hub/internal/chain/merkle.go :: ComputeMerkleRoot`:
+
+- `computeMerkleRoot(leaves: Uint8Array[]): Promise<string>` — returns hex-encoded root.
+- `hashContribution(content)` — sha256 of canonical contribution bytes, returns the leaf hash.
+- Algorithm:
+  - 0 leaves → `sha256(empty)`.
+  - 1 leaf → `sha256(leaf)`.
+  - Else → sort RAW leaves by hex encoding; pad odd layers by duplicating the last element; for each pair concatenate raw bytes and `sha256`; subsequent layers operate on hashes.
+- Parity is confirmed against the Go reference by `lib/merkle.test.ts`, runnable via `npx tsx lib/merkle.test.ts`. The fixture validates three vectors: 1 leaf `"abc"`; 2 leaves `"abc","def"`; 3 leaves `"abc","def","ghi"`.
+
+### Settings Page Save Flow (Decision C)
+
+`app/(dashboard)/settings/page.tsx` exposes a SINGLE **Save Configuration** button whose dispatch depends on which fields the leader changed:
+
+| Field | Category | Path |
+|-------|----------|------|
+| `required_approvals` | A | `directBroadcast` (Keplr popup) wrapping `MsgSetOrgConfig` with only Category A fields |
+| `report_vote_threshold` | A | same as above |
+| `serve_attestation_required` | B | `relayBroadcast` wrapping `MsgSetOrgConfig` with only Category B fields |
+| `min_contributions_per_epoch` | B | same as above |
+| `contest_stake_uvibe` | B | same as above |
+| `rep_tiers` | B | `relayBroadcast` wrapping `MsgSetRepTiers` |
+
+Dispatch rules:
+1. If only Category A fields changed → run `directBroadcast` only.
+2. If only Category B fields changed → run `relayBroadcast` only.
+3. If both → run `relayBroadcast` FIRST, then `directBroadcast` (Keplr popup).
+4. Partial success (relay succeeded, Keplr rejected) is reported truthfully to the user. There is no rollback — per R-ONE-PATH, on-chain state stands as broadcast.
+5. As a SEPARATE step after the Category A broadcast succeeds, the dashboard calls `PATCH /v1/orgs/{orgID}/config` to update the hub's off-chain mirror of `required_approvals` / `report_vote_threshold`. The hub does not write to chain on this PATCH — it only updates its own row in the `orgs` table.
 
 ## Sprint 27 Gap Blitz (CO-265)
 
@@ -69,17 +137,16 @@ New page `app/(dashboard)/my-submissions/page.tsx` shows contributor submission 
 **New hub client method:** `getOrgFinances(orgId)` — `GET /v1/orgs/{orgID}/finances`
 **New hub handler:** `GetFinances(w, r)` in `internal/api/handlers/billing.go`
 
-### Chain Config Read/Edit UI (GAP-O7)
+### Chain Config Read UI (GAP-O7)
 
-`app/(dashboard)/settings/page.tsx` now includes chain configuration read/edit:
+`app/(dashboard)/settings/page.tsx` includes a read-only display of the org's on-chain configuration:
 
-- Displays current chain config (chain ID, RPC endpoint, gRPC endpoint, bech32 prefix)
-- Leaders can edit chain configuration values
-- Edits submitted via `PATCH /v1/orgs/{orgID}/config` including chain fields
+- Displays current chain config (chain ID, RPC endpoint, gRPC endpoint, bech32 prefix) sourced from the hub's read-only chain query proxy.
+- Editing org-config fields (`required_approvals`, `report_vote_threshold`, `serve_attestation_required`, `min_contributions_per_epoch`, `contest_stake_uvibe`, `rep_tiers`) is handled by the CO-011a.4 split save flow documented above — NOT by a hub PATCH of chain config.
 
-**New hub endpoint:** `GET /v1/orgs/{orgID}/chain-config` (leader-only)
-**New hub handler:** `GetChainConfig(w, r)` in `internal/api/handlers/chain_config.go`
-**New hub endpoint:** `PATCH /v1/orgs/{orgID}/config` — now accepts chain configuration fields
+**Hub endpoint:** `GET /v1/orgs/{orgID}/chain-config` (leader-only) — read-only proxy to the chain query.
+**Hub handler:** `GetChainConfig(w, r)` in `internal/api/handlers/chain_config.go`.
+**Hub endpoint:** `PATCH /v1/orgs/{orgID}/config` — accepts ONLY Category A fields (`required_approvals`, `report_vote_threshold`). Writes the hub's off-chain mirror in the `orgs` table; does NOT broadcast to chain. The chain-side write for these fields is performed by the dashboard via `directBroadcast`. The hub has no off-chain mirror for Category B fields.
 
 ### Moderation Edit-Before-Approval Fallback (GAP-N2)
 
@@ -110,17 +177,17 @@ New page `app/(dashboard)/my-submissions/page.tsx` shows contributor submission 
 
 **Hub client changes:** `approveJoinRequest(orgId, requestId, trial)` — `POST /v1/orgs/{orgID}/join-requests/{requestID}/approve` with optional `trial` boolean
 
-## Sprint 23 Report Flow Notes (CO-231, CO-232, CO-233)
+## Sprint 23 Report Flow Notes (CO-231, CO-232, CO-233; superseded in part by CO-011a.4)
 
 - **Reports page:** Full CRUD with status tabs (pending, upheld_pending_tx, upheld, dismissed, dismissed_malicious). Reporter identity displayed: pubkey, wallet address, account age, dismissed_reports_count. Vote buttons: [Uphold] [Dismiss] [Dismiss as Malicious]. Current vote count shown vs `report_vote_threshold`.
-- **Submit to Chain button:** Leaders see "Submit to Chain" button on reports with status `upheld_pending_tx`. Triggers `POST /v1/orgs/{orgID}/reports/{reportID}/commit` with wallet `signArbitrary` signature.
-- **Wallet-signed config saves:** `required_approvals` and `report_vote_threshold` changes via Settings page require leader wallet `signArbitrary` signature (not Ed25519 delegate key). Dashboard calls `signArbitrary` on the connected wallet before PATCHing config.
-- **`signArbitraryMessage` in wallet-connect:** `lib/wallet-connect.ts` exposes `signArbitraryMessage(message: string): Promise<{ signature: Uint8Array; }>` using `window.keplr.signArbitrary` or `window.leap.signArbitrary`. Used for report commitment and security config changes.
+- **Submit to Chain button:** Leaders see "Submit to Chain" on reports with status `upheld_pending_tx`. The dashboard builds `MsgReportMemory` and broadcasts it via `relayBroadcast` (Category B authz relay path — no Keplr popup). The previous `POST /v1/orgs/{orgID}/reports/{reportID}/commit` hub endpoint was removed in CO-011a.4.
+- **Config saves:** `required_approvals` and `report_vote_threshold` are Category A fields. Changes go through `directBroadcast` (Keplr popup) wrapping `MsgSetOrgConfig`, then a separate `PATCH /v1/orgs/{orgID}/config` updates the hub's off-chain mirror. See the CO-011a.4 settings save flow above. `signArbitrary` is no longer used for config saves.
+- **`signArbitraryMessage` in wallet-connect:** `lib/wallet-connect.ts` still exposes `signArbitraryMessage(message: string): Promise<{ signature: Uint8Array; }>` using `window.keplr.signArbitrary` or `window.leap.signArbitrary`. Retained for any non-tx wallet-attestation use cases; no longer used for config saves or report commitment.
 
 ## Sprint 24 Topology Notes
 
 - Reports page (`app/(dashboard)/reports/page.tsx`) consumes hub API and surfaces reporter identity (pubkey, wallet, role), vote buttons (Uphold/Dismiss/Dismiss as Malicious), vote count vs threshold, and reporter's dismissed_reports_count. Vote threshold configurable via `report_vote_threshold` in org config.
-- Settings page (`app/(dashboard)/settings/page.tsx`) exposes `report_vote_threshold` input alongside `required_approvals`. Both saved via `PATCH /v1/orgs/{orgID}/config`.
+- Settings page (`app/(dashboard)/settings/page.tsx`) exposes `report_vote_threshold` input alongside `required_approvals`. Both are Category A org-config fields — chain-side writes go through `directBroadcast` wrapping `MsgSetOrgConfig`, and the hub's off-chain mirror is updated via `PATCH /v1/orgs/{orgID}/config` as a separate step. See the CO-011a.4 settings save flow above.
 - Members page (`app/(dashboard)/members/page.tsx`) displays `dismissed_reports_count` per member with orange highlight when count > 0.
 - Accept / Deny / Report actions: Deny adds memory to local blacklist (never shown again); Report submits to hub for review (remains visible); Accept injects into session.
 
@@ -244,7 +311,7 @@ New page at `app/(dashboard)/chain-submit/page.tsx` provides the batch pipeline 
 2. **Review Keywords** — memories with extracted keywords pending moderator review and hub verification
 3. **Ready for Chain** — memories in `pending_chain` state, ready for batch chain submission
 
-Leader actions: Extract Keywords (calls MCP tool), Submit to Chain (batched Cosmos TX), Skip (advance without keywords).
+Leader actions: Extract Keywords (calls MCP tool), Submit to Chain (builds `MsgApproveMemory` for the batch and dispatches via `relayBroadcast` — see CO-011a.4), Skip (advance without keywords).
 
 ### Keyword Extraction Flow
 
@@ -266,7 +333,8 @@ New methods for keyword pipeline:
 - `removeSubmission(orgId, submissionHash)` — DELETE `/submissions/{hash}`
 - `listPendingKeywords(orgId)` — GET `/submissions/keywords/pending`
 - `listPendingChain(orgId)` — GET `/submissions/keywords/pending-chain`
-- `batchChainSubmit(orgId, submissionHashes)` — POST `/submissions/batch-chain-submit`
+
+Batch chain submission itself is no longer a hub client method — see "lib/hub-client.ts surface" below for what CO-011a.4 removed. The chain-submit page now builds `MsgApproveMemory` (or the relevant batch message) and dispatches it through `relayBroadcast`.
 
 ### Pipeline Health Page
 
@@ -427,10 +495,11 @@ The dashboard uses a two-tier identity model:
 - `getChainRpcEndpoint()` — reads `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, normalizes `tcp://` to `http://` for CosmJS compatibility.
 - `buildMsgGrant(granter, grantee, msgTypeUrl, expirationDays)` — builds `MsgGrant` with `GenericAuthorization` for a specific message TypeURL.
 - `buildMsgRevoke(granter, grantee, msgTypeUrl)` — builds `MsgRevoke`.
-- `WEVIBE_MSG_TYPE_URLS` — array of 15 WeVibe message TypeURLs authorized for delegation.
+- `directBroadcast(walletAddress, msgs)` — Category A direct-Keplr broadcast path (CO-011a.4). Calls `window.keplr.getOfflineSigner(chainId)`, then `SigningStargateClient.connectWithSigner(rpc, signer)`, then `signAndBroadcast(walletAddress, msgs, fee, memo)`. Returns the tx hash. Used for `MsgGrant`, `MsgRevoke`, and Category A `MsgSetOrgConfig` (`required_approvals` / `report_vote_threshold` only).
+- `WEVIBE_MSG_TYPE_URLS` — array of WeVibe message TypeURLs authorized for delegation. CO-011a.4 removed `/wevibe.memory.v1.MsgRejectMemory` from this list (no corresponding `MsgRejectMemory` exists in the chain protos).
 
 **`lib/delegation.ts`** — delegation orchestrator.
-- `setupDelegation(walletAddress)` — generates delegate key → signs 15 MsgGrant transactions from wallet (one Keplr popup) → stores delegate key locally. Returns `{ delegateAddress, txHash, grantCount }`.
+- `setupDelegation(walletAddress)` — generates delegate key → signs MsgGrant transactions from wallet (one Keplr popup) for each entry in `WEVIBE_MSG_TYPE_URLS` → stores delegate key locally. Returns `{ delegateAddress, txHash, grantCount }`.
 - `revokeDelegation(walletAddress)` — broadcasts MsgRevoke for all TypeURLs → clears local delegate key.
 - `isDelegationActive(walletAddress)` — checks if delegate key exists in IndexedDB.
 - `renewDelegation(walletAddress)` — revokes existing grant if present, then re-executes full setup flow.
@@ -452,12 +521,12 @@ Added to `package.json`: `@cosmjs/stargate`, `@cosmjs/proto-signing`, `@cosmjs/a
 ```
 /wevibe.memory.v1.MsgSubmitCommitment
 /wevibe.memory.v1.MsgApproveMemory
-/wevibe.memory.v1.MsgRejectMemory
 /wevibe.memory.v1.MsgReportMemory
 /wevibe.serve.v1.MsgSubmitServeBatch
 /wevibe.org.v1.MsgRegisterOrg
 /wevibe.org.v1.MsgAddMember
 /wevibe.org.v1.MsgRemoveMember
+/wevibe.org.v1.MsgUpdateMemberRole
 /wevibe.org.v1.MsgSetOrgConfig
 /wevibe.org.v1.MsgSetRepTiers
 /wevibe.org.v1.MsgFundTreasury
@@ -468,6 +537,68 @@ Added to `package.json`: `@cosmjs/stargate`, `@cosmjs/proto-signing`, `@cosmjs/a
 ```
 
 Grant expiration: 90 days. Gas: 400,000 per transaction batch. Fee: 5,000 uvibe.
+
+## Relay + Crypto Library Surface (CO-011a.4)
+
+### `lib/relay-client.ts`
+
+Exports `relayBroadcast(orgId, walletAddress, innerMsgs)`. Builds a Cosmos SDK `authz.MsgExec` wrapping the inner Category B messages, signs the wrapping tx with the delegate's HD wallet retrieved from IndexedDB via `getDelegateWallet(walletAddress)`, base64-encodes the resulting tx bytes, builds the canonical body per Decision F:
+
+```
+WV-RELAY-v1\n
+org_id:<value>\n
+wallet_address:<value>\n
+tx_bytes_base64:<value>\n
+```
+
+…signs that canonical body string with the delegate key (secp256k1 over sha256 of the body bytes), and `POST`s to `${hubUrl}/v1/relay/broadcast` with `Authorization: Delegate <base64-sig>` and `Content-Type: text/plain; charset=utf-8`. The HTTP body is the raw canonical body string. Returns the `tx_hash` field from the relay response.
+
+### `lib/canonical-body.ts`
+
+Exports `buildRelayCanonicalBody(orgId, walletAddress, txBytesBase64)`. Pure string builder that emits the WV-RELAY-v1 body shown above per Decision F. No I/O, no crypto. Reused by `relay-client.ts` for both signing and POST body.
+
+### `lib/merkle.ts`
+
+Exports:
+
+- `computeMerkleRoot(leaves: Uint8Array[]): Promise<string>` — returns the hex-encoded root.
+- `hashContribution(content)` — sha256 of the canonical contribution bytes; produces the leaf hash.
+
+Byte-for-byte parity with `wevibe-hub/internal/chain/merkle.go :: ComputeMerkleRoot`. Algorithm:
+
+- 0 leaves → `sha256(empty)`.
+- 1 leaf → `sha256(leaf)`.
+- Else → sort the RAW leaves by their hex encoding; if a layer has an odd count, pad by duplicating the last entry; for each adjacent pair concatenate raw bytes and `sha256` to produce the next layer; subsequent layers operate on hashes (not on the raw leaves).
+
+CO-011a.4 R-MERKLE-PARITY was confirmed via three fixture vectors at `lib/merkle.test.ts`.
+
+### `lib/merkle.test.ts`
+
+Fixture test runnable via `npx tsx lib/merkle.test.ts`. Validates three vectors against expected hashes generated by the Go reference implementation:
+
+- 1 leaf: `"abc"`
+- 2 leaves: `"abc"`, `"def"`
+- 3 leaves: `"abc"`, `"def"`, `"ghi"`
+
+A failure here means the dashboard would produce a root that disagrees with the hub/chain and would be rejected on-chain. This file is the authoritative regression check for the parity invariant.
+
+## `lib/hub-client.ts` Surface (post-CO-011a.4)
+
+Kept (still hub HTTP calls):
+
+- `getOrgChainConfig(orgId)` — hub `GET /v1/orgs/{orgID}/chain-config`. Read-only proxy to the chain query; no chain write.
+- `updateOrgConfig(orgId, patch)` — hub `PATCH /v1/orgs/{orgID}/config`. Accepts ONLY the Category A fields `required_approvals` and `report_vote_threshold`. Writes the hub's off-chain mirror row in the `orgs` table. Does NOT broadcast to chain — the chain-side write is the dashboard's responsibility via `directBroadcast`.
+- `topUpCredits`, `transferLeadership`, `closeOrg`, `rotateEpoch` — off-chain hub operations, unchanged.
+- Keyword-pipeline methods listed under "Hub Client Methods (lib/hub-client.ts)" above.
+
+Removed in CO-011a.4 (chain-bound writes now go through `relay-client.ts` or `chain-client.ts :: directBroadcast`):
+
+- `batchChainSubmit` — chain submission now goes via `relayBroadcast` wrapping `MsgApproveMemory` for the batch.
+- `commitReport` — replaced by `relayBroadcast` wrapping `MsgReportMemory`.
+- `inviteMember` — replaced by `relayBroadcast` wrapping `MsgAddMember`.
+- `removeMember` — replaced by `relayBroadcast` wrapping `MsgRemoveMember`.
+- `updateMemberRole` — replaced by `relayBroadcast` wrapping `MsgUpdateMemberRole`.
+- `updateOrgChainConfig` — removed entirely. Category B org-config fields (`serve_attestation_required`, `min_contributions_per_epoch`, `contest_stake_uvibe`, `rep_tiers`) are now built by the dashboard and broadcast via `relayBroadcast` wrapping `MsgSetOrgConfig` and/or `MsgSetRepTiers`. The hub has no off-chain mirror for Category B fields and no hub endpoint accepts them.
 
 ## Storage & Caching
 

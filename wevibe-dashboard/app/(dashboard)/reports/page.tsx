@@ -7,12 +7,10 @@ import {
   ReportAction,
   listReports,
   updateReport,
-  commitReport,
 } from '@/lib/hub-client';
-import { signArbitraryMessage, getChainConfig } from '@/lib/wallet-connect';
+import { relayBroadcast } from '@/lib/relay-client';
+import type { EncodeObject } from '@/lib/chain-client';
 import { connectWallet } from '@/lib/wallet-connect';
-import { SigningStargateClient } from '@cosmjs/stargate';
-import { getOfflineSigner } from '@/lib/delegation';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
@@ -164,54 +162,23 @@ const handleAction = useCallback(
       setNotice(null);
       try {
         const walletConn = await connectWallet();
-        const chainConfig = getChainConfig();
-        const signer = getOfflineSigner(chainConfig.chainId);
-        const client = await SigningStargateClient.connectWithSigner(
-          chainConfig.rpc.replace(/^tcp:\/\//, 'http://').replace(/^rpc\./, 'http://rpc.'),
-          signer,
-        );
 
         const contentHash = Uint8Array.from(Buffer.from(report.memory_cid, 'hex'));
         const epoch = 0;
 
-        const msgAny = {
+        const msgReportMemory: EncodeObject = {
           typeUrl: '/wevibe.memory.v1.MsgReportMemory',
-          value: {
-            contentHash,
-            reporterId: report.reporter_pubkey,
-            reporterWallet: report.reporter_wallet ?? '',
+          value: Buffer.from(JSON.stringify({
+            signer: walletConn.address,
+            org_id: ORG_ID,
+            content_hash: contentHash,
+            contributor_pubkey: report.reporter_pubkey,
+            reporter_pubkey: report.reporter_pubkey,
             reason: report.reason,
-            epoch,
-          },
+          })),
         };
 
-        const fee = {
-          amount: [{ denom: 'uvibe', amount: '5000' }],
-          gas: '200000',
-        };
-
-        const result = await client.signAndBroadcast(
-          walletConn.address,
-          [msgAny],
-          fee,
-        );
-
-        const txHash = typeof result === 'string' ? result : (result as { transactionHash?: string }).transactionHash ?? '';
-
-        const canonicalMsg = [
-          'wevibe.commit_report.v1',
-          `org_id:${ORG_ID}`,
-          `report_id:${report.id}`,
-          `tx_hash:${txHash}`,
-        ].join('\n');
-
-        const { pubkey, signature } = await signArbitraryMessage(
-          chainConfig.chainId,
-          walletConn.address,
-          canonicalMsg,
-        );
-
-        await commitReport(ORG_ID, report.id, txHash, reason, pubkey, signature);
+        const txHash = await relayBroadcast(ORG_ID, walletConn.address, [msgReportMemory]);
         setNotice(`Report committed to chain. TX: ${txHash.slice(0, 12)}...`);
         await refreshReports();
       } catch (err) {

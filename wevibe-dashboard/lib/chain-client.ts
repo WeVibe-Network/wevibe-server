@@ -1,5 +1,6 @@
 import { SigningStargateClient } from '@cosmjs/stargate';
 import { OfflineSigner } from '@cosmjs/proto-signing';
+import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
 import { MsgGrant, MsgRevoke } from 'cosmjs-types/cosmos/authz/v1beta1/tx';
 import { GenericAuthorization } from 'cosmjs-types/cosmos/authz/v1beta1/authz';
 
@@ -11,7 +12,6 @@ export interface EncodeObject {
 export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.memory.v1.MsgSubmitCommitment',
   '/wevibe.memory.v1.MsgApproveMemory',
-  '/wevibe.memory.v1.MsgRejectMemory',
   '/wevibe.memory.v1.MsgReportMemory',
   '/wevibe.serve.v1.MsgSubmitServeBatch',
   '/wevibe.org.v1.MsgRegisterOrg',
@@ -89,5 +89,53 @@ export function buildMsgRevoke(
   return {
     typeUrl: '/cosmos.authz.v1beta1.MsgRevoke',
     value: Buffer.from(MsgRevoke.encode(msgRevoke).finish()),
+  };
+}
+
+export async function directBroadcast(
+  walletAddress: string,
+  msgs: EncodeObject[]
+): Promise<{ txHash: string; code: number; rawLog: string }> {
+  const { getOfflineSigner } = await import('./wallet-connect');
+  const chainId = process.env.NEXT_PUBLIC_WEVIBE_CHAIN_ID || 'wevibe-local-1';
+  const signer = getOfflineSigner(chainId);
+  const client = await getSigningClient(signer);
+
+  const fee = {
+    amount: [{ denom: 'uvibe', amount: '5000' }],
+    gas: '200000',
+  };
+
+  const [account] = await signer.getAccounts();
+  if (!account) {
+    throw new Error('No account found');
+  }
+
+  const txRaw = await client.sign(account.address, msgs, fee, '');
+  const txBytes = TxRaw.encode(txRaw).finish();
+
+  const resp = await fetch(`${getChainRpcEndpoint()}/broadcast`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'broadcast_tx_commit',
+      params: [txBytes],
+    }),
+  });
+
+  const result = await resp.json();
+  if (result.result?.CheckTx?.code !== 0) {
+    throw new Error(`CheckTx failed: ${result.result?.CheckTx?.log}`);
+  }
+  if (result.result?.DeliverTx?.code !== 0) {
+    throw new Error(`DeliverTx failed: ${result.result?.DeliverTx?.log}`);
+  }
+
+  return {
+    txHash: result.result?.DeliverTx?.hash || '',
+    code: result.result?.DeliverTx?.code || 0,
+    rawLog: result.result?.DeliverTx?.log || '',
   };
 }

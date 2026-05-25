@@ -13,6 +13,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/relay"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/config"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
@@ -124,6 +125,14 @@ func main() {
 	notificationDispatcher.Register(notifications.NewWebhookChannel())
 	handlers.SetNotificationDispatcher(notificationDispatcher)
 
+	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), notifHub, qdrantClient, cfg.OllamaURL)
+	watcher.SetDispatcher(notificationDispatcher)
+	go func() {
+		if err := watcher.Start(ctx); err != nil {
+			log.Printf("ERROR: chain watcher exited: %v", err)
+		}
+	}()
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -138,6 +147,9 @@ func main() {
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+
+	relay.SetDeps(pool, chainClient, slog.Default())
+	r.Post("/v1/relay/broadcast", relay.RelayBroadcast)
 
 	r.Get("/health", handlers.Health)
 
@@ -199,9 +211,7 @@ func main() {
 		r.Post("/moderation/batch-submit", handlers.BatchSubmitToChain)
 
 		r.Post("/serves", handlers.RecordServeEvent)
-		r.Post("/serves/batch-submit", handlers.BatchSubmitServes)
 		r.Post("/denials", handlers.RecordDenialEvent)
-		r.Post("/denials/batch-submit", handlers.BatchSubmitDenials)
 
 		r.Post("/query", handlers.QueryMemories)
 		r.Get("/memories", handlers.ListMemories)
@@ -221,13 +231,11 @@ func main() {
 		r.Get("/submissions", handlers.ListSubmissions)
 		r.Get("/my-submissions", handlers.ListMySubmissions)
 
-		r.Post("/batch-chain-submit", handlers.BatchChainSubmit)
 		r.Get("/health", handlers.OrgHealth)
 
 		r.Get("/credits", handlers.GetOrgCredits)
 		r.Get("/finances", handlers.GetOrgFinances)
 		r.Get("/chain-config", handlers.GetOrgChainConfig)
-		r.Put("/chain-config", handlers.UpdateOrgChainConfig)
 		r.Post("/transfer-leadership", handlers.TransferLeadership)
 		r.Post("/close", handlers.CloseOrg)
 

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
@@ -317,38 +315,6 @@ func UpdateReport(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, errorJSON("internal error"), http.StatusInternalServerError)
 		}
 		return
-	}
-
-	if resolution == "upheld" && chainClient != nil {
-		contentHash, hexErr := hex.DecodeString(rec.MemoryCID)
-		if hexErr == nil && len(contentHash) == 32 {
-			epoch, epochErr := orgs.GetCurrentEpoch(r.Context(), pool, orgID)
-			if epochErr == nil {
-				contributorWallet := ""
-				walletErr := pool.QueryRow(r.Context(), `
-					SELECT m.wallet_address FROM pending_submissions p
-					JOIN members m ON m.org_id = p.org_id AND m.pubkey = p.contributor_pubkey
-					WHERE p.org_id = $1 AND p.submission_hash = $2
-				`, orgID, rec.MemoryCID).Scan(&contributorWallet)
-				if walletErr != nil {
-					log.Printf("WARNING: no wallet found for contributor of memory %s: %v", rec.MemoryCID, walletErr)
-				}
-				reporterWallet := ""
-				if rec.ReporterWallet != nil {
-					reporterWallet = *rec.ReporterWallet
-				}
-				_, chainErr := chainClient.SubmitMemoryReport(r.Context(), orgID, chain.ReportMemoryInput{
-					ContentHash:    contentHash,
-					ReporterID:     actorPubkey,
-					ReporterWallet: reporterWallet,
-					Reason:         rec.Reason,
-					Epoch:          uint64(epoch),
-				}, contributorWallet)
-				if chainErr != nil {
-					log.Printf("WARNING: chain report submission failed for memory %s: %v", rec.MemoryCID, chainErr)
-				}
-			}
-		}
 	}
 
 	writeJSON(w, http.StatusOK, rec)

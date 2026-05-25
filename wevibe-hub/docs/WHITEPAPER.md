@@ -68,15 +68,13 @@ WeVibe Hub is the managed Go API server that bridges wevibe-chain state, Postgre
 - Serve event pipeline: plugin delivers memories to agent context; user approval triggers serve event.
 - `serve_events` table in PostgreSQL accumulates serve events per org until batch submission.
 - `POST /v1/orgs/{orgID}/serves` — any active org member reports serves (WeVibe-Signed auth).
-- `POST /v1/orgs/{orgID}/serves/batch-submit` — leader-only; aggregates pending serves and submits `MsgSubmitServeBatch` to chain.
 - `internal/serves/` package: `RecordServe`, `GetPendingServes`, `MarkSubmitted`, `MarkFailed`, `CountPending`.
-- `internal/chain/submit.go`: `SubmitServeBatch` method with `ServeEntryInput` struct.
-- `internal/api/handlers/serves.go`: `RecordServeEvent` and `BatchSubmitServes` handlers.
+- `internal/api/handlers/serves.go`: `RecordServeEvent` handler (hub-side serve recording, off-chain). Chain-side `MsgSubmitServeBatch` is now broadcast by the dashboard via the relay endpoint per CO-011a.4 (the legacy hub handler `BatchSubmitServes` and its `POST /serves/batch-submit` route were removed). `internal/chain/submit.go:SubmitServeBatch` retains its `ServeEntryInput` struct definition as a typed wrapper but is no longer invoked by hub handlers.
 
 ## Sprint 27 Updates (CO-201)
 
-- Memory reporting: hub submits `MsgReportMemory` to chain after quorum/leader gating.
-- `internal/chain/submit.go`: `SubmitMemoryReport` method with `ReportMemoryInput` struct.
+- Memory reporting (rewritten by CO-011a.4): the on-chain `MsgReportMemory` is now built and broadcast by the dashboard via the relay endpoint. The hub's chain-broadcast call site was removed; off-chain vote-tallying and quorum gating in `UpdateReport` / `VoteOnReport` are retained.
+- `internal/chain/submit.go`: `SubmitMemoryReport` method with `ReportMemoryInput` struct (retained as a typed helper; no longer invoked by hub handlers).
 - Enables "all social data on chain" pattern for memory violation reports.
 
 ## Sprint 28 Updates (CO-211)

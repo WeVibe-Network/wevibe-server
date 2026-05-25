@@ -2,6 +2,7 @@ package chain
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -190,4 +191,8 @@ func (c *GrpcClient) GetTxConfig() client.TxConfig {
 
 func (c *GrpcClient) GetChainID() string {
 	return c.chainID
+}
+
+func (c *GrpcClient) BroadcastTxSync(ctx context.Context, txBytes []byte) (string, error) {
+	return c.broadcastTxSync(ctx, txBytes)
 }

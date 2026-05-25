@@ -1,5 +1,5 @@
 import { buildAuthHeaders, getIdentity } from './wevibe-auth';
-import { linkWalletCanonical, signCanonical, registerDelegateKeyCanonical, inviteMemberCanonical, updateMemberRoleCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
+import { linkWalletCanonical, signCanonical, registerDelegateKeyCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
 
 let _hubUrl: string | null = null;
 function getHubUrl(): string {
@@ -108,20 +108,10 @@ export async function getOrgChainConfig(orgId: string): Promise<OrgChainConfig> 
   return hubFetch<OrgChainConfig>(`/v1/orgs/${orgId}/chain-config`);
 }
 
-export async function updateOrgChainConfig(
-  orgId: string,
-  payload: {
-    serve_attestation_required: boolean;
-    min_contributions_per_epoch?: number;
-    contest_stake_uvibe?: number;
-    rep_tiers: RepTier[];
-  },
-): Promise<{ status: string; tx_hash: string }> {
-  return hubFetch<{ status: string; tx_hash: string }>(`/v1/orgs/${orgId}/chain-config`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  });
-}
+// updateOrgChainConfig was removed in CO-011a.4. Category B chain config
+// (serve_attestation_required, min_contributions_per_epoch, contest_stake_vibe,
+// rep_tiers) is now broadcast directly via the relay using MsgSetOrgConfig /
+// MsgSetRepTiers. See lib/relay-client.ts.
 
 export interface OrgSummary {
   org_id: string;
@@ -155,29 +145,7 @@ export async function updateOrgConfig(orgId: string, payload: { required_approva
   });
 }
 
-export interface CommitReportResponse {
-  status: string;
-  tx_hash: string;
-}
 
-export async function commitReport(
-  orgId: string,
-  reportId: string,
-  txHash: string,
-  reason: string,
-  walletPubkey: Uint8Array,
-  walletSignature: Uint8Array,
-): Promise<CommitReportResponse> {
-  return hubFetch<CommitReportResponse>(`/v1/orgs/${orgId}/reports/${reportId}/commit`, {
-    method: 'POST',
-    body: JSON.stringify({
-      tx_hash: txHash,
-      reason,
-      wallet_pubkey: Array.from(walletPubkey),
-      wallet_signature: Array.from(walletSignature),
-    }),
-  });
-}
 
 export interface EscalationVote {
   pubkey: string;
@@ -327,80 +295,11 @@ export async function createOrg(body: CreateOrgRequest): Promise<OrgSummary> {
 
 // === CO-215 Task C additions ===
 
-export async function inviteMember(orgId: string, pubkey: string, x25519Pubkey: string, role: string): Promise<MemberRecord> {
-  const identity = await getIdentity();
-  if (!identity) {
-    throw new Error('No dashboard identity');
-  }
 
-  const encEnvelope = '';
-  const searchEnvelope = '';
-  const modEnvelope = role === 'moderator' ? '' : '';
 
-  const canonical = await inviteMemberCanonical(orgId, pubkey, x25519Pubkey, role, identity.pubkeyHex, encEnvelope, searchEnvelope, modEnvelope);
-  const signature = await signCanonical(identity.privateKey, canonical);
 
-  return hubFetch<MemberRecord>(`/v1/orgs/${orgId}/members`, {
-    method: 'POST',
-    body: JSON.stringify({
-      pubkey,
-      x25519_pubkey: x25519Pubkey,
-      role,
-      signed_by: identity.pubkeyHex,
-      signature,
-      enc_envelope: encEnvelope,
-      search_envelope: searchEnvelope,
-      mod_envelope: modEnvelope,
-    }),
-  });
-}
 
-export async function removeMember(orgId: string, pubkey: string): Promise<void> {
-  const identity = await getIdentity();
-  if (!identity) {
-    throw new Error('No dashboard identity');
-  }
 
-  const canonical = await removeMemberCanonical(orgId, pubkey, identity.pubkeyHex);
-  const signature = await signCanonical(identity.privateKey, canonical);
-
-  await hubFetch<{ status: string }>(`/v1/orgs/${orgId}/members/${pubkey}`, {
-    method: 'DELETE',
-    body: JSON.stringify({
-      signed_by: identity.pubkeyHex,
-      signature,
-    }),
-  });
-}
-
-async function removeMemberCanonical(orgId: string, pubkey: string, signedBy: string): Promise<Uint8Array> {
-  const msg = [
-    'wevibe.remove_member.v1',
-    `org_id:${orgId}`,
-    `pubkey:${pubkey}`,
-    `signed_by:${signedBy}`,
-  ].join('\n');
-  return new TextEncoder().encode(msg);
-}
-
-export async function updateMemberRole(orgId: string, pubkey: string, role: string): Promise<MemberRecord> {
-  const identity = await getIdentity();
-  if (!identity) {
-    throw new Error('No dashboard identity');
-  }
-
-  const canonical = await updateMemberRoleCanonical(orgId, pubkey, role, identity.pubkeyHex);
-  const signature = await signCanonical(identity.privateKey, canonical);
-
-  return hubFetch<MemberRecord>(`/v1/orgs/${orgId}/members/${pubkey}`, {
-    method: 'PATCH',
-    body: JSON.stringify({
-      role,
-      signed_by: identity.pubkeyHex,
-      signature,
-    }),
-  });
-}
 
 export async function transferLeadership(orgId: string, newLeaderPubkey: string): Promise<void> {
   const identity = await getIdentity();
@@ -637,12 +536,7 @@ export async function removeSubmission(orgId: string, hash: string): Promise<{ s
   });
 }
 
-export async function batchChainSubmit(orgId: string, hashes: string[]): Promise<{ tx_hash: string; committed_count: number }> {
-  return hubFetch<{ tx_hash: string; committed_count: number }>(`/v1/orgs/${orgId}/batch-chain-submit`, {
-    method: 'POST',
-    body: JSON.stringify({ hashes }),
-  });
-}
+
 
 export async function getOrgHealth(orgId: string): Promise<OrgHealth> {
   return hubFetch<OrgHealth>(`/v1/orgs/${orgId}/health`);

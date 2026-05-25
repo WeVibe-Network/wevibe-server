@@ -469,7 +469,6 @@ type RegisterDelegateKeyRequest struct {
 type DelegateKeyRecord struct {
 	WalletAddress   string  `json:"wallet_address"`
 	DelegateAddress string  `json:"delegate_address"`
-	OrgID           string  `json:"org_id"`
 	DelegatePubkey  string  `json:"delegate_pubkey"`
 	GrantTxHash     *string `json:"grant_tx_hash,omitempty"`
 	GrantExpiration *string `json:"grant_expiration,omitempty"`

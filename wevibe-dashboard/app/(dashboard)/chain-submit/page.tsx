@@ -7,7 +7,6 @@ import {
   rerunKeywords,
   updateKeywords,
   removeSubmission,
-  batchChainSubmit,
   getOrgHealth,
   type Submission,
   type KeywordWeight,
@@ -201,11 +200,8 @@ export default function ChainSubmitPage() {
     setTxResult(null);
 
     try {
-      const hashes = pendingChain.map(s => s.submission_hash);
-      const result = await batchChainSubmit(ORG_ID, hashes);
-      setTxResult(result);
-      setNotice(`Batch submitted. Tx: ${result.tx_hash.slice(0, 16)}… (${result.committed_count} committed)`);
-      await loadAll();
+      setNotice('Batch chain submission has been deprecated. Individual memory submissions via relay are pending implementation.');
+      setBusy(null);
     } catch (err) {
       setError((err as Error).message);
     } finally {

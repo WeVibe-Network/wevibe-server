@@ -1,4 +1,81 @@
-# WeVibe Hub Topology (Updated: CO-266)
+# WeVibe Hub Topology (Updated: CO-011a.4)
+
+## Relay Endpoint (CO-011a.4)
+
+**Location:** `internal/relay/`
+
+**Files:**
+- `granter_fields.go` — Category B msg-type → `signer` proto field allowlist (`GranterFieldByMsgType`)
+- `validator.go` — `ParseCanonicalBody`, `VerifyDelegateSignature`, `ExtractInnerGranter`
+- `relay.go` — HTTP handler implementing `POST /v1/relay/broadcast`
+- `relay_test.go` — unit tests for parser, validator, and handler
+
+**Wiring (`cmd/wevibe-hub/main.go`):**
+```go
+relay.SetDeps(pool, chainClient, logger)
+r.Post("/v1/relay/broadcast", relay.Handler)
+```
+This is a **top-level** route — it is NOT inside the `/v1/orgs/{orgID}` group and is NOT protected by `RequireOrgMembership`. Authentication is performed by the relay validator itself against the `delegate_keys` table.
+
+### Route
+
+```
+POST /v1/relay/broadcast
+Authorization: Delegate <base64-sig>
+Content-Type: text/plain
+```
+
+**Auth header (Decision E):** `Authorization: Delegate <base64-sig>`. The signature is produced by the delegate key over the raw canonical body bytes.
+
+**Body format (Decision F)** — read as raw bytes, parsed line-by-line:
+```
+WV-RELAY-v1\n
+org_id:<value>\n
+wallet_address:<value>\n
+tx_bytes_base64:<value>\n
+```
+The literal `WV-RELAY-v1` magic line MUST appear first. No trailing or additional fields are accepted.
+
+### Validator Flow
+
+1. `ParseCanonicalBody(raw)` — verify magic line, extract `org_id`, `wallet_address`, `tx_bytes_base64`. Reject anything malformed → 400.
+2. `VerifyDelegateSignature(header, rawBody, pool)` — base64-decode the `Authorization: Delegate` payload, look up the active delegate key by signature recovery, ensure `grant_expiration` is unexpired and `active=TRUE`. Failure → 401 (missing) or 403 (expired).
+3. Decode the inner `sdk.Tx` from `tx_bytes_base64`. Reject non-`MsgExec` or multi-message envelopes — exactly one `MsgExec` is required → 400.
+4. `ExtractInnerGranter(msgExec)` — read the granter field from the inner message via reflection against `GranterFieldByMsgType`. The granter MUST equal the `wallet_address` claimed in the body → 403 mismatch otherwise.
+5. For each inner `Msg` inside the `MsgExec`, confirm its type URL is present in `GranterFieldByMsgType`. Anything outside the Category B allowlist → 400 disallowed-msg.
+6. `chainClient.BroadcastTxSync(ctx, txBytes)` → return `{ tx_hash, code, raw_log }`. Broadcast error → 502.
+
+### Category B Allowlist
+
+`GranterFieldByMsgType` in `internal/relay/granter_fields.go` lists the 12 Category B message types. All of them use the proto field `signer` per Decision I:
+
+```
+/wevibe.memory.v1.MsgSubmitCommitment
+/wevibe.memory.v1.MsgApproveMemory
+/wevibe.memory.v1.MsgReportMemory
+/wevibe.serve.v1.MsgSubmitServeBatch
+/wevibe.serve.v1.MsgSubmitDenialBatch
+/wevibe.org.v1.MsgRegisterOrg
+/wevibe.org.v1.MsgAddMember
+/wevibe.org.v1.MsgRemoveMember
+/wevibe.org.v1.MsgSetOrgConfig
+/wevibe.org.v1.MsgSetRepTiers
+/wevibe.org.v1.MsgUpdateMemberRole
+/wevibe.org.v1.MsgRotateEpoch
+```
+
+Any message type not in this map is rejected by step 5 of the validator flow.
+
+### Error Responses
+
+| Status | Cause |
+|--------|-------|
+| 400 | Malformed canonical body, bad inner signature, disallowed inner msg type, multi-msg envelope, missing `MsgExec` |
+| 401 | Missing or unparseable `Authorization: Delegate` header |
+| 403 | Granter ≠ claimed wallet_address, or delegate grant expired / revoked |
+| 502 | Chain `BroadcastTxSync` returned a transport or codespace error |
+
+---
 
 ## Multi-Org Isolation (CO-246)
 
@@ -51,12 +128,13 @@ func GetMemberOrgID(ctx context.Context) string
 - `GET /health` — health check
 - `GET /v1/members/{pubkey}/orgs` — list orgs for a member
 - `GET /v1/profile/{wallet}` — public profile (CO-247): wallet/org memberships/chain stats
-- `POST /v1/orgs` — create org
+- `POST /v1/orgs` — create org (envelope storage only; chain registration is dashboard-relayed)
 - `GET /v1/orgs/{orgID}` — org info for discovery (D-12.7)
 - `GET /v1/orgs/discover` — list/search public orgs (D-12.7, GAP-M4 CLOSED in Sprint 25)
 - `POST /v1/orgs/{orgID}/join` — submit join request (D-12.8, GAP-M5 CLOSED in Sprint 25)
 - `GET /v1/orgs/{orgID}/epoch/{epochID}/manifest` — needed by wevibe-mcp during setup flows
 - `POST /v1/billing/topup` — billing (no org scoping)
+- `POST /v1/relay/broadcast` — Category B `MsgExec` relay (CO-011a.4); auth via `Authorization: Delegate` header validated against `delegate_keys`
 
 **User-scoped notification routes (WeVibe-Signed auth, not org-scoped):**
 - `GET /v1/notifications` — list notifications for authenticated user (all orgs aggregated)
@@ -101,13 +179,16 @@ Behavior:
 
 This is consumed by dashboard quorum voting UI for orgs with `required_approvals > 1`.
 
-### Hub → Chain Org Registration Sync
+### Hub Org Creation (CO-011a.4 Update)
 
-`CreateOrg` now performs immediate chain registration after PostgreSQL org creation:
+`CreateOrg` (`POST /v1/orgs`) accepts envelope storage and creates the `orgs` row. It NO LONGER calls `chainClient.RegisterOrgOnChain`.
 
-- Calls `RegisterOrgOnChain` (builds and broadcasts `MsgRegisterOrg`)
-- On success/failure, hub persists `orgs.chain_registered` boolean state
-- Chain registration failure is logged but does not roll back hub org creation
+The dashboard performs TWO sequential calls when creating an org:
+
+1. `POST /v1/orgs` — envelope storage + `orgs` row creation (hub-only).
+2. `POST /v1/relay/broadcast` — relay-broadcast wrapping `MsgRegisterOrg`.
+
+The `orgs.chain_registered` boolean is **NOT** set by the hub at create time. The ChainWatcher's `processRegisterOrgBookkeeping` handler observes the confirmed `MsgRegisterOrg` on chain and flips `chain_registered = true`. This is the canonical bookkeeping path.
 
 ## Sprint 28 Gap Blitz — CO-266 Hub Features (GAP-O6, O7, N2, N8, N9)
 
@@ -141,15 +222,20 @@ New endpoint `GET /v1/orgs/{orgID}/finances` returns combined credits and chain 
 
 **Handler:** `GetFinances(w, r)` in `internal/api/handlers/billing.go`
 
-### Chain Config Read/Write (GAP-O7)
+### Chain Config Read (GAP-O7, CO-011a.4 Update)
 
-New endpoint `GET /v1/orgs/{orgID}/chain-config` (leader-only) returns org chain configuration:
+Only the **read-only** chain config endpoint remains:
 
-- `chain_id`, `chain_rpc_url`, `chain_grpc_url`, `chain_bech32_prefix`
+- `GET /v1/orgs/{orgID}/chain-config` (leader-only) → returns `chain_id`, `chain_rpc_url`, `chain_grpc_url`, `chain_bech32_prefix`. This is a pure chain query — the hub does NOT mirror these fields off-chain.
 
-`PATCH /v1/orgs/{orgID}/config` now accepts chain configuration fields to update them.
+**Handler:** `GetOrgChainConfig(w, r)` in `internal/api/handlers/chain_config.go`.
 
-**Handler:** `GetChainConfig(w, r)` in `internal/api/handlers/chain_config.go`
+**Chain config writes (Decision C, CO-011a.4):** there is no hub-side write path for chain configuration. Category B chain config (`serve_attestation_required`, `min_contributions_per_epoch`, `contest_stake_vibe`, `rep_tiers`) is built by the dashboard and broadcast via the relay endpoint wrapping `MsgSetOrgConfig` / `MsgSetRepTiers`. The hub holds NO off-chain mirror of these fields.
+
+**Category A vs Category B (Decision C):**
+
+- **Category A** (off-chain mirror, hub-owned): `required_approvals`, `report_vote_threshold`. Written via `PATCH /v1/orgs/{orgID}/config` (handler: `UpdateOrgConfig`). The dashboard is responsible for any Category A chain-side broadcast directly via Keplr — the hub has no involvement.
+- **Category B** (on-chain canonical): all fields listed above. Hub never writes these; the dashboard relays the appropriate `MsgSetOrgConfig` / `MsgSetRepTiers` through `POST /v1/relay/broadcast`.
 
 ### Moderation Submit with Trial Block (GAP-N9)
 
@@ -412,23 +498,16 @@ GET /v1/orgs/{orgID}/submissions?status={status}
 - For `negative_signal` memory type: content ≤ 1000 chars
 - No pending suggestions remain (all must be approved/rejected before verification)
 
-### Batch Chain Submit (CO-238)
+### Multi-Memory Chain Commitment (CO-011a.4)
 
-```
-POST /v1/orgs/{orgID}/batch-chain-submit (leader-only)
-```
-
-**Behavior:**
-- Bundles all pending_chain submissions into ONE multi-message Cosmos TX
-- R-ATOMIC: Chain TX confirms before hub status update
-- Post-commit: Qdrant insert + memory_keywords population + status → committed
-- If post-commit steps fail after chain confirms: flagged for manual review (chain immutable)
+Chain commitment for batches of approved memories is initiated by the dashboard, which relays `MsgApproveMemory` directly via `POST /v1/relay/broadcast`. The hub has no eager batch-commit handler. Post-confirmation bookkeeping (Qdrant insert, `memory_keywords` population, `pending_submissions.status → committed`) is performed by the ChainWatcher's `processApproveMemoryBookkeeping` handler.
 
 **Org Health endpoint:**
 ```
 GET /v1/orgs/{orgID}/health (leader-only)
 → Returns: last_batch_extraction_at, last_chain_submission_at, pending_keyword_count, pending_chain_count
 ```
+The `last_chain_submission_at` field is now updated by the ChainWatcher when `MsgApproveMemory` confirms, not by a hub handler.
 
 ## Moderation Queue (CO-238 update)
 
@@ -666,17 +745,25 @@ const (
 
 - **grpc_client.go** — `GrpcClient` struct holds gRPC connection, codec, keyring, tx config, and query clients for all 7 wevibe-chain modules.
 - **query.go** — nil-safe wrappers: org registration checks, merkle root queries, serve stats, attestation lookups, bandwidth state, emissions params, reputation stats.
-- **broadcast.go** — `BroadcastTx` signs and broadcasts transactions to wevibe-chain via Comet RPC `broadcast_tx_sync` (D-13.12). Fees: `ceil(gas × 0.01 uvibe)` with 2000 uvibe floor. Retry on transient errors (8 attempts, 400ms backoff).
-- **submit.go** — `SubmitMemoryToChain` and `SubmitMemoryBatch` build and broadcast `MsgSubmitMemory`; `SubmitServeBatch` for serve event attestation.
+- **broadcast.go** — `BroadcastTx` and `BroadcastTxSync` sign and broadcast transactions to wevibe-chain via Comet RPC `broadcast_tx_sync` (D-13.12). Fees: `ceil(gas × 0.01 uvibe)` with 2000 uvibe floor. Retry on transient errors (8 attempts, 400ms backoff). `BroadcastTxSync` is invoked by the relay endpoint to relay dashboard-signed `MsgExec`-wrapped Category B messages.
+- **submit.go** — Category A hub-owned transaction builders only (no Category B writers remain). Previous Category B helpers (`SubmitMemoryBatchAtomic`, `SubmitServeBatch`, `SubmitDenialBatch`, `SubmitMemoryReport`, `RegisterOrgOnChain`) were removed in CO-011a.4.
 - **merkle.go** — binary SHA-256 Merkle tree for epoch root computation.
 - **sync.go** — `SyncEpochData` polling loop logic: compares chain confidence/state to Qdrant payload and updates changed records.
-- **cometbft_subscriber.go** — CometBFT RPC subscriber for new block events.
+- **cometbft_subscriber.go** — CometBFT RPC subscriber for new block events, consumed by the ChainWatcher.
 
 CometBFT RPC is not consumed yet, but config now includes optional `WEVIBE_CHAIN_RPC_URL` (`ChainRPCURL`) for Sprint 23 WebSocket work.
 
-## ChainWatcher (CO-011a.3)
+## ChainWatcher (CO-011a.3, CO-011a.4 Activated)
 
-The ChainWatcher detects confirmed transactions on-chain and performs post-confirmation bookkeeping. It is defined in `internal/chain/` but is NOT started — activation is deferred to CO-011a.4.
+The ChainWatcher detects confirmed transactions on-chain and performs post-confirmation bookkeeping. As of CO-011a.4 it is the **canonical** bookkeeping path for all 5 confirmed-tx handlers — no API handler runs bookkeeping eagerly at submission time.
+
+**Startup wiring (`cmd/wevibe-hub/main.go`):** the watcher is constructed and `Start()` is called AFTER the notification dispatcher setup and BEFORE router registration:
+
+```go
+watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), notifHub, qdrantClient, cfg.OllamaURL)
+watcher.Start(ctx)
+// ... router setup follows
+```
 
 ### File Inventory
 
@@ -730,9 +817,17 @@ type ChainWatcher struct {
 }
 ```
 
-### Activation Note
+### Activation Note (CO-011a.4)
 
-The ChainWatcher is NOT started in this CO. `NewChainWatcher` is defined but never called from `main()` or server init. CO-011a.4 will wire `NewChainWatcher` into hub startup and delete the old API handler bookkeeping paths atomically.
+The ChainWatcher is STARTED in `cmd/wevibe-hub/main.go`. It runs continuously alongside the HTTP server and is the SOLE owner of post-confirmation bookkeeping for the 5 Category B handlers:
+
+- `processApproveMemoryBookkeeping`
+- `processServeBatchBookkeeping`
+- `processDenialBatchBookkeeping`
+- `processReportBookkeeping`
+- `processRegisterOrgBookkeeping`
+
+All previous API-handler-side eager Category B broadcasting paths from the hub have been removed in CO-011a.4. The dashboard now relays the corresponding `MsgExec`-wrapped Category B message via `POST /v1/relay/broadcast`; the watcher closes the loop on confirmation.
 
 ## API Components
 
@@ -779,13 +874,15 @@ The ChainWatcher is NOT started in this CO. `NewChainWatcher` is defined but nev
 - The memory is unretrievable until re-encrypted under Umbral (background job, future CO)
 - For dogfood/development: wipe and re-seed memories after PRE ships
 
-## Denial Event Recording (CO-225)
+## Denial Event Recording (CO-225, CO-011a.4 Update)
 
-Hub records denial events (incorrect/harmful memory outputs reported by consumers) and syncs them to wevibe-chain via `MsgSubmitDenialBatch`.
+Hub records denial events (incorrect/harmful memory outputs reported by consumers) into the `serve_events` table. **Chain submission is no longer a hub responsibility** — the dashboard relays `MsgSubmitDenialBatch` via `POST /v1/relay/broadcast`, and the ChainWatcher's `processDenialBatchBookkeeping` handler marks `submitted = TRUE` on confirmation.
 
-**Endpoints:**
+**Endpoint (REMAINING):**
 - `POST /v1/orgs/{orgID}/denials` (`RecordDenialEvent`) — records a single denial for a served memory
-- `POST /v1/orgs/{orgID}/denials/batch-submit` (`BatchSubmitDenials`) — submits accumulated denials to wevibe-chain as `MsgSubmitDenialBatch`
+
+**REMOVED in CO-011a.4:**
+- Chain submission of accumulated denials is performed by the dashboard, which relays `MsgSubmitDenialBatch` directly through the relay endpoint. There is no hub-side denial batch-submit handler.
 
 **Schema (`serve_events` table, CO-225):**
 ```sql
@@ -805,24 +902,24 @@ CREATE TABLE serve_events (
 ```
 - `event_type IN ('serve', 'denial')` differentiates serve attestations from denial attestations
 - `reason` captures consumer-provided context for the denial
-- `submitted` flag tracks which events have been relayed to wevibe-chain
+- `submitted` flag is set by the ChainWatcher on confirmation of the relayed `MsgSubmitDenialBatch`
 
-**Flow:**
+**Flow (CO-011a.4):**
 1. Consumer reports a denial via `POST /v1/orgs/{orgID}/denials` with `memory_hash`, `serve_id`, `reason`
-2. Hub persists to `serve_events` with `event_type = 'denial'`
-3. Leader or automated job calls `POST /v1/orgs/{orgID}/denials/batch-submit`
-4. `BatchSubmitDenials` reads pending (`submitted = FALSE`) denials, calls `chain.SubmitDenialBatch`, marks submitted on success
-5. wevibe-chain `MsgSubmitDenialBatch` handler persists `StoredDenialAttestation` per memory/epoch; memory keeper queries denial count for decay
+2. Hub persists to `serve_events` with `event_type = 'denial'`, `submitted = FALSE`
+3. Dashboard reads pending denials (via existing read endpoints) and builds an `MsgSubmitDenialBatch`
+4. Dashboard relays via `POST /v1/relay/broadcast`
+5. wevibe-chain `MsgSubmitDenialBatch` handler persists `StoredDenialAttestation` per memory/epoch
+6. ChainWatcher's `processDenialBatchBookkeeping` marks the matching `serve_events` rows as `submitted = TRUE` and applies keyword weight decay
 
 **Key functions in `internal/serves/serves.go`:**
 - `RecordDenial(ctx, pool, orgID, req)` — inserts denial event, returns ID
-- `GetPendingDenials(ctx, pool, orgID)` — reads all unsubmitted denials for an org
-- `MarkDenialsSubmitted(ctx, pool, orgID, serveIDs)` — marks denials as submitted on success
+- `GetPendingDenials(ctx, pool, orgID)` — reads all unsubmitted denials for an org (now consumed by dashboard, not by a hub batch-submit handler)
+- `MarkDenialsSubmitted(ctx, pool, orgID, serveIDs)` — called by the ChainWatcher after confirmation
 
-**Chain client (`internal/chain/submit.go`, CO-225):**
-- `SubmitDenialBatch(ctx, orgID, denials)` — builds and broadcasts `MsgSubmitDenialBatch` via `GrpcClient`
+**Serve attestation parity (CO-011a.4):** the same pattern applies to serve attestations — there is no hub-side serve batch-submit handler. The dashboard relays `MsgSubmitServeBatch` via the relay endpoint, and the ChainWatcher's `processServeBatchBookkeeping` finalizes `submitted = TRUE` and applies keyword weight boost on confirmation.
 
-**Route registration:** Both denial routes registered in `cmd/wevibe-hub/main.go` alongside existing serve routes.
+**Route registration:** Only `POST /v1/orgs/{orgID}/denials` (recording) is registered in `cmd/wevibe-hub/main.go`.
 
 ## Report Flow (CO-231, CO-233)
 
@@ -881,7 +978,7 @@ CREATE TABLE report_votes (
 - When dismiss votes >= threshold: reporter's dismissed_reports_count incremented, status → `dismissed` or `dismissed_malicious`
 - Leader can override and resolve immediately
 
-**CommitReport endpoint (CO-233):**
+**CommitReport endpoint (CO-233, CO-011a.4 Update):**
 ```json
 // Request
 {
@@ -889,12 +986,14 @@ CREATE TABLE report_votes (
   "reason": "max 500 chars describing why the memory was harmful",
   "leader_signature": "base64-encoded signArbitrary output"
 }
-// Flow
-1. Hub verifies leader wallet signature over canonical message: commit_report|{reportID}|{reason}
-2. Hub calls chainClient.SubmitMemoryReport(reportID, reason, contributorWallet)
-3. On TX confirmation: hub deletes memory from Qdrant, sets status → 'upheld'
-4. On TX failure: status remains 'upheld_pending_tx', memory NOT deleted (atomic)
 ```
+
+**Flow (CO-011a.4):**
+1. Hub verifies leader wallet signature over canonical message: `commit_report|{reportID}|{reason}`.
+2. Hub records the resolution and off-chain vote tally; status transitions remain hub-managed.
+3. **Chain broadcast is the dashboard's responsibility.** The dashboard relays `MsgReportMemory` via `POST /v1/relay/broadcast`. The previous `chainClient.SubmitMemoryReport` call from inside the hub handler was **DELETED** in CO-011a.4.
+4. On TX confirmation, the ChainWatcher's `processReportBookkeeping` handler deletes the memory from Qdrant, marks `pending_submissions.banned = TRUE`, and sets the report status to `'upheld'`.
+5. On TX failure (non-confirmation), the watcher takes no action; status remains `'upheld_pending_tx'` and the memory is NOT deleted (atomic via watcher gating).
 
 **Security config changes (CO-233):** `PATCH /v1/orgs/{orgID}/config` for `required_approvals` and `report_vote_threshold` requires leader wallet `signArbitrary` signature (not Ed25519 delegate key).
 
@@ -924,33 +1023,34 @@ The hub supports linking a Cosmos wallet address to a member's Ed25519 delegate 
 
 **Members table:** `wallet_address TEXT` — nullable, unique per `(org_id, wallet_address)`. One wallet per org membership; same wallet can be used across different orgs (portable identity).
 
-### Delegate Key Registration (CO-214)
+### Delegate Key Registration (CO-214, CO-011a.4 Update)
 
-The hub maintains a mapping between wallet addresses and their authorized secp256k1 delegate keys (chain addresses authorized via Cosmos SDK `x/authz` MsgGrant).
+The hub maintains a **global** (per-wallet, NOT per-org) mapping between wallet addresses and their authorized secp256k1 delegate keys (chain addresses authorized via Cosmos SDK `x/authz` MsgGrant). Per Decision H (CO-011a.4), the previous `org_id` column and its FK to `orgs` were dropped — a wallet's delegate is the same across every org it participates in.
 
-**New endpoint:** `POST /v1/orgs/{orgID}/members/delegate-key` — registers a delegate key for the caller's wallet address. Must be signed by the caller's Ed25519 key. Canonical message: `wevibe.register_delegate_key.v1\norg_id:{orgID}\nwallet_address:{walletAddress}\ndelegate_address:{delegateAddress}\nsigned_by:{pubkeyHex}`.
+**Endpoint:** `POST /v1/members/delegate-key` — registers a delegate key for the caller's wallet address. Must be signed by the caller's Ed25519 key. Canonical message: `wevibe.register_delegate_key.v1\nwallet_address:{walletAddress}\ndelegate_address:{delegateAddress}\nsigned_by:{pubkeyHex}`. The wire-level payload of `RegisterDelegateKeyRequest` is **unchanged** — it never carried an `org_id` field at the request body level.
 
-**`delegate_keys` table schema:**
+**`delegate_keys` table schema (CO-011a.4):**
 ```sql
 CREATE TABLE delegate_keys (
-    wallet_address      TEXT        NOT NULL,
-    delegate_address    TEXT        NOT NULL,
-    org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
-    delegate_pubkey     TEXT        NOT NULL,
+    wallet_address      TEXT PRIMARY KEY,
+    delegate_address    TEXT UNIQUE NOT NULL,
+    delegate_pubkey     TEXT NOT NULL,
     grant_tx_hash       TEXT,
     grant_expiration    TIMESTAMPTZ,
-    active              BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, delegate_address),
-    UNIQUE (org_id, wallet_address)
+    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX idx_delegate_keys_delegate_address ON delegate_keys(delegate_address);
 ```
-Indexes: `idx_delegate_keys_address` on `delegate_address`, `idx_delegate_keys_wallet` on `wallet_address`.
 
-**Key functions in `internal/members/members.go`:**
-- `RegisterDelegateKey(ctx, pool, orgID, req)` — inserts/updates delegate key record
-- `GetDelegateKey(ctx, pool, orgID, delegateAddress)` — retrieves delegate key record
-- `ResolveDelegateToWallet(ctx, pool, delegateAddress)` — resolves delegate address to wallet address and org ID (used for auth resolution in CO-215)
-- `RevokeDelegateKey(ctx, pool, orgID, walletAddress)` — marks delegate key inactive
+The `org_id` column and its FK to `orgs` were **dropped** in CO-011a.4. `wallet_address` is now the primary key — one active delegate per wallet across the entire hub.
 
-**Protocol types added:** `RegisterDelegateKeyRequest` (wallet_address, delegate_address, delegate_pubkey, grant_tx_hash, grant_expiration, signed_by, signature), `DelegateKeyRecord` (wallet_address, delegate_address, org_id, delegate_pubkey, grant_tx_hash, grant_expiration, active, created_at)
+**Key functions in `internal/members/members.go` (CO-011a.4 signatures):**
+- `RegisterDelegateKey(ctx, pool, req)` — `orgID` parameter removed.
+- `GetDelegateKey(ctx, pool, delegateAddress)` — `orgID` parameter removed; returns `DelegateKeyRecord` without an `OrgID` field.
+- `ResolveDelegateToWallet(ctx, pool, delegateAddress) (walletAddress string, err error)` — return signature dropped the `orgID`; only `walletAddress` and `error` are returned.
+- `RevokeDelegateKey(ctx, pool, walletAddress)` — `orgID` parameter removed.
+
+**Protocol types (CO-011a.4):**
+- `DelegateKeyRecord` — fields: `wallet_address`, `delegate_address`, `delegate_pubkey`, `grant_tx_hash`, `grant_expiration`, `active`, `created_at`. **No `OrgID` field.**
+- `RegisterDelegateKeyRequest` — wire-level payload unchanged: `wallet_address`, `delegate_address`, `delegate_pubkey`, `grant_tx_hash`, `grant_expiration`, `signed_by`, `signature`. No `org_id` field at the wire level (this matches the pre-CO-011a.4 contract).

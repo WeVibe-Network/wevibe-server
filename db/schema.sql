@@ -318,24 +318,21 @@ CREATE INDEX idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
 CREATE INDEX idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
 
 -- ── Delegate keys ────────────────────────────────────────────────────────────
--- Maps a delegate public key to a wallet address within an org.
+-- Maps a delegate public key to a wallet address (global, not per-org).
 -- Enables a delegate (e.g., an AI agent) to act on behalf of the wallet owner.
+-- Per Decision H (CO-011a.4): PK is wallet_address, delegate_address is UNIQUE.
 
 CREATE TABLE delegate_keys (
-    wallet_address      TEXT        NOT NULL,
-    delegate_address    TEXT        NOT NULL,
-    org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
-    delegate_pubkey     TEXT        NOT NULL,
+    wallet_address      TEXT PRIMARY KEY,
+    delegate_address    TEXT UNIQUE NOT NULL,
+    delegate_pubkey     TEXT NOT NULL,
     grant_tx_hash       TEXT,
     grant_expiration    TIMESTAMPTZ,
-    active              BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, delegate_address),
-    UNIQUE (org_id, wallet_address)
+    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_delegate_keys_address ON delegate_keys(delegate_address);
-CREATE INDEX idx_delegate_keys_wallet ON delegate_keys(wallet_address);
+CREATE INDEX idx_delegate_keys_delegate_address ON delegate_keys(delegate_address);
 
 -- ── Org keywords ────────────────────────────────────────────────────────────
 -- Approved vocabulary per org for memory categorization.

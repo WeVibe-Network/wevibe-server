@@ -93,20 +93,6 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if chainClient != nil {
-		chainRegistered := false
-		txHash, chainErr := chainClient.RegisterOrgOnChain(r.Context(), req.OrgID, req.LeaderPubkey, req.Domain, 0, 0)
-		if chainErr != nil {
-			log.Printf("WARNING: chain org registration failed for org=%s: %v (tx_hash=%s)", req.OrgID, chainErr, txHash)
-		} else {
-			chainRegistered = true
-			log.Printf("registered org on chain: org=%s tx=%s", req.OrgID, txHash)
-		}
-		if markErr := orgs.SetChainRegistered(r.Context(), pool, req.OrgID, chainRegistered); markErr != nil {
-			log.Printf("WARNING: failed to persist chain registration state for org=%s: %v", req.OrgID, markErr)
-		}
-	}
-
 	modEnv := req.ModEnvelope
 	if err := envelopes.Store(r.Context(), pool, req.OrgID, req.LeaderPubkey, 0, req.EncEnvelope, req.SearchEnvelope, &modEnv); err != nil {
 		http.Error(w, `{"error":"failed to store leader envelope"}`, http.StatusInternalServerError)

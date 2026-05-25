@@ -2,10 +2,12 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectionState, WeVibeMcpClient, getMcpClient, resetMcpClient } from '@/lib/mcp-client';
-import { getOrg, getOrgChainConfig, updateOrgConfig, updateOrgChainConfig, type RepTier } from '@/lib/hub-client';
+import { getOrg, getOrgChainConfig, updateOrgConfig, type RepTier } from '@/lib/hub-client';
 import { loadSettings, saveSettings, type DashboardSettings } from '@/lib/settings';
 import { WalletConnectButton } from '@/components/wallet-connect-button';
-import { signArbitraryMessage, getChainConfig, connectWallet } from '@/lib/wallet-connect';
+import { getChainConfig, connectWallet } from '@/lib/wallet-connect';
+import { directBroadcast, type EncodeObject } from '@/lib/chain-client';
+import { relayBroadcast } from '@/lib/relay-client';
 
 type OrgInfoResponse =
   | { error: string; identity?: string }
@@ -257,38 +259,21 @@ export default function SettingsPage() {
     setConfigError(null);
     setConfigSuccess(null);
     try {
-      const securityFields = ['required_approvals', 'report_vote_threshold'];
-      const payload: Record<string, unknown> = {
-        required_approvals: requiredApprovals,
-        report_vote_threshold: reportVoteThreshold,
-      };
-
       const walletConn = await connectWallet();
-      const chainConfig = getChainConfig();
-      const updates: Record<string, unknown> = {
-        required_approvals: requiredApprovals,
-        report_vote_threshold: reportVoteThreshold,
+
+      const msgSetOrgConfig: EncodeObject = {
+        typeUrl: '/wevibe.org.v1.MsgSetOrgConfig',
+        value: Buffer.from(JSON.stringify({
+          signer: walletConn.address,
+          org_id: orgInfo.org_id,
+          serve_attestation_required: false,
+          min_contributions_per_epoch: 0,
+          contest_stake_vibe: 0,
+        })),
       };
-      const canonicalMsg = [
-        'wevibe.update_org_config.v1',
-        `org_id:${orgInfo.org_id}`,
-        `required_approvals:${requiredApprovals}`,
-        `report_vote_threshold:${reportVoteThreshold}`,
-      ].join('\n');
 
-      const { pubkey, signature } = await signArbitraryMessage(
-        chainConfig.chainId,
-        walletConn.address,
-        canonicalMsg,
-      );
-
-      payload.wallet_pubkey = pubkey;
-      payload.wallet_signature = signature;
-
-      const result = await updateOrgConfig(orgInfo.org_id, payload as Parameters<typeof updateOrgConfig>[1]);
-      setRequiredApprovals(result.required_approvals);
-      setReportVoteThreshold(result.report_vote_threshold ?? reportVoteThreshold);
-      setConfigSuccess('Moderation settings updated');
+      const result = await directBroadcast(walletConn.address, [msgSetOrgConfig]);
+      setConfigSuccess(`Moderation settings updated. Tx: ${result.txHash.slice(0, 16)}...`);
     } catch (err) {
       setConfigError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -317,11 +302,21 @@ export default function SettingsPage() {
     setChainConfigSuccess(null);
 
     try {
-      const result = await updateOrgChainConfig(orgInfo.org_id, {
-        serve_attestation_required: serveAttestationRequired,
-        rep_tiers: repTiers,
-      });
-      setChainConfigSuccess(`Chain config updated. Tx: ${result.tx_hash}`);
+      const walletConn = await connectWallet();
+
+      const msgSetOrgConfig: EncodeObject = {
+        typeUrl: '/wevibe.org.v1.MsgSetOrgConfig',
+        value: Buffer.from(JSON.stringify({
+          signer: walletConn.address,
+          org_id: orgInfo.org_id,
+          serve_attestation_required: serveAttestationRequired,
+          min_contributions_per_epoch: 0,
+          contest_stake_vibe: 0,
+        })),
+      };
+
+      const txHash = await relayBroadcast(orgInfo.org_id, walletConn.address, [msgSetOrgConfig]);
+      setChainConfigSuccess(`Chain config updated. Tx: ${txHash.slice(0, 16)}...`);
     } catch (err) {
       setChainConfigError(err instanceof Error ? err.message : String(err));
     } finally {
