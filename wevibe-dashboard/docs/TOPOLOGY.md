@@ -336,6 +336,41 @@ New methods for keyword pipeline:
 
 Batch chain submission itself is no longer a hub client method — see "lib/hub-client.ts surface" below for what CO-011a.4 removed. The chain-submit page now builds `MsgApproveMemory` (or the relevant batch message) and dispatches it through `relayBroadcast`.
 
+## Sprint 30 — Denial Batch Panel (CO-017)
+
+### Denial-Batch Panel in Chain Submit Page
+
+`app/(dashboard)/chain-submit/page.tsx` now includes a fourth panel (rose theme) between the indigo "Review Keywords" panel and the emerald "Ready for Chain" panel:
+
+```
+Ready for Keywords (amber) → Review Keywords (indigo) → Pending Denials (rose) → Ready for Chain (emerald)
+```
+
+**Data flow:**
+1. Dashboard fetches pending denial count from `GET /v1/orgs/{orgID}/denials/pending-count`
+2. Panel displays count with "Batch Submit Denials" button
+3. Leader clicks → wallet popup triggers (Keplr/Leap — Category A per D-2026-05-25-A)
+4. `directBroadcast(walletAddress, [msg])` signs and broadcasts `MsgSubmitDenialBatch`
+5. `broadcast_tx_commit` returns `code === 0` on success (on-chain confirmation)
+
+**Hub endpoints consumed:**
+- `GET /v1/orgs/{orgID}/denials/pending-count` → `{ pending_count: N }`
+- `GET /v1/orgs/{orgID}/denials/pending` → `{ denials: [...], total_count: N }`
+- `GET /v1/orgs/{orgID}` → `{ current_epoch: N }` (for epoch field)
+
+**Chain message:** `MsgSubmitDenialBatch` (typeUrl: `/wevibe.serve.v1.MsgSubmitDenialBatch`)
+- Fields: `signer`, `org_id`, `epoch`, `entries[]` (each: `memory_hash`, `nullifier`, `deny_key`, `reason`)
+- Category A — wallet-direct via Keplr/Leap, NOT relayed through hub
+
+**lib/chain-client.ts additions (CO-017):**
+- `WEVIBE_MSG_TYPE_URLS` now includes `/wevibe.serve.v1.MsgSubmitDenialBatch`
+- `buildDenialBatchMsg(signer, orgId, epoch, entries)` — builds `EncodeObject` with manual protobuf encoding
+- `DenialEntry` interface: `{ memory_hash, nullifier, deny_key, reason }`
+
+**Protocol-js:** `@wevibe-network/protocol-js` does not export `MsgSubmitDenialBatch` — manual `EncodeObject` construction used.
+
+**Confirmation:** `broadcast_tx_commit` synchronous semantics — `code === 0` means block included. No WebSocket listener needed.
+
 ### Pipeline Health Page
 
 New page at `app/(dashboard)/health/page.tsx` — a server component (no 'use client') that fetches health status from all pipeline services at render time using `fetch()` with `{ cache: 'no-store' }`.
@@ -495,8 +530,9 @@ The dashboard uses a two-tier identity model:
 - `getChainRpcEndpoint()` — reads `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, normalizes `tcp://` to `http://` for CosmJS compatibility.
 - `buildMsgGrant(granter, grantee, msgTypeUrl, expirationDays)` — builds `MsgGrant` with `GenericAuthorization` for a specific message TypeURL.
 - `buildMsgRevoke(granter, grantee, msgTypeUrl)` — builds `MsgRevoke`.
-- `directBroadcast(walletAddress, msgs)` — Category A direct-Keplr broadcast path (CO-011a.4). Calls `window.keplr.getOfflineSigner(chainId)`, then `SigningStargateClient.connectWithSigner(rpc, signer)`, then `signAndBroadcast(walletAddress, msgs, fee, memo)`. Returns the tx hash. Used for `MsgGrant`, `MsgRevoke`, and Category A `MsgSetOrgConfig` (`required_approvals` / `report_vote_threshold` only).
-- `WEVIBE_MSG_TYPE_URLS` — array of WeVibe message TypeURLs authorized for delegation. CO-011a.4 removed `/wevibe.memory.v1.MsgRejectMemory` from this list (no corresponding `MsgRejectMemory` exists in the chain protos).
+- `directBroadcast(walletAddress, msgs)` — Category A direct-Keplr broadcast path (CO-011a.4). Calls `window.keplr.getOfflineSigner(chainId)`, then `SigningStargateClient.connectWithSigner(rpc, signer)`, then `signAndBroadcast(walletAddress, msgs, fee, memo)`. Returns the tx hash. Used for `MsgGrant`, `MsgRevoke`, Category A `MsgSetOrgConfig` (`required_approvals` / `report_vote_threshold` only), and `MsgSubmitDenialBatch` (CO-017, denial batch submission).
+- `buildDenialBatchMsg(signer, orgId, epoch, entries)` — CO-017 addition. Builds `EncodeObject` for `MsgSubmitDenialBatch` with manual protobuf binary encoding (Protocol-js does not export this type). Used exclusively with `directBroadcast` for Category A denial batch submission.
+- `WEVIBE_MSG_TYPE_URLS` — array of WeVibe message TypeURLs authorized for delegation. CO-011a.4 removed `/wevibe.memory.v1.MsgRejectMemory` from this list (no corresponding `MsgRejectMemory` exists in the chain protos). CO-017 adds `/wevibe.serve.v1.MsgSubmitDenialBatch`.
 
 **`lib/delegation.ts`** — delegation orchestrator.
 - `setupDelegation(walletAddress)` — generates delegate key → signs MsgGrant transactions from wallet (one Keplr popup) for each entry in `WEVIBE_MSG_TYPE_URLS` → stores delegate key locally. Returns `{ delegateAddress, txHash, grantCount }`.

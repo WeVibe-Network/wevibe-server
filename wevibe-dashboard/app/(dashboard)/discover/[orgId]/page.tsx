@@ -7,7 +7,6 @@ import { getOrg, submitJoinRequest, OrgSummary } from '@/lib/hub-client';
 interface EnrichedOrgSummary extends OrgSummary {
   member_count?: number;
   last_activity_at?: string | null;
-  leader_last_chain_commit_at?: string | null;
 }
 
 interface PageProps {
@@ -133,13 +132,6 @@ export default function OrgDetailPage({ params }: PageProps) {
             <h3 className="text-sm font-medium text-gray-500 mb-1">Last Activity</h3>
             <p className="text-gray-900">{org.last_activity_at ? formatRelativeTime(org.last_activity_at) : 'N/A'}</p>
           </div>
-
-          {org.leader_last_chain_commit_at ? (
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-1">Leader Last Active</h3>
-              <p className="text-gray-900">{formatRelativeTime(org.leader_last_chain_commit_at)}</p>
-            </div>
-          ) : null}
 
           <div>
             <h3 className="text-sm font-medium text-gray-500 mb-1">Created</h3>

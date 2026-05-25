@@ -15,6 +15,7 @@ import {
   type SanitizationFinding,
 } from '@/lib/hub-client';
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
+import { buildDenialBatchMsg } from '@/lib/chain-client';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
@@ -35,6 +36,9 @@ export default function ChainSubmitPage() {
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
   const [verifyResults, setVerifyResults] = useState<VerificationResult[] | null>(null);
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
+  const [pendingDenialCount, setPendingDenialCount] = useState<number>(0);
+  const [denialSubmitting, setDenialSubmitting] = useState(false);
+  const [denialResult, setDenialResult] = useState<{ txHash?: string; error?: string } | null>(null);
 
   const clientRef = { current: getMcpClient() };
 
@@ -43,6 +47,8 @@ export default function ChainSubmitPage() {
     setLoading(true);
     setError(null);
     try {
+      const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';
+      const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
       const [health, pk, rk, pc] = await Promise.all([
         getOrgHealth(ORG_ID),
         getSubmissionsByStatus(ORG_ID, 'pending_keyword'),
@@ -54,6 +60,11 @@ export default function ChainSubmitPage() {
       setPendingKeyword(pk.filter(s => !s.extraction_result || s.extraction_result.length === 0));
       setReviewKeywords(reviewable);
       setPendingChain(pc);
+      const denialCountRes = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}/denials/pending-count`, { headers: authHeaders });
+      if (denialCountRes.ok) {
+        const data = await denialCountRes.json();
+        setPendingDenialCount(data.pending_count ?? 0);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -208,6 +219,55 @@ export default function ChainSubmitPage() {
       setBusy(null);
     }
   }, [pendingChain, loadAll]);
+
+  const handleDenialBatchSubmit = useCallback(async () => {
+    const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';
+    const { connectWallet } = await import('@/lib/wallet-connect');
+    const walletConnection = await connectWallet().catch(() => null);
+    const walletAddress = walletConnection?.address ?? null;
+    if (!walletAddress) {
+      setDenialResult({ error: 'No wallet connected' });
+      return;
+    }
+    setDenialSubmitting(true);
+    setDenialResult(null);
+    try {
+      const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
+      const listRes = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}/denials/pending`, { headers: authHeaders });
+      if (!listRes.ok) throw new Error(`Failed to fetch pending denials: ${listRes.status}`);
+      const listData = await listRes.json();
+      if (!listData.denials || listData.denials.length === 0) {
+        setDenialResult({ error: 'No pending denials to submit' });
+        return;
+      }
+      const epochResp = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}`, { headers: authHeaders });
+      const epochData = await epochResp.json() as { current_epoch?: number };
+      const epoch = epochData.current_epoch ?? 0;
+      const { directBroadcast } = await import('@/lib/chain-client');
+      const msg = buildDenialBatchMsg(
+        walletAddress,
+        ORG_ID,
+        epoch,
+        listData.denials.map((d: { nullifier: string; memory_hash?: string; memory_content_hash?: string; deny_key?: string; reason?: string }) => ({
+          nullifier: d.nullifier,
+          memory_hash: d.memory_hash ?? d.memory_content_hash ?? '',
+          deny_key: d.deny_key ?? '',
+          reason: d.reason ?? '',
+        }))
+      );
+      const result = await directBroadcast(walletAddress, [msg]);
+      if (result.code === 0) {
+        setDenialResult({ txHash: result.txHash });
+        setPendingDenialCount(0);
+      } else {
+        setDenialResult({ error: `Chain rejected: ${result.rawLog}` });
+      }
+    } catch (err) {
+      setDenialResult({ error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setDenialSubmitting(false);
+    }
+  }, []);
 
   if (clientState !== 'connected') {
     return (
@@ -483,6 +543,40 @@ export default function ChainSubmitPage() {
               </div>
             ))}
           </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900">Pending Denials</h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              {pendingDenialCount} denial{pendingDenialCount !== 1 ? 's' : ''} queued for chain submission
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleDenialBatchSubmit()}
+            disabled={denialSubmitting || !pendingDenialCount}
+            className="inline-flex items-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:bg-rose-300"
+          >
+            {denialSubmitting ? 'Submitting…' : 'Batch Submit Denials'}
+          </button>
+        </div>
+
+        {pendingDenialCount === 0 && (
+          <p className="mt-4 text-sm text-zinc-500">No pending consumer denials.</p>
+        )}
+
+        {denialResult?.txHash && (
+          <p className="mt-3 text-sm text-green-600">
+            ✓ Submitted — tx: {denialResult.txHash.slice(0, 16)}…
+          </p>
+        )}
+        {denialResult?.error && (
+          <p className="mt-3 text-sm text-red-600">
+            ✗ {denialResult.error}
+          </p>
         )}
       </section>
 

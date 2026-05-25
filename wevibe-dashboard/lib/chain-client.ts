@@ -24,6 +24,7 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.reputation.v1.MsgIncrementContribution',
   '/wevibe.reputation.v1.MsgIncrementServe',
   '/wevibe.reputation.v1.MsgRecordBan',
+  '/wevibe.serve.v1.MsgSubmitDenialBatch',
 ];
 
 export function getChainRpcEndpoint(): string {
@@ -89,6 +90,63 @@ export function buildMsgRevoke(
   return {
     typeUrl: '/cosmos.authz.v1beta1.MsgRevoke',
     value: Buffer.from(MsgRevoke.encode(msgRevoke).finish()),
+  };
+}
+
+export interface DenialEntry {
+  memory_hash: string;
+  nullifier: string;
+  deny_key: string;
+  reason: string;
+}
+
+function encodeVarint(value: number): number[] {
+  const result: number[] = [];
+  let v = value;
+  while (v > 0x7f) {
+    result.push((v & 0x7f) | 0x80);
+    v = Math.floor(v / 128);
+  }
+  result.push(v & 0x7f);
+  return result;
+}
+
+function encodeStringField(tag: number, value: string): number[] {
+  const bytes = [...Buffer.from(value)];
+  return [tag, ...encodeVarint(bytes.length), ...bytes];
+}
+
+function encodeBytesField(tag: number, value: string): number[] {
+  const bytes = [...Buffer.from(value, 'hex')];
+  return [tag, ...encodeVarint(bytes.length), ...bytes];
+}
+
+export function buildDenialBatchMsg(
+  signer: string,
+  orgId: string,
+  epoch: number,
+  entries: DenialEntry[]
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeVarint(0x18), ...encodeVarint(epoch),
+  ];
+
+  for (const entry of entries) {
+    fields.push(0x22);
+    const entryFields: number[] = [
+      ...encodeBytesField(0x0a, entry.memory_hash),
+      ...encodeBytesField(0x12, entry.nullifier),
+      ...encodeStringField(0x1a, entry.deny_key),
+      ...encodeStringField(0x22, entry.reason),
+    ];
+    fields.push(...encodeVarint(entryFields.length), ...entryFields);
+  }
+
+  return {
+    typeUrl: '/wevibe.serve.v1.MsgSubmitDenialBatch',
+    value: Uint8Array.from(fields),
   };
 }
 
