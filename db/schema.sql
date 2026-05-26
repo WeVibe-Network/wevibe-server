@@ -98,7 +98,7 @@ CREATE TABLE pending_submissions (
     stack_hint              TEXT[]      NOT NULL DEFAULT '{}',
     memory_type             TEXT        NOT NULL CHECK (memory_type IN ('correct_implementation', 'negative_signal')),
     status                  TEXT        NOT NULL DEFAULT 'pending'
-                                    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed')),
+                                    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied')),
     denial_reason           TEXT,
     moderator_pubkey        TEXT,
     approved_at             TIMESTAMPTZ,

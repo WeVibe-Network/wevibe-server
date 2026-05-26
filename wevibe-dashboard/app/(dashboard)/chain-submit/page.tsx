@@ -202,23 +202,16 @@ export default function ChainSubmitPage() {
     }
   }, [loadAll]);
 
-  const handleSubmitBatch = useCallback(async () => {
+  const handleSubmitBatch = useCallback(() => {
     if (!ORG_ID) return;
     if (pendingChain.length === 0) return;
 
     setBusy('chain');
     setError(null);
     setTxResult(null);
-
-    try {
-      setNotice('Batch chain submission has been deprecated. Individual memory submissions via relay are pending implementation.');
-      setBusy(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [pendingChain, loadAll]);
+    setNotice('Batch chain submission has been deprecated. Individual memory submissions via relay are pending implementation.');
+    setBusy(null);
+  }, [pendingChain]);
 
   const handleDenialBatchSubmit = useCallback(async () => {
     const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';
@@ -248,9 +241,9 @@ export default function ChainSubmitPage() {
         walletAddress,
         ORG_ID,
         epoch,
-        listData.denials.map((d: { nullifier: string; memory_hash?: string; memory_content_hash?: string; deny_key?: string; reason?: string }) => ({
+        listData.denials.map((d: { nullifier: string; memory_hash: string; deny_key?: string; reason?: string }) => ({
           nullifier: d.nullifier,
-          memory_hash: d.memory_hash ?? d.memory_content_hash ?? '',
+          memory_hash: d.memory_hash,
           deny_key: d.deny_key ?? '',
           reason: d.reason ?? '',
         }))

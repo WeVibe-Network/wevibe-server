@@ -1,11 +1,12 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import type { OrgRole } from './org-role';
 
 export interface MemberOrgEntry {
   org_id: string;
   org_name: string;
-  role: 'leader' | 'moderator' | 'member';
+  role: OrgRole;
   current_epoch: number;
   history_access_from_epoch: number;
   egress_mode: string;

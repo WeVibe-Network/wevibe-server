@@ -2,13 +2,12 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useOrgContext } from '@/lib/org-context';
-
-type Role = 'leader' | 'moderator' | 'member';
+import type { OrgRole } from '@/lib/org-role';
 
 interface NavItem {
   href: string;
   label: string;
-  roles?: Role[];
+  roles?: OrgRole[];
 }
 
 const nav: NavItem[] = [
@@ -37,7 +36,7 @@ const showCreateOrg = typeof window === 'undefined' ? false : !process.env.NEXT_
 export default function Sidebar() {
   const path = usePathname();
   const { activeOrg } = useOrgContext();
-  const userRole: Role = activeOrg?.role || 'member';
+  const userRole: OrgRole = activeOrg?.role || 'member';
 
   const visibleNav = nav.filter(item => {
     if (!item.roles) return true;

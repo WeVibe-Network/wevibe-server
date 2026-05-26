@@ -3,19 +3,9 @@ import Database from 'better-sqlite3';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import type { SessionSummary } from '@/lib/session-types';
 
 export const dynamic = 'force-dynamic';
-
-interface SessionRow {
-  id: string;
-  title: string;
-  model: string;
-  agent: string;
-  directory: string;
-  time_created: string;
-  time_updated: string;
-  message_count: number;
-}
 
 function getDbPath(): string {
   return (
@@ -54,7 +44,7 @@ export async function GET() {
         GROUP BY s.id
         ORDER BY s.time_updated DESC`,
       )
-      .all() as SessionRow[];
+      .all() as SessionSummary[];
 
     return NextResponse.json({ sessions });
   } catch (err) {

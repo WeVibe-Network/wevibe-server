@@ -4,8 +4,45 @@
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  return Object.values(value).every(isJsonValue);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null
+    || typeof value === 'string'
+    || typeof value === 'number'
+    || typeof value === 'boolean'
+  ) {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+
+  return isJsonObject(value);
+}
+
+function parseJsonObject(raw: string): { [key: string]: JsonValue } | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isJsonObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 type PendingRequest = {
-  resolve: (value: unknown) => void;
+  resolve: (value: JsonValue | undefined) => void;
   reject: (reason: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -174,22 +211,36 @@ export class WeVibeMcpClient {
   }
 
   private handleIncomingMessage(raw: string): void {
-    try {
-      const msg = JSON.parse(raw);
-      if (msg.id != null && this.pending.has(msg.id)) {
-        const pending = this.pending.get(msg.id)!;
-        clearTimeout(pending.timer);
-        this.pending.delete(msg.id);
-
-        if (msg.error) {
-          pending.reject(new Error(msg.error.message ?? 'RPC error'));
-        } else {
-          pending.resolve(msg.result);
-        }
-      }
-    } catch {
-      // Ignore malformed JSON messages
+    const msg = parseJsonObject(raw);
+    if (!msg) {
+      return;
     }
+
+    const id = msg.id;
+    if (typeof id !== 'number' || !this.pending.has(id)) {
+      return;
+    }
+
+    const pending = this.pending.get(id);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timer);
+    this.pending.delete(id);
+
+    if (isJsonObject(msg.error)) {
+      const message = typeof msg.error.message === 'string' ? msg.error.message : 'RPC error';
+      pending.reject(new Error(message));
+      return;
+    }
+
+    if (msg.result === undefined || isJsonValue(msg.result)) {
+      pending.resolve(msg.result);
+      return;
+    }
+
+    pending.reject(new Error('RPC result is not valid JSON'));
   }
 
   private async initialize(): Promise<void> {
@@ -202,7 +253,11 @@ export class WeVibeMcpClient {
     await this.sendNotification('notifications/initialized');
   }
 
-  private async sendRequest(method: string, params?: unknown, timeoutMs = 300000): Promise<unknown> {
+  private async sendRequest(
+    method: string,
+    params?: JsonValue,
+    timeoutMs = 300000,
+  ): Promise<JsonValue | undefined> {
     if (!this.messageUrl) {
       throw new Error('Not connected to MCP server');
     }
@@ -210,7 +265,7 @@ export class WeVibeMcpClient {
     const id = this.nextId++;
     const body = JSON.stringify({ jsonrpc: '2.0', id, method, params });
 
-    return new Promise<unknown>((resolve, reject) => {
+    return new Promise<JsonValue | undefined>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Request ${method} timed out after ${timeoutMs}ms`));
@@ -230,7 +285,7 @@ export class WeVibeMcpClient {
     });
   }
 
-  private async sendNotification(method: string, params?: unknown): Promise<void> {
+  private async sendNotification(method: string, params?: JsonValue): Promise<void> {
     if (!this.messageUrl) {
       return;
     }
@@ -244,21 +299,42 @@ export class WeVibeMcpClient {
     });
   }
 
-  async callTool<T = unknown>(name: string, args: Record<string, unknown> = {}): Promise<T> {
-    const result = await this.sendRequest('tools/call', { name, arguments: args }) as {
-      content?: Array<{ type: string; text?: string }>;
-    };
+  async callTool<T = JsonValue | string>(
+    name: string,
+    args: Record<string, JsonValue> = {},
+  ): Promise<T> {
+    const result = await this.sendRequest('tools/call', { name, arguments: args });
+    if (!isJsonObject(result)) {
+      throw new Error(`Tool ${name} returned invalid response shape`);
+    }
 
-    const textBlock = result?.content?.find(block => block.type === 'text');
+    const content = result.content;
+    if (!Array.isArray(content)) {
+      throw new Error(`Tool ${name} returned no content array`);
+    }
+
+    const textBlock = content.find(
+      (block): block is { type: string; text: string } => (
+        isJsonObject(block)
+        && typeof block.type === 'string'
+        && typeof block.text === 'string'
+      ),
+    );
+
     if (!textBlock?.text) {
       throw new Error(`Tool ${name} returned no text content`);
     }
 
     try {
-      return JSON.parse(textBlock.text) as T;
+      const parsed = JSON.parse(textBlock.text) as unknown;
+      if (isJsonValue(parsed)) {
+        return parsed as T;
+      }
     } catch {
-      return textBlock.text as unknown as T;
+      // Non-JSON tool response falls back to raw text
     }
+
+    return textBlock.text as T;
   }
 
   async healthCheck(baseUrl: string = 'http://localhost:4450'): Promise<{ status: string; server: string; hub: string; sessions: number; }> {

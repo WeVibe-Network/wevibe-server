@@ -1,5 +1,6 @@
 import { buildAuthHeaders, getIdentity } from './wevibe-auth';
 import { linkWalletCanonical, signCanonical, registerDelegateKeyCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
+import type { OrgRole } from './org-role';
 
 let _hubUrl: string | null = null;
 function getHubUrl(): string {
@@ -33,7 +34,7 @@ export interface MemberRecord {
   org_id: string;
   pubkey: string;
   display_name?: string;
-  role: string;
+  role: OrgRole;
   join_epoch: number;
   active: boolean;
   joined_at: string;
@@ -562,7 +563,7 @@ export interface ProfileLeaderStats {
 export interface ProfileMembership {
   org_id: string;
   org_name: string;
-  role: 'leader' | 'moderator' | 'member';
+  role: OrgRole;
   joined_at: string;
 }
 

@@ -7,10 +7,26 @@ type ServiceStatus = {
   error?: string;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isHubHealthPayload(value: unknown): value is { status: string; db?: string } {
+  if (!isRecord(value) || typeof value.status !== 'string') {
+    return false;
+  }
+
+  return value.db === undefined || typeof value.db === 'string';
+}
+
+function isMcpHealthPayload(value: unknown): value is { status: string } {
+  return isRecord(value) && typeof value.status === 'string';
+}
+
 async function checkService(
   name: string,
   url: string,
-  validate?: (data: any) => boolean
+  validate?: (data: unknown) => boolean,
 ): Promise<ServiceStatus> {
   const start = Date.now();
   try {
@@ -32,11 +48,15 @@ export default async function HealthPage() {
   const timestamp = new Date().toISOString();
 
   const [pg, qdrant, chain, hub, mcp, ollama] = await Promise.all([
-    checkService('PostgreSQL (via Hub)', 'http://localhost:4440/health', (d) => d.status === 'ok' && d.db === 'connected'),
+    checkService(
+      'PostgreSQL (via Hub)',
+      'http://localhost:4440/health',
+      (data) => isHubHealthPayload(data) && data.status === 'ok' && data.db === 'connected',
+    ),
     checkService('Qdrant', 'http://localhost:6333/healthz'),
     checkService('wevibe-chain', 'http://localhost:26657/status'),
-    checkService('wevibe-hub', 'http://localhost:4440/health', (d) => d.status === 'ok'),
-    checkService('wevibe-mcp HTTP', 'http://127.0.0.1:4450/v1/health', (d) => d.status === 'ok'),
+    checkService('wevibe-hub', 'http://localhost:4440/health', (data) => isHubHealthPayload(data) && data.status === 'ok'),
+    checkService('wevibe-mcp HTTP', 'http://127.0.0.1:4450/v1/health', (data) => isMcpHealthPayload(data) && data.status === 'ok'),
     checkService('Ollama', 'http://localhost:11434/api/tags'),
   ]);
 

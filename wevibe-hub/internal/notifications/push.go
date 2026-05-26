@@ -13,6 +13,6 @@ func (p *PushChannel) Name() string {
 }
 
 func (p *PushChannel) Dispatch(ctx context.Context, prefs UserPreferences, event DispatchEvent) error {
-	// TODO: implement mobile push dispatch via FCM/APNs when device token storage is available.
+	// Push dispatch is a no-op until device token persistence exists.
 	return nil
 }

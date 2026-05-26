@@ -5,6 +5,7 @@ import { getOrCreateIdentity, getIdentity } from '@/lib/wevibe-auth'
 import { relayBroadcast } from '@/lib/relay-client'
 import { connectWallet } from '@/lib/wallet-connect'
 import type { EncodeObject } from '@/lib/chain-client'
+import type { OrgRole } from '@/lib/org-role'
 import Button from '@/components/ui/button'
 import Card from '@/components/ui/card'
 
@@ -16,22 +17,10 @@ const ROLE_COLORS: Record<string, string> = {
   member:    'bg-gray-100 text-gray-600',
 }
 
-interface Member {
-  pubkey: string
-  display_name?: string
-  role: string
-  join_epoch: number
-  active: boolean
-  joined_at: string
-  x25519_pubkey?: string
-  wallet_address?: string
-  dismissed_reports_count?: number
-}
-
-type ViewerRole = 'leader' | 'moderator' | 'member'
+type ViewerRole = OrgRole
 
 export default function MembersPage() {
-  const [members, setMembers] = useState<Member[]>([])
+  const [members, setMembers] = useState<MemberRecord[]>([])
   const [viewerPubkey, setViewerPubkey] = useState<string>('')
   const [viewerRole, setViewerRole] = useState<ViewerRole>('member')
   const [loading, setLoading] = useState(true)
@@ -81,7 +70,7 @@ export default function MembersPage() {
     if (members.length > 0 && viewerPubkey) {
       const viewer = members.find(m => m.pubkey === viewerPubkey)
       if (viewer) {
-        setViewerRole(viewer.role as ViewerRole)
+        setViewerRole(viewer.role)
       }
     }
   }, [members, viewerPubkey])
