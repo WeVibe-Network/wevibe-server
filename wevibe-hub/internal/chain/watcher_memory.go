@@ -114,8 +114,8 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 	_, err = w.db.Exec(ctx, `
 		UPDATE pending_submissions
 		SET status = $3, updated_at = NOW()
-		WHERE org_id = $1 AND submission_hash = $2 AND status = $3
-	`, orgID, contentHashHex, protocol.SubmissionStatusCommitted)
+		WHERE org_id = $1 AND submission_hash = $2 AND status = $4
+	`, orgID, contentHashHex, protocol.SubmissionStatusCommitted, protocol.SubmissionStatusPendingChain)
 	if err != nil {
 		return fmt.Errorf("update pending_submissions: %w", err)
 	}

@@ -703,7 +703,8 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := pool.Query(r.Context(), `
-		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.stack_hint, ps.memory_type, m.wallet_address
+		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.stack_hint, ps.memory_type,
+		       COALESCE(m.wallet_address, '') AS contributor_wallet
 		FROM pending_submissions ps
 		JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
 		WHERE ps.org_id = $1 AND ps.status = $2

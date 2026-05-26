@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
 	"github.com/go-chi/chi/v5"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
 )
 
 type TestHealthResponse struct {
@@ -75,7 +77,14 @@ func TestEmbed(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"text required"}`, http.StatusBadRequest)
 		return
 	}
-	vec, err := embed.GetEmbedding(r.Context(), "http://localhost:11434", req.Text)
+	// CO-021: was hardcoded to "http://localhost:11434", which inside the
+	// hub container resolves to the container itself and fails. Use the
+	// same OLLAMA_URL env var the chain watcher's embedding path uses.
+	ollamaURL := strings.TrimSpace(os.Getenv("OLLAMA_URL"))
+	if ollamaURL == "" {
+		ollamaURL = "http://localhost:11434"
+	}
+	vec, err := embed.GetEmbedding(r.Context(), ollamaURL, req.Text)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return

@@ -93,6 +93,34 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const (
+		// Chain defaults from org module params: 1 GiB storage and 10_000 retrieval budget.
+		defaultChainStorageQuota    uint64 = 1073741824
+		defaultChainRetrievalBudget uint64 = 10000
+	)
+
+	if chainClient == nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Org creation is synchronous across Postgres and chain registration.
+	// If chain registration fails, this request must fail (no fallback path).
+	txHash, err := chainClient.RegisterOrgOnChain(
+		r.Context(),
+		req.OrgID,
+		req.LeaderPubkey,
+		req.Domain,
+		defaultChainStorageQuota,
+		defaultChainRetrievalBudget,
+	)
+	if err != nil {
+		log.Printf("ERROR: failed to register org on chain: org=%s err=%v", req.OrgID, err)
+		http.Error(w, `{"error":"failed to register org on chain"}`, http.StatusInternalServerError)
+		return
+	}
+	log.Printf("registered org on chain: org=%s tx_hash=%s", req.OrgID, txHash)
+
 	modEnv := req.ModEnvelope
 	if err := envelopes.Store(r.Context(), pool, req.OrgID, req.LeaderPubkey, 0, req.EncEnvelope, req.SearchEnvelope, &modEnv); err != nil {
 		http.Error(w, `{"error":"failed to store leader envelope"}`, http.StatusInternalServerError)

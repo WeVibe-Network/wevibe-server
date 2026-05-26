@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/cosmos/cosmos-sdk/codec"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	"github.com/cometbft/cometbft/crypto/tmhash"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
@@ -41,11 +45,49 @@ type TxInterface interface {
 	GetMsgs() []interface{}
 }
 
-func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, embedURL string) *ChainWatcher {
+type sdkTxAdapter struct {
+	tx sdk.Tx
+}
+
+func (a sdkTxAdapter) GetMsgs() []interface{} {
+	msgs := a.tx.GetMsgs()
+	out := make([]interface{}, len(msgs))
+	for i := range msgs {
+		out[i] = msgs[i]
+	}
+	return out
+}
+
+// BuildTxDecoder reuses the GrpcClient proto codec/registry so tx decoding
+// stays aligned with the single chain module registration path.
+func BuildTxDecoder(cdc codec.Codec) TxDecoderFunc {
+	if cdc == nil {
+		return func(txBytes []byte) (TxInterface, error) {
+			return nil, fmt.Errorf("tx decoder codec is nil")
+		}
+	}
+
+	txConfig := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
+	decoder := txConfig.TxDecoder()
+
+	return func(txBytes []byte) (TxInterface, error) {
+		tx, err := decoder(txBytes)
+		if err != nil {
+			return nil, err
+		}
+		if tx == nil {
+			return nil, fmt.Errorf("decoded tx is nil")
+		}
+		return sdkTxAdapter{tx: tx}, nil
+	}
+}
+
+func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, txDecoder TxDecoderFunc, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, embedURL string) *ChainWatcher {
 	return &ChainWatcher{
 		chainClient:  chainClient,
 		db:          db,
 		logger:      logger,
+		txDecoder:   txDecoder,
 		notifHub:    notifHub,
 		qdrantClient: qdrantClient,
 		embedURL:    embedURL,
@@ -65,6 +107,14 @@ func (w *ChainWatcher) Start(ctx context.Context) error {
 		lastHeight = 0
 	}
 	w.logger.Info("chain watcher resuming", "last_height", lastHeight)
+
+	// CO-021: ensure the CometBFT subscriber is initialized BEFORE catchUp.
+	// catchUp dereferences w.subscriber; the previous code only created it
+	// inside subscribe() further down, which made any hot-restart (last_seen
+	// > 0) nilptr-panic the hub into a crash-loop.
+	if err := w.ensureSubscriber(ctx); err != nil {
+		return fmt.Errorf("init subscriber: %w", err)
+	}
 
 	if lastHeight > 0 {
 		if err := w.catchUp(ctx, lastHeight); err != nil {
@@ -101,17 +151,32 @@ func (w *ChainWatcher) Start(ctx context.Context) error {
 	}
 }
 
+func (w *ChainWatcher) ensureSubscriber(ctx context.Context) error {
+	if w.subscriber != nil {
+		return nil
+	}
+	// CO-021: was previously hardcoded to "tcp://localhost:26657", which
+	// fails inside Docker where the hub container cannot reach the chain
+	// over localhost. The grpc client already reads the chain endpoint
+	// from WEVIBE_CHAIN_RPC_URL; the subscriber must use the same source.
+	nodeURL := strings.TrimSpace(os.Getenv("WEVIBE_CHAIN_RPC_URL"))
+	if nodeURL == "" {
+		nodeURL = "tcp://localhost:26657"
+	}
+	sub, err := NewCometBFTSubscriber(nodeURL, w.logger)
+	if err != nil {
+		return fmt.Errorf("create cometbft subscriber: %w", err)
+	}
+	if err := sub.Start(ctx); err != nil {
+		return fmt.Errorf("start cometbft subscriber: %w", err)
+	}
+	w.subscriber = sub
+	return nil
+}
+
 func (w *ChainWatcher) subscribe(ctx context.Context) (<-chan coretypes.ResultEvent, error) {
-	if w.subscriber == nil {
-		nodeURL := "tcp://localhost:26657"
-		sub, err := NewCometBFTSubscriber(nodeURL, w.logger)
-		if err != nil {
-			return nil, fmt.Errorf("create cometbft subscriber: %w", err)
-		}
-		if err := sub.Start(ctx); err != nil {
-			return nil, fmt.Errorf("start cometbft subscriber: %w", err)
-		}
-		w.subscriber = sub
+	if err := w.ensureSubscriber(ctx); err != nil {
+		return nil, err
 	}
 	return w.subscriber.Subscribe(ctx)
 }
@@ -204,6 +269,12 @@ func (w *ChainWatcher) processBlock(ctx context.Context, block *cmttypes.Block) 
 }
 
 func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int64, timestamp time.Time, txBytes []byte) error {
+	// tx decoding is required for all watcher bookkeeping paths; if decoder
+	// wiring is missing, fail fast instead of silently skipping the tx.
+	if w.txDecoder == nil {
+		return fmt.Errorf("tx decoder is not initialized")
+	}
+
 	decoded, err := w.txDecoder(txBytes)
 	if err != nil {
 		return fmt.Errorf("decode tx: %w", err)

@@ -126,7 +126,8 @@ func main() {
 	notificationDispatcher.Register(notifications.NewWebhookChannel())
 	handlers.SetNotificationDispatcher(notificationDispatcher)
 
-	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), notifHub, qdrantClient, cfg.OllamaURL)
+	txDecoder := chain.BuildTxDecoder(chainClient.GetCodec())
+	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, cfg.OllamaURL)
 	watcher.SetDispatcher(notificationDispatcher)
 	go func() {
 		if err := watcher.Start(ctx); err != nil {

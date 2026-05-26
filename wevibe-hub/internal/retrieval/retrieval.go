@@ -432,6 +432,12 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	var topScore, secondScore float64
 	for i := uint64(0); i < limit; i++ {
 		sr := scoredResults[i]
+		// CO-021: surface the post-decay final score so consumers (including
+		// the denial-loop smoke test) can observe the optimistic ledger.
+		// ScoringBreakdown is the pre-existing carrier for this value; only
+		// CombinedScore is populated here — the other fields are reserved for
+		// the full per-query scoring breakdown surface (not yet wired).
+		sr.result.Breakdown = &protocol.ScoringBreakdown{CombinedScore: sr.weightedScore}
 		memoryResults = append(memoryResults, sr.result)
 		if i == 0 {
 			topScore = sr.weightedScore

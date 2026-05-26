@@ -1,4 +1,4 @@
-# WeVibe Hub Topology (Updated: CO-011a.4)
+# WeVibe Hub Topology (Updated: CO-023)
 
 ## Relay Endpoint (CO-011a.4)
 
@@ -128,7 +128,7 @@ func GetMemberOrgID(ctx context.Context) string
 - `GET /health` — health check
 - `GET /v1/members/{pubkey}/orgs` — list orgs for a member
 - `GET /v1/profile/{wallet}` — public profile (CO-247): wallet/org memberships/chain stats
-- `POST /v1/orgs` — create org (envelope storage only; chain registration is dashboard-relayed)
+- `POST /v1/orgs` — create org (persists org + envelopes, then synchronously calls `RegisterOrgOnChain`)
 - `GET /v1/orgs/{orgID}` — org info for discovery (D-12.7)
 - `GET /v1/orgs/discover` — list/search public orgs (D-12.7, GAP-M4 CLOSED in Sprint 25)
 - `POST /v1/orgs/{orgID}/join` — submit join request (D-12.8, GAP-M5 CLOSED in Sprint 25)
@@ -179,16 +179,16 @@ Behavior:
 
 This is consumed by dashboard quorum voting UI for orgs with `required_approvals > 1`.
 
-### Hub Org Creation (CO-011a.4 Update)
+### Hub Org Creation (CO-023 update)
 
-`CreateOrg` (`POST /v1/orgs`) accepts envelope storage and creates the `orgs` row. It NO LONGER calls `chainClient.RegisterOrgOnChain`.
+`CreateOrg` (`POST /v1/orgs`) now performs a synchronous two-step backend flow inside the handler:
 
-The dashboard performs TWO sequential calls when creating an org:
+1. Persist org + envelopes in Postgres.
+2. Immediately call `chainClient.RegisterOrgOnChain(...)` with chain defaults (`storageQuota=1073741824`, `retrievalBudget=10000`).
 
-1. `POST /v1/orgs` — envelope storage + `orgs` row creation (hub-only).
-2. `POST /v1/relay/broadcast` — relay-broadcast wrapping `MsgRegisterOrg`.
+If chain registration fails, `CreateOrg` returns 500 (no fallback path). This keeps org creation single-path and prevents the hub from accepting orgs that are absent on chain.
 
-The `orgs.chain_registered` boolean is **NOT** set by the hub at create time. The ChainWatcher's `processRegisterOrgBookkeeping` handler observes the confirmed `MsgRegisterOrg` on chain and flips `chain_registered = true`. This is the canonical bookkeeping path.
+`orgs.chain_registered` remains watcher-owned: `processRegisterOrgBookkeeping` flips it to true after confirmed `MsgRegisterOrg` observation.
 
 ## Sprint 28 Gap Blitz — CO-266 Hub Features (GAP-O6, O7, N2, N8, N9)
 
@@ -444,8 +444,9 @@ The hub implements a multi-stage memory lifecycle that decouples approval from k
 2. **Moderator approves** (`pending_keyword`) — moderator stamps quality, records `moderator_pubkey` and `approved_at`
 3. **Leader triggers batch keyword extraction** (`pending_chain`) — LLM classifies per-memory against org vocabulary, hub verifies
 4. **Leader reviews results** — can rerun/edit/remove before chain commitment
-5. **Leader triggers batch chain submission** (`committed`) — multi-message Cosmos TX, Qdrant insert, keyword decay starts
-6. **Memory rejected at any stage** (`denied`) — terminal state; leader deny or report upheld
+5. **Leader triggers batch chain submission** (`pending_chain`) — chain tx is broadcast; status stays `pending_chain` until confirmation
+6. **ChainWatcher confirms tx** (`committed`) — `processApproveMemoryBookkeeping` performs Qdrant upsert/keyword writes and flips status to `committed`
+7. **Memory rejected at any stage** (`denied`) — terminal state; leader deny or report upheld
 
 **Vote flow:** Moderators cast approval votes on `pending` submissions. When quorum is reached (or leader override), status transitions to `pending_keyword`. Only `pending` submissions are votable — `pending_keyword`, `pending_chain`, `committed`, and `denied` block further voting.
 
@@ -749,24 +750,49 @@ const (
 - **grpc_client.go** — `GrpcClient` struct holds gRPC connection, codec, keyring, tx config, and query clients for all 7 wevibe-chain modules.
 - **query.go** — nil-safe wrappers: org registration checks, merkle root queries, serve stats, attestation lookups, bandwidth state, emissions params, reputation stats.
 - **broadcast.go** — `BroadcastTx` and `BroadcastTxSync` sign and broadcast transactions to wevibe-chain via Comet RPC `broadcast_tx_sync` (D-13.12). Fees: `ceil(gas × 0.01 uvibe)` with 2000 uvibe floor. Retry on transient errors (8 attempts, 400ms backoff). `BroadcastTxSync` is invoked by the relay endpoint to relay dashboard-signed `MsgExec`-wrapped Category B messages.
-- **submit.go** — Category A hub-owned transaction builders only (no Category B writers remain). Previous Category B helpers (`SubmitMemoryBatchAtomic`, `SubmitServeBatch`, `SubmitDenialBatch`, `SubmitMemoryReport`, `RegisterOrgOnChain`) were removed in CO-011a.4.
+- **submit.go** — hub-side chain transaction helpers, including `RegisterOrgOnChain` (used by `CreateOrg` in CO-023) and batch/report helper builders used by moderation and reporting flows.
 - **merkle.go** — binary SHA-256 Merkle tree for epoch root computation.
 - **sync.go** — `SyncEpochData` polling loop logic: compares chain confidence/state to Qdrant payload and updates changed records.
 - **cometbft_subscriber.go** — CometBFT RPC subscriber for new block events, consumed by the ChainWatcher.
 
-CometBFT RPC is not consumed yet, but config now includes optional `WEVIBE_CHAIN_RPC_URL` (`ChainRPCURL`) for Sprint 23 WebSocket work.
+CometBFT RPC is consumed by ChainWatcher via `CometBFTSubscriber`; node URL is sourced from `WEVIBE_CHAIN_RPC_URL` (fallback `tcp://localhost:26657`).
 
 ## ChainWatcher (CO-011a.3, CO-011a.4 Activated)
 
 The ChainWatcher detects confirmed transactions on-chain and performs post-confirmation bookkeeping. As of CO-011a.4 it is the **canonical** bookkeeping path for all 5 confirmed-tx handlers — no API handler runs bookkeeping eagerly at submission time.
 
-**Startup wiring (`cmd/wevibe-hub/main.go`):** the watcher is constructed and `Start()` is called AFTER the notification dispatcher setup and BEFORE router registration:
+**Startup wiring (`cmd/wevibe-hub/main.go`):** the watcher is constructed with a tx decoder derived from `GrpcClient` codec and started in a goroutine AFTER dispatcher setup and BEFORE router registration:
 
 ```go
-watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), notifHub, qdrantClient, cfg.OllamaURL)
-watcher.Start(ctx)
+txDecoder := chain.BuildTxDecoder(chainClient.GetCodec())
+watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, cfg.OllamaURL)
+go func() {
+    if err := watcher.Start(ctx); err != nil {
+        log.Printf("ERROR: chain watcher exited: %v", err)
+    }
+}()
 // ... router setup follows
 ```
+
+### Tx Decode Path (CO-023)
+
+`internal/chain/watcher.go` now wires decode in one path:
+
+- `BuildTxDecoder(cdc codec.Codec)` builds Cosmos tx decoder via `authtx.NewTxConfig(cdc, authtx.DefaultSignModes)`.
+- `sdkTxAdapter` adapts `sdk.Tx.GetMsgs() []sdk.Msg` into watcher `TxInterface.GetMsgs() []interface{}`.
+- `processTx` fail-fast guard returns an error if `txDecoder` is nil.
+
+Dispatch chain:
+
+`processBlock -> processTx -> txDecoder(txBytes) -> decoded.GetMsgs() -> type switch`
+
+Bookkeeping handlers triggered from the dispatch switch:
+
+- `processApproveMemoryBookkeeping`
+- `processServeBatchBookkeeping`
+- `processDenialBatchBookkeeping`
+- `processReportBookkeeping`
+- `processRegisterOrgBookkeeping`
 
 ### File Inventory
 
@@ -831,6 +857,20 @@ The ChainWatcher is STARTED in `cmd/wevibe-hub/main.go`. It runs continuously al
 - `processRegisterOrgBookkeeping`
 
 All previous API-handler-side eager Category B broadcasting paths from the hub have been removed in CO-011a.4. The dashboard now relays the corresponding `MsgExec`-wrapped Category B message via `POST /v1/relay/broadcast`; the watcher closes the loop on confirmation.
+
+### Test-mode endpoints (CO-023)
+
+With real watcher pipeline wiring in place, the test-only force-commit bypass was removed.
+
+Current test-mode routes:
+
+- `GET /v1/test/health`
+- `POST /v1/test/embed`
+- `GET /v1/test/orgs/{orgID}/queue`
+
+Removed route:
+
+- `POST /v1/test/orgs/{orgID}/force-commit`
 
 ## API Components
 
