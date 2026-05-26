@@ -437,7 +437,7 @@ sanitization_findings JSONB  -- Stored at submission time, pre-encryption
 
 The hub implements a multi-stage memory lifecycle that decouples approval from keyword extraction from chain commitment:
 
-**Status values:** `pending` → `pending_keyword` → `pending_chain` → `committed`
+**Status values:** `pending` → `pending_keyword` → `pending_chain` → `committed` (terminal); `denied` (terminal reject)
 
 **Flow:**
 1. **Contributor submits** (`pending`) — memory enters moderation queue
@@ -445,12 +445,15 @@ The hub implements a multi-stage memory lifecycle that decouples approval from k
 3. **Leader triggers batch keyword extraction** (`pending_chain`) — LLM classifies per-memory against org vocabulary, hub verifies
 4. **Leader reviews results** — can rerun/edit/remove before chain commitment
 5. **Leader triggers batch chain submission** (`committed`) — multi-message Cosmos TX, Qdrant insert, keyword decay starts
+6. **Memory rejected at any stage** (`denied`) — terminal state; leader deny or report upheld
 
-**Schema updates (CO-238):**
+**Vote flow:** Moderators cast approval votes on `pending` submissions. When quorum is reached (or leader override), status transitions to `pending_keyword`. Only `pending` submissions are votable — `pending_keyword`, `pending_chain`, `committed`, and `denied` block further voting.
+
+**Schema updates (CO-238, CO-020):**
 ```sql
 -- pending_submissions additions
 status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed'))
+    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied'))
 moderator_pubkey TEXT           -- moderator who approved
 approved_at TIMESTAMPTZ          -- when approved
 extraction_result JSONB         -- hub-verified keywords + scores

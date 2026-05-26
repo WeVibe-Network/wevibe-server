@@ -136,17 +136,16 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 	}
 
 	switch status {
-	case "approved", "denied":
+	case protocol.SubmissionStatusCommitted, protocol.SubmissionStatusDenied:
 		return 0, 0, false, fmt.Errorf("submission already resolved")
 	}
 
 	if role == "leader" {
-		// Leader override — mark ready immediately.
 		_, err = tx.Exec(ctx, `
             UPDATE pending_submissions
-            SET status = 'ready', updated_at = NOW()
+            SET status = $3, updated_at = NOW()
             WHERE org_id = $1 AND submission_hash = $2
-        `, orgID, submissionHash)
+        `, orgID, submissionHash, protocol.SubmissionStatusPendingKeyword)
 		if err != nil {
 			return 0, 0, false, err
 		}
@@ -200,9 +199,9 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 		if currentVotes >= required {
 			_, err = tx.Exec(ctx, `
                 UPDATE pending_submissions
-                SET status = 'ready', updated_at = NOW()
+                SET status = $3, updated_at = NOW()
                 WHERE org_id = $1 AND submission_hash = $2
-            `, orgID, submissionHash)
+            `, orgID, submissionHash, protocol.SubmissionStatusPendingKeyword)
 			if err != nil {
 				return 0, 0, false, err
 			}
@@ -214,8 +213,8 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 		return 0, 0, false, err
 	}
 
-	// If status was already ready when vote cast (e.g., due to prior quorum), return latest counts.
-	if role != "leader" && status == "ready" && !ready {
+	// If status was already pending_keyword when vote cast (e.g., due to prior quorum), return latest counts.
+	if role != "leader" && status == protocol.SubmissionStatusPendingKeyword && !ready {
 		// Fetch counts to report current state.
 		err = pool.QueryRow(ctx, `
             SELECT COUNT(*) FROM approval_votes
@@ -285,9 +284,9 @@ func DenySubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHa
 
 	result, err := pool.Exec(ctx, `
 		UPDATE pending_submissions
-		SET status = 'denied', denial_reason = $1, moderator_pubkey = $2, resolved_at = NOW()
-		WHERE submission_hash = $3 AND org_id = $4 AND status = 'pending'
-	`, reason, moderatorPubkey, submissionHash, orgID)
+		SET status = $1, denial_reason = $2, moderator_pubkey = $3, resolved_at = NOW()
+		WHERE submission_hash = $4 AND org_id = $5 AND status = 'pending'
+	`, protocol.SubmissionStatusDenied, reason, moderatorPubkey, submissionHash, orgID)
 	if err != nil {
 		return err
 	}

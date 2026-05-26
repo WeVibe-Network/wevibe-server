@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -116,9 +117,9 @@ func loadApprovedOrgIDs(ctx context.Context, pool *pgxpool.Pool) ([]string, erro
 	rows, err := pool.Query(ctx, `
 		SELECT DISTINCT org_id
 		FROM pending_submissions
-		WHERE status = 'approved'
+		WHERE status = $1
 		ORDER BY org_id
-	`)
+	`, protocol.SubmissionStatusCommitted)
 	if err != nil {
 		return nil, fmt.Errorf("query approved org ids: %w", err)
 	}

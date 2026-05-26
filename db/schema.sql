@@ -84,6 +84,10 @@ CREATE TABLE epoch_manifests (
 );
 
 -- ── Pending submissions ────────────────────────────────────────────────────
+-- Lifecycle: pending → pending_keyword → pending_chain → committed (terminal)
+--             └─────────── denied (terminal reject, any stage) ───────────────
+-- Valid status values: 'pending', 'pending_keyword', 'pending_chain', 'committed', 'denied'
+-- Handler status writes MUST use protocol.SubmissionStatus* constants (protocol/types.go)
 
 CREATE TABLE pending_submissions (
     submission_hash         TEXT        PRIMARY KEY,
@@ -98,7 +102,7 @@ CREATE TABLE pending_submissions (
     stack_hint              TEXT[]      NOT NULL DEFAULT '{}',
     memory_type             TEXT        NOT NULL CHECK (memory_type IN ('correct_implementation', 'negative_signal')),
     status                  TEXT        NOT NULL DEFAULT 'pending'
-                                    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed')),
+                                    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied')),
     denial_reason           TEXT,
     moderator_pubkey        TEXT,
     approved_at             TIMESTAMPTZ,

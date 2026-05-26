@@ -706,9 +706,9 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.stack_hint, ps.memory_type, m.wallet_address
 		FROM pending_submissions ps
 		JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
-		WHERE ps.org_id = $1 AND ps.status = 'ready'
+		WHERE ps.org_id = $1 AND ps.status = $2
 		ORDER BY ps.created_at ASC
-	`, orgID)
+	`, orgID, protocol.SubmissionStatusPendingChain)
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
@@ -775,12 +775,6 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 			failed++
 			continue
 		}
-
-		_, _ = pool.Exec(r.Context(), `
-			UPDATE pending_submissions
-			SET status = 'approved', resolved_at = NOW(), updated_at = NOW()
-			WHERE submission_hash = $1 AND org_id = $2
-		`, hash, orgID)
 
 		_, _ = pool.Exec(r.Context(), `
 			DELETE FROM approval_votes WHERE org_id = $1 AND submission_hash = $2

@@ -49,8 +49,8 @@ func GetContributorStats(ctx context.Context, pool *pgxpool.Pool, chainClient Ch
 		contributions = int(chainProfile.TotalApprovedMemories)
 	} else {
 		err = pool.QueryRow(ctx, `
-			SELECT COUNT(*) FROM pending_submissions WHERE org_id = $1 AND contributor_pubkey = $2 AND status = 'approved'
-		`, orgID, contributorPubkey).Scan(&contributions)
+			SELECT COUNT(*) FROM pending_submissions WHERE org_id = $1 AND contributor_pubkey = $2 AND status = $3
+		`, orgID, contributorPubkey, protocol.SubmissionStatusCommitted).Scan(&contributions)
 		if err != nil {
 			return nil, err
 		}

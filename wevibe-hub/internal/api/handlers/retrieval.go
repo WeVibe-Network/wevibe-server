@@ -175,8 +175,8 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		rows, err := pool.Query(ctx, `
 			SELECT submission_hash, umbral_capsule, umbral_ciphertext
 			FROM pending_submissions
-			WHERE org_id = $1 AND status = 'approved' AND submission_hash = ANY($2)
-		`, req.OrgID, cids)
+			WHERE org_id = $1 AND status = $2 AND submission_hash = ANY($3)
+		`, req.OrgID, protocol.SubmissionStatusCommitted, cids)
 		if err != nil {
 			http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
 			return
@@ -464,8 +464,8 @@ func GetMemory(w http.ResponseWriter, r *http.Request) {
 	err = pool.QueryRow(r.Context(), `
 		SELECT ciphertext_hex, epoch_id, memory_type
 		FROM pending_submissions
-		WHERE submission_hash = $1 AND org_id = $2 AND status = 'approved'
-	`, cid, orgID).Scan(&ciphertextHex, &epochID, &memoryType)
+		WHERE submission_hash = $1 AND org_id = $2 AND status = $3
+	`, cid, orgID, protocol.SubmissionStatusCommitted).Scan(&ciphertextHex, &epochID, &memoryType)
 	if err != nil {
 		http.Error(w, `{"error":"memory not found or not approved"}`, http.StatusNotFound)
 		return

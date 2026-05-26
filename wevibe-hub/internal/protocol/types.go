@@ -12,6 +12,7 @@ const (
 	SubmissionStatusPendingKeyword = "pending_keyword"
 	SubmissionStatusPendingChain  = "pending_chain"
 	SubmissionStatusCommitted      = "committed"
+	SubmissionStatusDenied         = "denied"
 )
 
 const (

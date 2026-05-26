@@ -26,8 +26,8 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 	err := w.db.QueryRow(ctx, `
 		SELECT epoch_id, extraction_result
 		FROM pending_submissions
-		WHERE org_id = $1 AND submission_hash = $2 AND status IN ('pending_chain', 'ready')
-	`, orgID, contentHashHex).Scan(&epochID, &extractionResult)
+		WHERE org_id = $1 AND submission_hash = $2 AND status = $3
+	`, orgID, contentHashHex, protocol.SubmissionStatusPendingChain).Scan(&epochID, &extractionResult)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			logger.Warn("pending_submission not found for memory bookkeeping",
@@ -113,9 +113,9 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 
 	_, err = w.db.Exec(ctx, `
 		UPDATE pending_submissions
-		SET status = 'committed', updated_at = NOW()
-		WHERE org_id = $1 AND submission_hash = $2 AND status IN ('pending_chain', 'ready')
-	`, orgID, contentHashHex)
+		SET status = $3, updated_at = NOW()
+		WHERE org_id = $1 AND submission_hash = $2 AND status = $3
+	`, orgID, contentHashHex, protocol.SubmissionStatusCommitted)
 	if err != nil {
 		return fmt.Errorf("update pending_submissions: %w", err)
 	}
