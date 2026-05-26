@@ -136,16 +136,17 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 	}
 
 	switch status {
-	case protocol.SubmissionStatusCommitted, protocol.SubmissionStatusDenied:
+	case "approved", "denied":
 		return 0, 0, false, fmt.Errorf("submission already resolved")
 	}
 
 	if role == "leader" {
+		// Leader override — mark ready immediately.
 		_, err = tx.Exec(ctx, `
             UPDATE pending_submissions
-            SET status = $3, updated_at = NOW()
+            SET status = 'ready', updated_at = NOW()
             WHERE org_id = $1 AND submission_hash = $2
-        `, orgID, submissionHash, protocol.SubmissionStatusPendingKeyword)
+        `, orgID, submissionHash)
 		if err != nil {
 			return 0, 0, false, err
 		}
@@ -199,9 +200,9 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 		if currentVotes >= required {
 			_, err = tx.Exec(ctx, `
                 UPDATE pending_submissions
-                SET status = $3, updated_at = NOW()
+                SET status = 'ready', updated_at = NOW()
                 WHERE org_id = $1 AND submission_hash = $2
-            `, orgID, submissionHash, protocol.SubmissionStatusPendingKeyword)
+            `, orgID, submissionHash)
 			if err != nil {
 				return 0, 0, false, err
 			}
