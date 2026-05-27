@@ -226,6 +226,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 
 		if len(payload.capsule) == 0 || umbralService == nil {
 			requiresReencryption = append(requiresReencryption, res.CID)
+			merged = append(merged, res)
 			continue
 		}
 
@@ -233,6 +234,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("WARNING: re-encryption failed for cid=%s org=%s epoch=%d: %v", res.CID, req.OrgID, cm.Epoch, err)
 			requiresReencryption = append(requiresReencryption, res.CID)
+			merged = append(merged, res)
 			continue
 		}
 		res.Capsule = hex.EncodeToString(payload.capsule)
