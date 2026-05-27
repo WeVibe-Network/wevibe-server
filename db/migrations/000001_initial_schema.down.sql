@@ -1,7 +1,6 @@
 DROP TABLE join_requests;
 DROP TABLE notifications;
 DROP TABLE watcher_state;
-DROP TABLE chain_commit_events;
 DROP TABLE memory_keywords;
 DROP TABLE org_keywords;
 DROP TABLE delegate_keys;

@@ -3,24 +3,24 @@ package chain
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/cosmos/cosmos-sdk/codec"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
+	abcitypes "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/crypto/tmhash"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
+	"github.com/cosmos/cosmos-sdk/codec"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
+	"github.com/jackc/pgx/v5/pgxpool"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	orgtypes "github.com/wevibe-network/wevibe-chain/x/org/types"
 	reputationtypes "github.com/wevibe-network/wevibe-chain/x/reputation/types"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
@@ -85,12 +85,12 @@ func BuildTxDecoder(cdc codec.Codec) TxDecoderFunc {
 func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, txDecoder TxDecoderFunc, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, embedURL string) *ChainWatcher {
 	return &ChainWatcher{
 		chainClient:  chainClient,
-		db:          db,
-		logger:      logger,
-		txDecoder:   txDecoder,
-		notifHub:    notifHub,
+		db:           db,
+		logger:       logger,
+		txDecoder:    txDecoder,
+		notifHub:     notifHub,
 		qdrantClient: qdrantClient,
-		embedURL:    embedURL,
+		embedURL:     embedURL,
 	}
 }
 
@@ -198,7 +198,15 @@ func (w *ChainWatcher) catchUp(ctx context.Context, lastSeen int64) error {
 		if err != nil {
 			return fmt.Errorf("fetch block %d: %w", h, err)
 		}
-		if err := w.processBlock(ctx, block); err != nil {
+		blockResults, err := w.subscriber.BlockResults(ctx, &h)
+		if err != nil {
+			return fmt.Errorf("fetch block results %d: %w", h, err)
+		}
+		if blockResults == nil {
+			return fmt.Errorf("fetch block results %d: empty result", h)
+		}
+
+		if err := w.processBlock(ctx, block, blockResults.TxsResults); err != nil {
 			return fmt.Errorf("process block %d: %w", h, err)
 		}
 	}
@@ -251,15 +259,41 @@ func (w *ChainWatcher) processBlockEvent(ctx context.Context, event coretypes.Re
 	if !ok {
 		return fmt.Errorf("unexpected event data type")
 	}
-	return w.processBlock(ctx, blockEvent.Block)
+	return w.processBlock(ctx, blockEvent.Block, blockEvent.ResultFinalizeBlock.TxResults)
 }
 
-func (w *ChainWatcher) processBlock(ctx context.Context, block *cmttypes.Block) error {
+func (w *ChainWatcher) processBlock(ctx context.Context, block *cmttypes.Block, txResults []*abcitypes.ExecTxResult) error {
+	if block == nil {
+		return fmt.Errorf("nil block")
+	}
+	if len(txResults) != len(block.Txs) {
+		return fmt.Errorf("tx results mismatch at height %d: txs=%d tx_results=%d", block.Height, len(block.Txs), len(txResults))
+	}
+
 	height := block.Height
 	timestamp := block.Time
 
-	for _, txBytes := range block.Txs {
+	for idx, txBytes := range block.Txs {
 		txHash := tmhash.Sum(txBytes)
+		txResult := txResults[idx]
+		if txResult == nil {
+			w.logger.Warn("skipping tx with missing execution result",
+				"height", height,
+				"tx_index", idx,
+				"tx_hash", fmt.Sprintf("%X", txHash))
+			continue
+		}
+		if txResult.Code != 0 {
+			w.logger.Debug("skipping failed tx",
+				"height", height,
+				"tx_index", idx,
+				"tx_hash", fmt.Sprintf("%X", txHash),
+				"code", txResult.Code,
+				"codespace", txResult.Codespace,
+				"log", txResult.Log)
+			continue
+		}
+
 		if err := w.processTx(ctx, txHash, height, timestamp, txBytes); err != nil {
 			w.logger.Error("process tx failed", "tx_hash", fmt.Sprintf("%X", txHash), "err", err)
 		}
@@ -286,19 +320,6 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 	for _, msg := range allMsgs {
 		switch m := msg.(type) {
 		case *memorytypes.MsgApproveMemory:
-			event := MemoryApprovedEvent{
-				OrgID:             m.OrgId,
-				ContentHash:       m.ContentHash,
-				ContributorPubkey: m.Signer,
-				Approvers:         m.Approvers,
-				CommittingLeader:  m.CommittingLeader,
-				EncryptedBlob:     m.EncryptedBlob,
-				MemoryType:        m.MemoryType.String(),
-			}
-			if err := w.processApproveEvent(ctx, txHashHex, height, timestamp, event); err != nil {
-				return err
-			}
-
 			var keywords []string
 			var contributorID, contributorWallet string
 			for _, innerMsg := range allMsgs {
@@ -322,19 +343,6 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 			}
 
 		case *memorytypes.MsgReportMemory:
-			event := ReportUpheldEvent{
-				OrgID:               m.OrgId,
-				ContentHash:         m.ContentHash,
-				ContributorPubkey:   m.ContributorPubkey,
-				ApprovingModerators: m.ApprovingModerators,
-				UpholdingModerators: m.UpholdingModerators,
-				ReporterPubkey:      m.ReporterPubkey,
-				Reason:              m.Reason,
-			}
-			if err := w.processReportEvent(ctx, txHashHex, height, timestamp, event); err != nil {
-				return err
-			}
-
 			if err := w.processReportBookkeeping(ctx, txHashHex, height, timestamp,
 				m.OrgId, m.ContentHash, m.ReporterPubkey); err != nil {
 				w.logger.Error("processReportBookkeeping failed", "err", err, "org_id", m.OrgId)
@@ -390,7 +398,7 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 
 func (w *ChainWatcher) getLastSeenBlock(ctx context.Context) (int64, error) {
 	var lastHeight int64
-	err := w.db.QueryRow(ctx, `SELECT last_seen_block_height FROM watcher_state WHERE watcher_name = 'chain_commit_events'`).Scan(&lastHeight)
+	err := w.db.QueryRow(ctx, `SELECT last_seen_block_height FROM watcher_state WHERE watcher_name = 'chain_watcher'`).Scan(&lastHeight)
 	if err != nil {
 		return 0, err
 	}
@@ -398,130 +406,6 @@ func (w *ChainWatcher) getLastSeenBlock(ctx context.Context) (int64, error) {
 }
 
 func (w *ChainWatcher) updateLastSeenBlock(ctx context.Context, height int64) error {
-	_, err := w.db.Exec(ctx, `UPDATE watcher_state SET last_seen_block_height = $1, updated_at = NOW() WHERE watcher_name = 'chain_commit_events'`, height)
+	_, err := w.db.Exec(ctx, `UPDATE watcher_state SET last_seen_block_height = $1, updated_at = NOW() WHERE watcher_name = 'chain_watcher'`, height)
 	return err
-}
-
-func (w *ChainWatcher) emitModeratorNotifications(ctx context.Context, moderators []string, orgID, category, title, body, eventRef string) error {
-	var orgName string
-	_ = w.db.QueryRow(ctx, `SELECT org_name FROM orgs WHERE org_id = $1`, orgID).Scan(&orgName)
-
-	for _, modPubkey := range moderators {
-		var notifID int64
-		var createdAt time.Time
-		err := w.db.QueryRow(ctx, `
-			INSERT INTO notifications
-				(recipient_pubkey, category, title, body, event_ref, org_id, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, NOW())
-			RETURNING id, created_at
-		`, modPubkey, category, title, body, eventRef, orgID).Scan(&notifID, &createdAt)
-		if err != nil {
-			w.logger.Error("failed to emit notification", "err", err, "recipient", modPubkey)
-			continue
-		}
-
-		if w.notifHub != nil {
-			payload := notifications.NotificationPayload{
-				ID:        notifID,
-				Category:  category,
-				Title:     title,
-				Body:      body,
-				EventRef:  eventRef,
-				OrgID:     orgID,
-				OrgName:   orgName,
-				Read:      false,
-				CreatedAt: createdAt.Format(time.RFC3339),
-			}
-			if data, err := notifications.NewNotificationMessage(&payload); err == nil {
-				w.notifHub.Broadcast(modPubkey, data)
-			}
-		}
-
-		if w.dispatcher != nil {
-			_ = w.dispatcher.Dispatch(ctx, notifications.DispatchEvent{
-				RecipientPubkey: modPubkey,
-				Category:        category,
-				Title:           title,
-				Body:            body,
-				EventRef:        eventRef,
-				OrgID:           orgID,
-				OrgName:         orgName,
-				CreatedAt:       createdAt,
-			})
-		}
-	}
-	return nil
-}
-
-func (w *ChainWatcher) processApproveEvent(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, event MemoryApprovedEvent) error {
-	_, err := w.db.Exec(ctx, `
-		INSERT INTO chain_commit_events
-			(tx_hash, block_height, block_timestamp, action_type, org_id, memory_hash,
-			 contributor_pubkey, approving_moderators, committing_leader_pubkey, raw_msg_json)
-		VALUES ($1, $2, $3, 'memory_approved', $4, $5, $6, $7, $8, $9)
-		ON CONFLICT (tx_hash, memory_hash) DO NOTHING
-	`, txHash, blockHeight, blockTime, event.OrgID, event.ContentHash, event.ContributorPubkey,
-		event.Approvers, event.CommittingLeader, "[]")
-	if err != nil {
-		return err
-	}
-
-	w.emitModeratorNotifications(ctx, event.Approvers, event.OrgID,
-		"chain_commit_involving_you",
-		"You were listed as approver on a chain commit",
-		fmt.Sprintf("Memory %x was committed to chain in org %s by leader %s", event.ContentHash[:8], event.OrgID, event.CommittingLeader),
-		txHash)
-
-	return nil
-}
-
-func (w *ChainWatcher) processReportEvent(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, event ReportUpheldEvent) error {
-	rawJSON, _ := json.Marshal(event)
-	_, err := w.db.Exec(ctx, `
-		INSERT INTO chain_commit_events
-			(tx_hash, block_height, block_timestamp, action_type, org_id, memory_hash,
-			 contributor_pubkey, approving_moderators, upholding_moderators,
-			 committing_leader_pubkey, reporter_pubkey, raw_msg_json)
-		VALUES ($1, $2, $3, 'report_upheld', $4, $5, $6, $7, $8, $9, $10, $11)
-		ON CONFLICT (tx_hash, memory_hash) DO NOTHING
-	`, txHash, blockHeight, blockTime, event.OrgID, event.ContentHash, event.ContributorPubkey,
-		event.ApprovingModerators, event.UpholdingModerators,
-		"", event.ReporterPubkey, rawJSON)
-	if err != nil {
-		return err
-	}
-
-	w.emitModeratorNotifications(ctx, event.UpholdingModerators, event.OrgID,
-		"report_upheld_committed",
-		"Report you voted to uphold was committed to chain",
-		fmt.Sprintf("Memory %x was deleted via upheld report in org %s by leader", event.ContentHash[:8], event.OrgID),
-		txHash)
-
-	w.emitModeratorNotifications(ctx, event.ApprovingModerators, event.OrgID,
-		"your_approval_was_overturned",
-		"A memory you approved was deleted via upheld report",
-		fmt.Sprintf("Memory %x you approved was deleted via upheld report in org %s", event.ContentHash[:8], event.OrgID),
-		txHash)
-
-	return nil
-}
-
-type MemoryApprovedEvent struct {
-	OrgID             string   `json:"org_id"`
-	ContentHash       []byte   `json:"content_hash"`
-	ContributorPubkey string   `json:"contributor_pubkey"`
-	Approvers         []string `json:"approvers"`
-	CommittingLeader  string   `json:"committing_leader"`
-	EncryptedBlob     []byte   `json:"encrypted_blob"`
-	MemoryType        string   `json:"memory_type"`
-}
-
-type ReportUpheldEvent struct {
-	OrgID               string   `json:"org_id"`
-	ContentHash         []byte   `json:"content_hash"`
-	ContributorPubkey   string   `json:"contributor_pubkey"`
-	ApprovingModerators []string `json:"approving_moderators"`
-	UpholdingModerators []string `json:"upholding_moderators"`
-	ReporterPubkey      string   `json:"reporter_pubkey"`
-	Reason              string   `json:"reason"`
 }

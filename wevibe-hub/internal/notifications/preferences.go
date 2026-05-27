@@ -11,9 +11,6 @@ import (
 )
 
 var supportedCategories = []string{
-	"chain_commit_involving_you",
-	"report_upheld_committed",
-	"your_approval_was_overturned",
 	"join_request_received",
 	"join_approved",
 	"join_denied",

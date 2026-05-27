@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"github.com/cometbft/cometbft/rpc/client"
+	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
 	"log/slog"
@@ -52,6 +52,10 @@ func (s *CometBFTSubscriber) Block(ctx context.Context, height *int64) (*cmttype
 		return nil, err
 	}
 	return result.Block, nil
+}
+
+func (s *CometBFTSubscriber) BlockResults(ctx context.Context, height *int64) (*coretypes.ResultBlockResults, error) {
+	return s.client.BlockResults(ctx, height)
 }
 
 func (s *CometBFTSubscriber) Status(ctx context.Context) (*coretypes.ResultStatus, error) {

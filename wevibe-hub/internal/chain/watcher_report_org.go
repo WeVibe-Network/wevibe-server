@@ -51,14 +51,6 @@ func (w *ChainWatcher) processReportBookkeeping(ctx context.Context, txHash stri
 
 func (w *ChainWatcher) processRegisterOrgBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, leader string) error {
 	_, err := w.db.Exec(ctx, `
-		INSERT INTO chain_commit_events (tx_hash, block_height, block_timestamp, action_type, org_id)
-		VALUES ($1, $2, $3, 'org_registered', $4)
-	`, txHash, blockHeight, blockTime, orgID)
-	if err != nil {
-		return fmt.Errorf("failed to insert chain commit event: %w", err)
-	}
-
-	_, err = w.db.Exec(ctx, `
 		UPDATE orgs
 		SET chain_registered = true,
 		    updated_at = NOW()

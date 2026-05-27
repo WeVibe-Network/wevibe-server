@@ -119,12 +119,6 @@ func renderEmailTemplate(event DispatchEvent) (string, string) {
 	body := fmt.Sprintf("%s\n\n%s", event.Title, event.Body)
 
 	switch event.Category {
-	case "chain_commit_involving_you":
-		subject = "WeVibe: chain commit involving you"
-	case "report_upheld_committed":
-		subject = "WeVibe: report upheld on chain"
-	case "your_approval_was_overturned":
-		subject = "WeVibe: approved memory overturned"
 	case "join_request_received":
 		subject = "WeVibe: new join request"
 	case "join_approved":

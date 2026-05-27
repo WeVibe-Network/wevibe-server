@@ -3,7 +3,6 @@ package chain
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
 	"time"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
@@ -26,13 +25,6 @@ type DenialEntry struct {
 func (w *ChainWatcher) processServeBatchBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, epoch uint64, serves []ServeEntry) error {
 	if len(serves) == 0 {
 		return nil
-	}
-
-	rawMsgJSON := fmt.Sprintf(`{"epoch": %d, "serve_count": %d}`, epoch, len(serves))
-	_, err := w.db.Exec(ctx, "INSERT INTO chain_commit_events (tx_hash, block_height, block_timestamp, action_type, org_id, raw_msg_json) VALUES ($1, $2, $3, 'serve_batch_submitted', $4, $5)",
-		txHash, blockHeight, blockTime, orgID, rawMsgJSON)
-	if err != nil {
-		return fmt.Errorf("insert chain_commit_events: %w", err)
 	}
 
 	for _, serve := range serves {
@@ -75,13 +67,6 @@ func (w *ChainWatcher) processServeBatchBookkeeping(ctx context.Context, txHash 
 func (w *ChainWatcher) processDenialBatchBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, epoch uint64, denials []DenialEntry) error {
 	if len(denials) == 0 {
 		return nil
-	}
-
-	rawMsgJSON := fmt.Sprintf(`{"epoch": %d, "denial_count": %d}`, epoch, len(denials))
-	_, err := w.db.Exec(ctx, "INSERT INTO chain_commit_events (tx_hash, block_height, block_timestamp, action_type, org_id, raw_msg_json) VALUES ($1, $2, $3, 'denial_batch_submitted', $4, $5)",
-		txHash, blockHeight, blockTime, orgID, rawMsgJSON)
-	if err != nil {
-		return fmt.Errorf("insert chain_commit_events: %w", err)
 	}
 
 	for _, denial := range denials {

@@ -28,28 +28,6 @@ function relativeTime(dateStr: string): string {
   return date.toLocaleDateString();
 }
 
-const CATEGORY_STYLES: Record<string, { label: string; className: string }> = {
-  chain_commit_involving_you: { label: 'Chain Commit', className: 'bg-blue-100 text-blue-700' },
-  report_upheld_committed: { label: 'Report Upheld', className: 'bg-amber-100 text-amber-700' },
-  your_approval_was_overturned: { label: 'Approval Overturned', className: 'bg-red-100 text-red-700' },
-};
-
-function categoryBadge(category: string) {
-  const known = CATEGORY_STYLES[category];
-  if (known) {
-    return (
-      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${known.className}`}>
-        {known.label}
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600">
-      {category}
-    </span>
-  );
-}
-
 export default function ActivityPage() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(false);
@@ -234,7 +212,6 @@ export default function ActivityPage() {
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    {categoryBadge(n.category)}
                     <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
                       {n.org_name}
                     </span>
