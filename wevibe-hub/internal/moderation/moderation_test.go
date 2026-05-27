@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,9 +76,23 @@ func insertMember(t *testing.T, pool *pgxpool.Pool, orgID, pubkey string) {
 		orgID, pubkey)
 }
 
-// buildReq returns a correctly signed SubmitMemoryRequest.
-// The Ed25519 signature is over the raw SHA-256 hash bytes, not the hex string.
-func buildReq(t *testing.T, orgID string) protocol.SubmitMemoryRequest {
+func sha256Hex(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+func oldSubmitMemoryMessage(orgID string, epochID int, submissionHash, contributorPubkey, memoryType string) []byte {
+	return []byte(strings.Join([]string{
+		"wevibe.submit_memory.v1",
+		fmt.Sprintf("org_id:%s", orgID),
+		fmt.Sprintf("epoch_id:%d", epochID),
+		fmt.Sprintf("submission_hash:%s", submissionHash),
+		fmt.Sprintf("contributor_pubkey:%s", contributorPubkey),
+		fmt.Sprintf("memory_type:%s", memoryType),
+	}, "\n"))
+}
+
+func buildReq(t *testing.T, orgID string) (protocol.SubmitMemoryRequest, ed25519.PrivateKey) {
 	t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	contribPub := hex.EncodeToString(pub)
@@ -89,21 +104,29 @@ func buildReq(t *testing.T, orgID string) protocol.SubmitMemoryRequest {
 	dkBytes, _ := hex.DecodeString(dkHex)
 	hashBytes := sha256.Sum256(append(ctBytes, dkBytes...))
 	hashHex := hex.EncodeToString(hashBytes[:])
+	ciphertextHashHex := sha256Hex(ctBytes)
+	plaintextHashHex := sha256Hex([]byte("test-plaintext"))
+	saltHex := "0000000000000000000000000000000000000000000000000000000000000000"
+	wrappedDekHashHex := sha256Hex(dkBytes)
 	memoryType := protocol.MemoryTypeCorrectImplementation
-	canonical := verify.SubmitMemoryMessage(orgID, 0, hashHex, contribPub, memoryType)
+	canonical := verify.SubmitMemoryMessage(orgID, 0, hashHex, contribPub, memoryType, ciphertextHashHex, plaintextHashHex, saltHex, wrappedDekHashHex)
 	sig := ed25519.Sign(priv, canonical)
 
 	return protocol.SubmitMemoryRequest{
 		OrgID:             orgID,
 		EpochID:           0,
 		Ciphertext:        ctHex,
+		PlaintextHash:     plaintextHashHex,
+		Salt:              saltHex,
+		CiphertextHash:    ciphertextHashHex,
+		WrappedDekHash:    wrappedDekHashHex,
 		WrappedDekMod:     dkHex,
 		SubmissionHash:    hashHex,
 		ContributorPubkey: contribPub,
 		ContributorSig:    hex.EncodeToString(sig),
 		StackHint:         []string{"test"},
 		MemoryType:        memoryType,
-	}
+	}, priv
 }
 
 // submitValid inserts the contributor as a member and submits the request.
@@ -117,36 +140,101 @@ func submitValid(t *testing.T, ctx context.Context, pool *pgxpool.Pool, req prot
 	return req.SubmissionHash
 }
 
-func TestSubmitToQueue_VerifiesSignature(t *testing.T) {
+func TestSubmitToQueue_HappyPath(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	orgID, _ := setupTestOrg(t, pool)
 
-	req := buildReq(t, orgID)
+	req, _ := buildReq(t, orgID)
 	_ = submitValid(t, ctx, pool, req)
 
-	// Tampered hash must fail — sig no longer matches
-	badReq := buildReq(t, orgID)
-	badReq.SubmissionHash = "0000000000000000000000000000000000000000000000000000000000000000"
-	insertMember(t, pool, badReq.OrgID, badReq.ContributorPubkey)
-	if err := moderation.SubmitToQueue(ctx, pool, badReq, nil); err == nil {
-		t.Fatal("tampered hash should fail signature verification")
+	var storedPlaintextHash, storedSalt, storedCiphertextHash, storedWrappedDekHash string
+	if err := pool.QueryRow(ctx, `
+		SELECT plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash
+		FROM pending_submissions
+		WHERE submission_hash = $1
+	`, req.SubmissionHash).Scan(&storedPlaintextHash, &storedSalt, &storedCiphertextHash, &storedWrappedDekHash); err != nil {
+		t.Fatalf("query inserted row: %v", err)
+	}
+
+	if storedPlaintextHash != req.PlaintextHash {
+		t.Fatalf("plaintext_hash mismatch: got %q want %q", storedPlaintextHash, req.PlaintextHash)
+	}
+	if storedSalt != req.Salt {
+		t.Fatalf("salt mismatch: got %q want %q", storedSalt, req.Salt)
+	}
+	if storedCiphertextHash != req.CiphertextHash {
+		t.Fatalf("ciphertext_hash mismatch: got %q want %q", storedCiphertextHash, req.CiphertextHash)
+	}
+	if storedWrappedDekHash != req.WrappedDekHash {
+		t.Fatalf("wrapped_dek_hash mismatch: got %q want %q", storedWrappedDekHash, req.WrappedDekHash)
 	}
 }
 
-func TestSubmitToQueue_VerifiesHash(t *testing.T) {
+func TestSubmitToQueue_BadSignatureOverNineFieldBody(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	orgID, _ := setupTestOrg(t, pool)
 
-	req := buildReq(t, orgID)
-	insertMember(t, pool, req.OrgID, req.ContributorPubkey)
+	req, priv := buildReq(t, orgID)
+	legacyCanonical := oldSubmitMemoryMessage(req.OrgID, req.EpochID, req.SubmissionHash, req.ContributorPubkey, req.MemoryType)
+	req.ContributorSig = hex.EncodeToString(ed25519.Sign(priv, legacyCanonical))
 
-	// Tamper ciphertext after signing — computed hash will differ from stored hash
-	badReq := req
-	badReq.Ciphertext = hex.EncodeToString([]byte("tampered-ciphertext"))
-	if err := moderation.SubmitToQueue(ctx, pool, badReq, nil); err == nil {
-		t.Fatal("mismatched hash should be rejected")
+	insertMember(t, pool, req.OrgID, req.ContributorPubkey)
+	if err := moderation.SubmitToQueue(ctx, pool, req, nil); err == nil {
+		t.Fatal("legacy 5-field signature should fail verification")
+	}
+}
+
+func TestSubmitToQueue_BadCiphertextHashMismatch(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID, _ := setupTestOrg(t, pool)
+
+	req, _ := buildReq(t, orgID)
+	req.CiphertextHash = strings.Repeat("0", 64)
+	insertMember(t, pool, req.OrgID, req.ContributorPubkey)
+	if err := moderation.SubmitToQueue(ctx, pool, req, nil); err == nil {
+		t.Fatal("mismatched ciphertext_hash should be rejected")
+	}
+}
+
+func TestSubmitToQueue_BadWrappedDekHashMismatch(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID, _ := setupTestOrg(t, pool)
+
+	req, _ := buildReq(t, orgID)
+	req.WrappedDekHash = strings.Repeat("0", 64)
+	insertMember(t, pool, req.OrgID, req.ContributorPubkey)
+	if err := moderation.SubmitToQueue(ctx, pool, req, nil); err == nil {
+		t.Fatal("mismatched wrapped_dek_hash should be rejected")
+	}
+}
+
+func TestSubmitToQueue_InvalidPlaintextHashFormat(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID, _ := setupTestOrg(t, pool)
+
+	req, _ := buildReq(t, orgID)
+	req.PlaintextHash = "zz"
+	insertMember(t, pool, req.OrgID, req.ContributorPubkey)
+	if err := moderation.SubmitToQueue(ctx, pool, req, nil); err == nil {
+		t.Fatal("invalid plaintext_hash format should be rejected")
+	}
+}
+
+func TestSubmitToQueue_InvalidSaltFormat(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID, _ := setupTestOrg(t, pool)
+
+	req, _ := buildReq(t, orgID)
+	req.Salt = "not-hex"
+	insertMember(t, pool, req.OrgID, req.ContributorPubkey)
+	if err := moderation.SubmitToQueue(ctx, pool, req, nil); err == nil {
+		t.Fatal("invalid salt format should be rejected")
 	}
 }
 
@@ -155,7 +243,7 @@ func TestGetPendingQueue_RequiresModerator(t *testing.T) {
 	ctx := context.Background()
 	orgID, leaderPubkey := setupTestOrg(t, pool)
 
-	req := buildReq(t, orgID)
+	req, _ := buildReq(t, orgID)
 	_ = submitValid(t, ctx, pool, req)
 
 	// Leader can view queue
@@ -181,7 +269,7 @@ func TestApproveSubmission_UpdatesStatus(t *testing.T) {
 	orgID, _ := setupTestOrg(t, pool)
 	modPubkey := addModerator(t, pool, orgID)
 
-	req := buildReq(t, orgID)
+	req, _ := buildReq(t, orgID)
 	hash := submitValid(t, ctx, pool, req)
 
 	if err := moderation.ApproveSubmission(ctx, pool, orgID, hash, modPubkey, req.MemoryType); err != nil {
@@ -201,7 +289,7 @@ func TestDenySubmission_RecordsReason(t *testing.T) {
 	orgID, _ := setupTestOrg(t, pool)
 	modPubkey := addModerator(t, pool, orgID)
 
-	req := buildReq(t, orgID)
+	req, _ := buildReq(t, orgID)
 	hash := submitValid(t, ctx, pool, req)
 
 	reason := "contains credentials"
@@ -232,11 +320,15 @@ func TestHubNeverStoresPlaintext(t *testing.T) {
 	dkBytes, _ := hex.DecodeString(dkHex)
 	hashBytes := sha256.Sum256(append(ctBytes, dkBytes...))
 	hashHex := hex.EncodeToString(hashBytes[:])
+	ciphertextHashHex := sha256Hex(ctBytes)
+	plaintextHashHex := sha256Hex([]byte("test-plaintext"))
+	saltHex := "0000000000000000000000000000000000000000000000000000000000000000"
+	wrappedDekHashHex := sha256Hex(dkBytes)
 
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	contribPub := hex.EncodeToString(pub)
 	memoryType := protocol.MemoryTypeCorrectImplementation
-	canonical := verify.SubmitMemoryMessage(orgID, 0, hashHex, contribPub, memoryType)
+	canonical := verify.SubmitMemoryMessage(orgID, 0, hashHex, contribPub, memoryType, ciphertextHashHex, plaintextHashHex, saltHex, wrappedDekHashHex)
 	sig := ed25519.Sign(priv, canonical)
 	insertMember(t, pool, orgID, contribPub)
 
@@ -244,6 +336,10 @@ func TestHubNeverStoresPlaintext(t *testing.T) {
 		OrgID:             orgID,
 		EpochID:           0,
 		Ciphertext:        ctHex,
+		PlaintextHash:     plaintextHashHex,
+		Salt:              saltHex,
+		CiphertextHash:    ciphertextHashHex,
+		WrappedDekHash:    wrappedDekHashHex,
 		WrappedDekMod:     dkHex,
 		SubmissionHash:    hashHex,
 		ContributorPubkey: contribPub,

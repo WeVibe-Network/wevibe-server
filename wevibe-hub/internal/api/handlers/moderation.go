@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
@@ -17,10 +19,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/sanitize"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 )
 
 func SubmitMemory(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +65,8 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 	req.OrgID = orgID
 
 	if req.Ciphertext == "" || req.WrappedDekMod == "" || req.SubmissionHash == "" ||
-		req.ContributorPubkey == "" || req.ContributorSig == "" {
+		req.ContributorPubkey == "" || req.ContributorSig == "" || req.PlaintextHash == "" ||
+		req.Salt == "" || req.CiphertextHash == "" || req.WrappedDekHash == "" {
 		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
 		return
 	}
@@ -121,26 +121,7 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var sanitizationFindings []protocol.Finding
-	var sanitizationFindingsJSON []byte
-	if req.Plaintext != "" {
-		scanResult := sanitize.ScanContent(req.Plaintext)
-		if len(scanResult.Findings) > 0 {
-			for _, f := range scanResult.Findings {
-				sanitizationFindings = append(sanitizationFindings, protocol.Finding{
-					Category:    f.Category,
-					Description: f.Description,
-					Position:    f.Position,
-					Codepoint:   f.Codepoint,
-					Severity:    f.Severity,
-				})
-			}
-			findingsJSON, _ := json.Marshal(sanitizationFindings)
-			sanitizationFindingsJSON = findingsJSON
-		}
-	}
-
-	if err := moderation.SubmitToQueue(r.Context(), pool, req, sanitizationFindingsJSON); err != nil {
+	if err := moderation.SubmitToQueue(r.Context(), pool, req, nil); err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "signature") {
 			http.Error(w, `{"error":"unauthorized: `+errMsg+`"}`, http.StatusUnauthorized)
@@ -157,9 +138,8 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(protocol.SubmitMemoryResponse{
-		SubmissionHash:       req.SubmissionHash,
-		Status:               "pending",
-		SanitizationFindings: sanitizationFindings,
+		SubmissionHash: req.SubmissionHash,
+		Status:         "pending",
 	})
 }
 
@@ -237,7 +217,8 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		submission.OrgID = orgID
 
 		if submission.Ciphertext == "" || submission.WrappedDekMod == "" || submission.SubmissionHash == "" ||
-			submission.ContributorPubkey == "" || submission.ContributorSig == "" {
+			submission.ContributorPubkey == "" || submission.ContributorSig == "" || submission.PlaintextHash == "" ||
+			submission.Salt == "" || submission.CiphertextHash == "" || submission.WrappedDekHash == "" {
 			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "missing required fields"})
 			failed++
 			continue
@@ -278,26 +259,7 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		var sanitizationFindings []protocol.Finding
-		var sanitizationFindingsJSON []byte
-		if submission.Plaintext != "" {
-			scanResult := sanitize.ScanContent(submission.Plaintext)
-			if len(scanResult.Findings) > 0 {
-				for _, f := range scanResult.Findings {
-					sanitizationFindings = append(sanitizationFindings, protocol.Finding{
-						Category:    f.Category,
-						Description: f.Description,
-						Position:    f.Position,
-						Codepoint:   f.Codepoint,
-						Severity:    f.Severity,
-					})
-				}
-				findingsJSON, _ := json.Marshal(sanitizationFindings)
-				sanitizationFindingsJSON = findingsJSON
-			}
-		}
-
-		if err := moderation.SubmitToQueue(r.Context(), pool, submission, sanitizationFindingsJSON); err != nil {
+		if err := moderation.SubmitToQueue(r.Context(), pool, submission, nil); err != nil {
 			errMsg := err.Error()
 			if strings.Contains(errMsg, "signature") || strings.Contains(errMsg, "mismatch") || strings.Contains(errMsg, "invalid") {
 				results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: errMsg})
@@ -309,9 +271,8 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		results = append(results, batchResult{
-			SubmissionHash:       submission.SubmissionHash,
-			Status:               "pending",
-			SanitizationFindings: sanitizationFindings,
+			SubmissionHash: submission.SubmissionHash,
+			Status:         "pending",
 		})
 		submitted++
 	}
@@ -703,7 +664,9 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := pool.Query(r.Context(), `
-		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.stack_hint, ps.memory_type,
+		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.wrapped_dek_mod,
+		       ps.plaintext_hash, ps.salt, ps.ciphertext_hash, ps.contributor_sig,
+		       ps.stack_hint, ps.memory_type,
 		       COALESCE(m.wallet_address, '') AS contributor_wallet
 		FROM pending_submissions ps
 		JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
@@ -726,28 +689,70 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 	var submitted, failed int
 
 	for rows.Next() {
-		var hash, contributor, ciphertext, memoryType, walletAddress string
+		var hash, contributor, ciphertext, wrappedDekMod, plaintextHash string
+		var salt, ciphertextHash, contributorSig, memoryType, walletAddress string
 		var stackHint []string
-		if err := rows.Scan(&hash, &contributor, &ciphertext, &stackHint, &memoryType, &walletAddress); err != nil {
+		if err := rows.Scan(
+			&hash,
+			&contributor,
+			&ciphertext,
+			&wrappedDekMod,
+			&plaintextHash,
+			&salt,
+			&ciphertextHash,
+			&contributorSig,
+			&stackHint,
+			&memoryType,
+			&walletAddress,
+		); err != nil {
+			log.Printf("batch submit row scan failed: %v", err)
 			failed++
 			continue
 		}
 		if !protocol.IsValidMemoryType(memoryType) {
+			log.Printf("batch submit skipping %s: invalid memory_type %q", hash, memoryType)
 			results = append(results, submitResult{Hash: hash, Error: "invalid memory_type"})
 			failed++
 			continue
 		}
 
-		contentHashBytes, err := hex.DecodeString(hash)
-		if err != nil {
-			results = append(results, submitResult{Hash: hash, Error: "invalid content hash"})
-			failed++
+		decodeHex := func(fieldName, fieldValue, resultErr string) ([]byte, bool) {
+			decoded, decodeErr := hex.DecodeString(fieldValue)
+			if decodeErr != nil {
+				log.Printf("batch submit skipping %s: invalid %s hex: %v", hash, fieldName, decodeErr)
+				results = append(results, submitResult{Hash: hash, Error: resultErr})
+				failed++
+				return nil, false
+			}
+			return decoded, true
+		}
+
+		contentHashBytes, ok := decodeHex("submission_hash", hash, "invalid content hash")
+		if !ok {
 			continue
 		}
-		ciphertextBytes, err := hex.DecodeString(ciphertext)
-		if err != nil {
-			results = append(results, submitResult{Hash: hash, Error: "invalid ciphertext"})
-			failed++
+		ciphertextBytes, ok := decodeHex("ciphertext_hex", ciphertext, "invalid ciphertext")
+		if !ok {
+			continue
+		}
+		wrappedDekEncBytes, ok := decodeHex("wrapped_dek_mod", wrappedDekMod, "invalid wrapped dek")
+		if !ok {
+			continue
+		}
+		plaintextHashBytes, ok := decodeHex("plaintext_hash", plaintextHash, "invalid plaintext hash")
+		if !ok {
+			continue
+		}
+		saltBytes, ok := decodeHex("salt", salt, "invalid salt")
+		if !ok {
+			continue
+		}
+		ciphertextHashBytes, ok := decodeHex("ciphertext_hash", ciphertextHash, "invalid ciphertext hash")
+		if !ok {
+			continue
+		}
+		contributorSigBytes, ok := decodeHex("contributor_sig", contributorSig, "invalid contributor signature")
+		if !ok {
 			continue
 		}
 
@@ -761,10 +766,18 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 
 		mem := chain.BatchMemory{
 			ContentHash:         contentHashBytes,
+			PlaintextHash:       plaintextHashBytes,
+			Salt:                saltBytes,
+			CiphertextHash:      ciphertextHashBytes,
+			ContributorSig:      contributorSigBytes,
+			ContributorPubkey:   contributor,
+			Approvers:           []string{signed.Pubkey},
+			CommittingLeader:    signed.Pubkey,
 			Keywords:            keywords,
 			ContributorID:       contributor,
 			ContributorWallet:   walletAddress,
 			EncryptedBlob:       ciphertextBytes,
+			WrappedDekEnc:       wrappedDekEncBytes,
 			SubmittedMemoryType: memoryType,
 			ApprovedMemoryType:  memoryType,
 		}

@@ -15,6 +15,13 @@ import (
 
 type BatchMemory struct {
 	ContentHash         []byte
+	PlaintextHash       []byte
+	Salt                []byte
+	CiphertextHash      []byte
+	ContributorSig      []byte
+	ContributorPubkey   string
+	Approvers           []string
+	CommittingLeader    string
 	Keywords            []*memorytypes.KeywordWeight
 	ContributorID       string
 	ContributorWallet   string
@@ -58,27 +65,21 @@ func (c *GrpcClient) SubmitMemoryToChain(ctx context.Context, orgID string, mem 
 	}
 
 	msgApprove := &memorytypes.MsgApproveMemory{
-		Signer:        c.submitter.String(),
-		OrgId:         orgID,
-		ContentHash:   mem.ContentHash,
-		EncryptedBlob: mem.EncryptedBlob,
-		WrappedDekEnc: mem.WrappedDekEnc,
-		MemoryType:    approvedMemoryType,
+		Signer:           c.submitter.String(),
+		OrgId:            orgID,
+		ContentHash:      mem.ContentHash,
+		EncryptedBlob:    mem.EncryptedBlob,
+		Approvers:        mem.Approvers,
+		CommittingLeader: mem.CommittingLeader,
+		WrappedDekEnc:    mem.WrappedDekEnc,
+		PlaintextHash:    mem.PlaintextHash,
+		Salt:             mem.Salt,
+		CiphertextHash:   mem.CiphertextHash,
+		ContributorSig:   mem.ContributorSig,
+		MemoryType:       approvedMemoryType,
 	}
 
-	contributorID := mem.ContributorWallet
-	if contributorID == "" {
-		contributorID = mem.ContributorID
-	}
-
-	msgIncrementContribution := &reputationtypes.MsgIncrementContribution{
-		Authority:     c.submitter.String(),
-		ContributorId: contributorID,
-		OrgId:         orgID,
-		MemoryCid:     hex.EncodeToString(mem.ContentHash),
-	}
-
-	txHash, err := c.BroadcastMsgs(ctx, msgCommit, msgApprove, msgIncrementContribution)
+	txHash, err := c.BroadcastMsgs(ctx, msgCommit, msgApprove)
 	if err != nil {
 		return "", fmt.Errorf("broadcast: %w", err)
 	}
@@ -189,27 +190,21 @@ func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, orgID string, 
 		}
 
 		msgApprove := &memorytypes.MsgApproveMemory{
-			Signer:        c.submitter.String(),
-			OrgId:         orgID,
-			ContentHash:   mem.ContentHash,
-			EncryptedBlob: mem.EncryptedBlob,
-			WrappedDekEnc: mem.WrappedDekEnc,
-			MemoryType:    approvedMemoryType,
+			Signer:           c.submitter.String(),
+			OrgId:            orgID,
+			ContentHash:      mem.ContentHash,
+			EncryptedBlob:    mem.EncryptedBlob,
+			Approvers:        mem.Approvers,
+			CommittingLeader: mem.CommittingLeader,
+			WrappedDekEnc:    mem.WrappedDekEnc,
+			PlaintextHash:    mem.PlaintextHash,
+			Salt:             mem.Salt,
+			CiphertextHash:   mem.CiphertextHash,
+			ContributorSig:   mem.ContributorSig,
+			MemoryType:       approvedMemoryType,
 		}
 
-		contributorID := mem.ContributorWallet
-		if contributorID == "" {
-			contributorID = mem.ContributorID
-		}
-
-		msgIncrementContribution := &reputationtypes.MsgIncrementContribution{
-			Authority:     c.submitter.String(),
-			ContributorId: contributorID,
-			OrgId:         orgID,
-			MemoryCid:     hex.EncodeToString(mem.ContentHash),
-		}
-
-		allMsgs = append(allMsgs, msgCommit, msgApprove, msgIncrementContribution)
+		allMsgs = append(allMsgs, msgCommit, msgApprove)
 		submissionHashes = append(submissionHashes, hex.EncodeToString(mem.ContentHash))
 	}
 

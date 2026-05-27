@@ -7,12 +7,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func isValidHex64(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
 
 func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitMemoryRequest, sanitizationFindings []byte) error {
 	if !protocol.IsValidMemoryType(req.MemoryType) {
@@ -23,7 +31,25 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		return fmt.Errorf("invalid submission_hash: %w", err)
 	}
 
-	canonical := verify.SubmitMemoryMessage(req.OrgID, req.EpochID, req.SubmissionHash, req.ContributorPubkey, req.MemoryType)
+	if !isValidHex64(req.PlaintextHash) {
+		return fmt.Errorf("invalid plaintext_hash format")
+	}
+
+	if !isValidHex64(req.Salt) {
+		return fmt.Errorf("invalid salt format")
+	}
+
+	canonical := verify.SubmitMemoryMessage(
+		req.OrgID,
+		req.EpochID,
+		req.SubmissionHash,
+		req.ContributorPubkey,
+		req.MemoryType,
+		req.CiphertextHash,
+		req.PlaintextHash,
+		req.Salt,
+		req.WrappedDekHash,
+	)
 	if err := verify.RequestSignature(req.ContributorPubkey, req.ContributorSig, canonical); err != nil {
 		return fmt.Errorf("signature verification failed: %w", err)
 	}
@@ -43,14 +69,25 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		return fmt.Errorf("submission_hash mismatch")
 	}
 
+	computedCiphertextHash := sha256.Sum256(ciphertextBytes)
+	if hex.EncodeToString(computedCiphertextHash[:]) != req.CiphertextHash {
+		return fmt.Errorf("ciphertext_hash mismatch")
+	}
+
+	computedWrappedDekHash := sha256.Sum256(wrappedDekBytes)
+	if hex.EncodeToString(computedWrappedDekHash[:]) != req.WrappedDekHash {
+		return fmt.Errorf("wrapped_dek_hash mismatch")
+	}
+
 	_, err = pool.Exec(ctx, `
 		INSERT INTO pending_submissions
 			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex,
+			 plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash,
 			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, sanitization_findings)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`,
 		req.SubmissionHash, req.OrgID, req.EpochID, req.ContributorPubkey,
-		req.Ciphertext,
+		req.Ciphertext, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash,
 		req.WrappedDekMod, req.ContributorSig, req.StackHint, req.MemoryType,
 		sanitizationFindings,
 	)

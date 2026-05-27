@@ -653,3 +653,78 @@ Removed in CO-011a.4 (chain-bound writes now go through `relay-client.ts` or `ch
 - Client logs -> Sentry/LogRocket.
 - Web Vitals tracked using Next.js analytics; exported to Hub for monitoring.
 - Hub emits audit logs for every mutation triggered via dashboard.
+
+## Signed Canonical Body — Submit Pathway (CO-029)
+
+### `lib/wevibe-signing.ts`
+
+`submitMemoryCanonical(orgId, epochId, submissionHash, contributorPubkey, memoryType, ciphertextHash, plaintextHash, salt, wrappedDekHash)` builds the 9-field canonical body. Field ordering is alphabetical after the domain tag `wevibe.submit_memory.v1`:
+
+```
+wevibe.submit_memory.v1
+ciphertext_hash:<hex>
+contributor_pubkey:<hex>
+epoch_id:<int>
+memory_type:<correct_implementation|negative_signal>
+org_id:<string>
+plaintext_hash:<hex>
+salt:<hex>
+submission_hash:<hex>
+wrapped_dek_hash:<hex>
+```
+
+Byte-identical to the hub Go builder and the MCP TypeScript builder. The function signature is `async` to match the existing pattern (the body itself is synchronous string assembly).
+
+### `lib/wevibe-submit.ts`
+
+`buildSubmitMemoryPayload` computes the four new hash commitments client-side using WebCrypto:
+
+1. `salt` = `crypto.getRandomValues(new Uint8Array(32))`, hex-encoded.
+2. `plaintext_hash` = `sha256(salt || TextEncoder.encode(memoryText))` via `crypto.subtle.digest('SHA-256', concatBufs(salt, plaintextBytes))`. **Salt prepends** the plaintext (locked by D-VR-3).
+3. `ciphertext_hash` = `sha256(fullCiphertext)` where `fullCiphertext = nonce || aes-gcm-ciphertext`.
+4. `wrapped_dek_hash` = `sha256(wrappedDek)` where `wrappedDek` is the X25519+AES-GCM sealed DEK.
+
+All four hex strings are passed to `submitMemoryCanonical` to build the canonical body. The body is signed with the identity's WebCrypto Ed25519 private key via `signCanonical`.
+
+### Submit payload — `SubmitMemoryPayload` interface
+
+```ts
+{
+  org_id: string;
+  epoch_id: number;
+  memory_type: MemoryType;
+  plaintext_hash: string;     // hex sha256(salt || plaintext_utf8)
+  salt: string;               // hex 32 random bytes
+  ciphertext_hash: string;    // hex sha256(ciphertext)
+  wrapped_dek_hash: string;   // hex sha256(wrapped_dek)
+  ciphertext: string;         // hex
+  wrapped_dek_mod: string;    // hex
+  submission_hash: string;    // hex sha256(ciphertext || wrapped_dek_mod)
+  contributor_pubkey: string; // hex
+  contributor_sig: string;    // hex Ed25519 signature
+  stack_hint: string[];
+  attestation: null;
+}
+```
+
+### D-VR-7 closure — plaintext removed from the wire
+
+The previous `plaintext: memoryText` field was REMOVED from `SubmitMemoryPayload` (per R-ONE-PATH). The dashboard never sends plaintext to the hub. The salted hash plus the contributor's signed binding are sufficient for the chain's Tier 2 verification anchor.
+
+Verification:
+
+```
+$ grep -n '"plaintext"' wevibe-server/wevibe-dashboard/lib/wevibe-submit.ts
+(zero matches; only plaintext_hash is present)
+```
+
+The hub no longer runs Unicode sanitization at submit time (it has no plaintext). For CO-029, the hub returns `sanitization_findings: null`. The dashboard's submission-result UI should treat findings as optional. Sprint 32 may port the YARA scanner to client-side; CO-029 does not ship a browser-side scanner.
+
+### Browser crypto requirements
+
+- WebCrypto `Ed25519` for signing the canonical body (`signCanonical`).
+- WebCrypto `SHA-256` for the four hashes.
+- WebCrypto `X25519` for `sealDekToModPubkey` (unchanged from prior CO).
+- WebCrypto `AES-GCM` for memory encryption (unchanged).
+
+The wevibe-sdk WASM bindings are NOT used in the dashboard submit path — pure browser WebCrypto. The same byte-identical canonical body is produced regardless of which Ed25519 implementation is used at sign time (the verifier only needs `pubkey`, `signature`, `body`).

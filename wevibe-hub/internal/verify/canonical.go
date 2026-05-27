@@ -155,14 +155,28 @@ func envelopesHash(envelopes []protocol.MemberEnvelopePair) string {
 	return hex.EncodeToString(h[:])
 }
 
-func SubmitMemoryMessage(orgID string, epochID int, submissionHash, contributorPubkey, memoryType string) []byte {
+func SubmitMemoryMessage(
+	orgID string,
+	epochID int,
+	submissionHash string,
+	contributorPubkey string,
+	memoryType string,
+	ciphertextHash string,
+	plaintextHash string,
+	salt string,
+	wrappedDekHash string,
+) []byte {
 	return []byte(strings.Join([]string{
 		"wevibe.submit_memory.v1",
+		fmt.Sprintf("ciphertext_hash:%s", ciphertextHash),
 		fmt.Sprintf("contributor_pubkey:%s", contributorPubkey),
 		fmt.Sprintf("epoch_id:%d", epochID),
 		fmt.Sprintf("memory_type:%s", memoryType),
 		fmt.Sprintf("org_id:%s", orgID),
+		fmt.Sprintf("plaintext_hash:%s", plaintextHash),
+		fmt.Sprintf("salt:%s", salt),
 		fmt.Sprintf("submission_hash:%s", submissionHash),
+		fmt.Sprintf("wrapped_dek_hash:%s", wrappedDekHash),
 	}, "\n"))
 }
 

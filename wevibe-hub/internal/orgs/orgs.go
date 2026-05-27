@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
 func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRequest) (*protocol.OrgInfo, error) {
@@ -123,10 +125,25 @@ func GetRotationPendingSince(ctx context.Context, pool *pgxpool.Pool, orgID stri
 }
 
 func BufferSubmission(ctx context.Context, pool *pgxpool.Pool, orgID string, req protocol.SubmitMemoryRequest) error {
+	canonical := verify.SubmitMemoryMessage(
+		req.OrgID,
+		req.EpochID,
+		req.SubmissionHash,
+		req.ContributorPubkey,
+		req.MemoryType,
+		req.CiphertextHash,
+		req.PlaintextHash,
+		req.Salt,
+		req.WrappedDekHash,
+	)
+	if err := verify.RequestSignature(req.ContributorPubkey, req.ContributorSig, canonical); err != nil {
+		return fmt.Errorf("rotation buffer signature verification failed: %w", err)
+	}
+
 	_, err := pool.Exec(ctx, `
-		INSERT INTO rotation_buffer (org_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, submission_hash, stack_hint, memory_type)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, orgID, req.ContributorPubkey, req.Ciphertext, req.WrappedDekMod, req.ContributorSig, req.SubmissionHash, req.StackHint, req.MemoryType)
+		INSERT INTO rotation_buffer (org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, submission_hash, stack_hint, memory_type, plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, orgID, req.EpochID, req.ContributorPubkey, req.Ciphertext, req.WrappedDekMod, req.ContributorSig, req.SubmissionHash, req.StackHint, req.MemoryType, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash)
 	return err
 }
 
@@ -138,7 +155,7 @@ func FinalizeRotationBuffer(ctx context.Context, pool *pgxpool.Pool, orgID strin
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT buffer_id, org_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, submission_hash, stack_hint, memory_type
+		SELECT buffer_id, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, submission_hash, stack_hint, memory_type, plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash
 		FROM rotation_buffer
 		WHERE org_id = $1
 		ORDER BY created_at
@@ -151,16 +168,34 @@ func FinalizeRotationBuffer(ctx context.Context, pool *pgxpool.Pool, orgID strin
 	count := 0
 	for rows.Next() {
 		var bufID, bOrgID, pubkey, ct, dek, sig, hash, memoryType string
+		var epochID int
+		var plaintextHash, salt, ciphertextHash, wrappedDekHash string
 		var stackHint []string
-		if err := rows.Scan(&bufID, &bOrgID, &pubkey, &ct, &dek, &sig, &hash, &stackHint, &memoryType); err != nil {
+		if err := rows.Scan(&bufID, &bOrgID, &epochID, &pubkey, &ct, &dek, &sig, &hash, &stackHint, &memoryType, &plaintextHash, &salt, &ciphertextHash, &wrappedDekHash); err != nil {
 			return 0, fmt.Errorf("scan buffer row: %w", err)
 		}
 
+		canonical := verify.SubmitMemoryMessage(
+			bOrgID,
+			epochID,
+			hash,
+			pubkey,
+			memoryType,
+			ciphertextHash,
+			plaintextHash,
+			salt,
+			wrappedDekHash,
+		)
+		if err := verify.RequestSignature(pubkey, sig, canonical); err != nil {
+			log.Printf("warning: skipping rotation buffer row with invalid signature: org_id=%s buffer_id=%s submission_hash=%s error=%v", bOrgID, bufID, hash, err)
+			continue
+		}
+
 		_, err := tx.Exec(ctx, `
-			INSERT INTO pending_submissions (submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, stack_hint, memory_type)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			INSERT INTO pending_submissions (submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash, wrapped_dek_mod, contributor_sig, stack_hint, memory_type)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 			ON CONFLICT (submission_hash) DO NOTHING
-		`, hash, orgID, newEpochID, pubkey, ct, dek, sig, stackHint, memoryType)
+		`, hash, orgID, newEpochID, pubkey, ct, plaintextHash, salt, ciphertextHash, wrappedDekHash, dek, sig, stackHint, memoryType)
 		if err != nil {
 			return 0, fmt.Errorf("insert pending from buffer: %w", err)
 		}

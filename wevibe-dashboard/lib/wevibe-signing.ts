@@ -87,19 +87,27 @@ async function keywordsHash(keywords: { keyword: string; weight: number }[]): Pr
 export type MemoryType = 'correct_implementation' | 'negative_signal';
 
 export async function submitMemoryCanonical(
-  orgId: string,
-  epochId: number,
-  submissionHash: string,
-  contributorPubkey: string,
-  memoryType: MemoryType,
+	orgId: string,
+	epochId: number,
+	submissionHash: string,
+	contributorPubkey: string,
+	memoryType: MemoryType,
+	ciphertextHash: string,
+	plaintextHash: string,
+	salt: string,
+	wrappedDekHash: string,
 ): Promise<Uint8Array> {
   const msg = [
     'wevibe.submit_memory.v1',
+    `ciphertext_hash:${ciphertextHash}`,
     `contributor_pubkey:${contributorPubkey}`,
     `epoch_id:${epochId}`,
     `memory_type:${memoryType}`,
     `org_id:${orgId}`,
+    `plaintext_hash:${plaintextHash}`,
+    `salt:${salt}`,
     `submission_hash:${submissionHash}`,
+    `wrapped_dek_hash:${wrappedDekHash}`,
   ].join('\n');
   return new TextEncoder().encode(msg);
 }

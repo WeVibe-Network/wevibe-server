@@ -1086,3 +1086,135 @@ The `org_id` column and its FK to `orgs` were **dropped** in CO-011a.4. `wallet_
 **Protocol types (CO-011a.4):**
 - `DelegateKeyRecord` — fields: `wallet_address`, `delegate_address`, `delegate_pubkey`, `grant_tx_hash`, `grant_expiration`, `active`, `created_at`. **No `OrgID` field.**
 - `RegisterDelegateKeyRequest` — wire-level payload unchanged: `wallet_address`, `delegate_address`, `delegate_pubkey`, `grant_tx_hash`, `grant_expiration`, `signed_by`, `signature`. No `org_id` field at the wire level (this matches the pre-CO-011a.4 contract).
+
+## Signed Canonical Body — Submit & Batch Pathway (CO-029)
+
+### Contributor submission contract
+
+`POST /v1/orgs/{orgID}/submit` and `POST /v1/orgs/{orgID}/submit/batch` accept the expanded `SubmitMemoryRequest`:
+
+```jsonc
+{
+  "org_id":             "...",
+  "epoch_id":           0,
+  "memory_type":        "correct_implementation" | "negative_signal",
+  "ciphertext":         "<hex of encrypted memory bytes>",
+  "wrapped_dek_mod":    "<hex of moderator-wrapped DEK>",
+  "submission_hash":    "<hex sha256(ciphertext || wrapped_dek_mod)>",
+  "contributor_pubkey": "<hex Ed25519 32 bytes>",
+  "contributor_sig":    "<hex Ed25519 signature over 9-field canonical body>",
+  "stack_hint":         ["..."],
+  // CO-029 additions:
+  "plaintext_hash":     "<hex sha256(salt || plaintext_utf8), 64 chars>",
+  "salt":               "<hex 32 random bytes, 64 chars>",
+  "ciphertext_hash":    "<hex sha256(ciphertext), 64 chars>",
+  "wrapped_dek_hash":   "<hex sha256(wrapped_dek_mod), 64 chars>"
+}
+```
+
+The `plaintext` field has been REMOVED from `SubmitMemoryRequest` entirely (per R-ONE-PATH and D-VR-7). The hub never sees plaintext; only the salted hash plus the contributor's signed binding.
+
+### Canonical body (9 fields, alphabetical after domain tag)
+
+```
+wevibe.submit_memory.v1
+ciphertext_hash:<hex>
+contributor_pubkey:<hex>
+epoch_id:<int>
+memory_type:<correct_implementation|negative_signal>
+org_id:<string>
+plaintext_hash:<hex>
+salt:<hex>
+submission_hash:<hex>
+wrapped_dek_hash:<hex>
+```
+
+Implemented in `internal/verify/canonical.go` as `SubmitMemoryMessage`. The builder is byte-identical to the MCP TypeScript builder (`wevibe-mcp/src/canonical.ts`) and the dashboard WebCrypto builder (`wevibe-server/wevibe-dashboard/lib/wevibe-signing.ts`). Cross-language conformance is locked by `internal/verify/canonical_test.go::TestCanonicalBodyCrossLanguageConformance` over three test vectors.
+
+### `SubmitToQueue` verification chain (`internal/moderation/moderation.go`)
+
+For each submission the hub:
+
+1. Validates `plaintext_hash` and `salt` are exactly 64 hex chars (`isValidHex64`).
+2. Rebuilds the 9-field canonical body via `verify.SubmitMemoryMessage` and calls `verify.RequestSignature(contributor_pubkey, contributor_sig, canonical)`.
+3. Recomputes `sha256(ciphertext_bytes || wrapped_dek_bytes)` and asserts it equals `submission_hash`.
+4. Recomputes `sha256(ciphertext_bytes)` and asserts it equals `ciphertext_hash`.
+5. Recomputes `sha256(wrapped_dek_bytes)` and asserts it equals `wrapped_dek_hash`.
+6. Inserts the row with the four new columns into `pending_submissions`.
+
+Sanitization at intake is disabled (hub no longer sees plaintext); the `sanitizationFindings` parameter is passed as `nil` from the HTTP handler. Moderator-decrypt-time sanitization is a Sprint 32 deliverable; for CO-029 `pending_submissions.sanitization_findings` is left null at intake.
+
+**Test coverage** (`internal/moderation/moderation_test.go`):
+- `TestSubmitToQueue_HappyPath` — round-trips and asserts new columns landed.
+- `TestSubmitToQueue_BadSignatureOverNineFieldBody` — legacy 5-field sig is rejected.
+- `TestSubmitToQueue_BadCiphertextHashMismatch`, `TestSubmitToQueue_BadWrappedDekHashMismatch`.
+- `TestSubmitToQueue_InvalidPlaintextHashFormat`, `TestSubmitToQueue_InvalidSaltFormat`.
+- `TestHubNeverStoresPlaintext` — sentinel string check across all non-ciphertext columns.
+
+### Schema changes (`db/schema.sql`, `db/migrations/000001_initial_schema.up.sql`)
+
+`pending_submissions` and `rotation_buffer` both gained four NOT NULL columns:
+
+```sql
+plaintext_hash    TEXT NOT NULL,
+salt              TEXT NOT NULL,
+ciphertext_hash   TEXT NOT NULL,
+wrapped_dek_hash  TEXT NOT NULL,
+```
+
+### Batch path: D-VR-5 fix + chain field forwarding
+
+`BatchSubmitToChain` (`internal/api/handlers/moderation.go`) now reads
+`ps.plaintext_hash`, `ps.salt`, `ps.ciphertext_hash`, `ps.contributor_sig`
+alongside the previously selected columns and populates them on `BatchMemory`.
+
+The construction site at `internal/api/handlers/moderation.go:780` now sets
+`WrappedDekEnc: wrappedDekEncBytes` from `pending_submissions.wrapped_dek_mod`.
+**Before CO-029, this field was nil on every memory the hub sent to the chain
+(D-VR-5).** Post-fix, the chain receives the actual wrapped DEK and can
+re-derive `wrapped_dek_hash` for verification and persistence.
+
+`BatchMemory` (`internal/chain/submit.go:14`) gained:
+- `PlaintextHash []byte`
+- `Salt []byte`
+- `CiphertextHash []byte`
+- `ContributorSig []byte`
+- `ContributorPubkey string`
+
+`SubmitMemoryToChain` and `SubmitMemoryBatchAtomic` populate the corresponding
+fields on `MsgApproveMemory` before broadcasting.
+
+### Rotation buffer: D-VR-6 signature verification
+
+`internal/orgs/orgs.go`:
+
+- `BufferSubmission` rebuilds the 9-field canonical body and calls
+  `verify.RequestSignature` BEFORE the `INSERT INTO rotation_buffer`. A forged
+  signature causes the function to return an error; the row is never persisted.
+- `FinalizeRotationBuffer` (the flush from `rotation_buffer` →
+  `pending_submissions`) reconstructs the canonical body for every row,
+  re-verifies, and logs+skips rows that fail. Honest rows in the same flush
+  proceed normally.
+
+Both code paths now select / insert the four new columns in addition to the
+previously persisted fields.
+
+### Plaintext sentinel removed from `SubmitMemoryRequest`
+
+The `Plaintext string` field was removed from `internal/protocol/types.go` per
+R-ONE-PATH. There is no dual-handling code path. Any future caller attempting
+to send `plaintext` in the JSON body will silently have it ignored at JSON
+unmarshal time (extra fields). The HTTP handler at `internal/api/handlers/
+moderation.go` validates that `plaintext_hash`, `salt`, `ciphertext_hash`, and
+`wrapped_dek_hash` are all non-empty before forwarding to `SubmitToQueue`.
+
+### Cross-module impact
+
+- `BatchMemory.WrappedDekEnc` is now always populated → chain receives the
+  bytes needed to derive `wrapped_dek_hash` on commit and to support Tier 2
+  off-chain verification via `VerifyUpheldReport`.
+- Hub no longer accepts or stores plaintext at any layer → the original D-VR-7
+  plaintext-over-TLS exposure is closed.
+- The four signed hash commitments flow Hub → Chain via `MsgApproveMemory`
+  fields 9–12, then chain-side keeper verification (see
+  `wevibe-chain/x/memory/keeper/msg_server.go`) gates persistence.

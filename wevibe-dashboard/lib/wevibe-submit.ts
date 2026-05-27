@@ -144,8 +144,11 @@ export interface SubmitMemoryParams {
 export interface SubmitMemoryPayload {
   org_id: string;
   epoch_id: number;
-  plaintext: string;
   memory_type: MemoryType;
+  plaintext_hash: string;
+  salt: string;
+  ciphertext_hash: string;
+  wrapped_dek_hash: string;
   ciphertext: string;
   wrapped_dek_mod: string;
   submission_hash: string;
@@ -184,23 +187,45 @@ export async function buildSubmitMemoryPayload(
 
   const dek = generateDek();
   const { ciphertext, nonce } = await encryptMemory(memoryText, dek);
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const plaintextBytes = new TextEncoder().encode(memoryText);
+  const plaintextHashBuffer = await crypto.subtle.digest(
+    'SHA-256',
+    concatBufs(salt, plaintextBytes).buffer as ArrayBuffer,
+  );
+  const plaintextHashHex = bufToHex(plaintextHashBuffer);
+  const saltHex = bufToHex(salt.buffer as ArrayBuffer);
 
   const wrappedDek = await sealDekToModPubkey(dek, modPubkeyHex);
+  const wrappedDekHashBuffer = await crypto.subtle.digest(
+    'SHA-256',
+    wrappedDek.buffer as ArrayBuffer,
+  );
+  const wrappedDekHashHex = bufToHex(wrappedDekHashBuffer);
 
   const fullCiphertext = concatBufs(nonce, ciphertext);
+  const ciphertextHashBuffer = await crypto.subtle.digest(
+    'SHA-256',
+    fullCiphertext.buffer as ArrayBuffer,
+  );
+  const ciphertextHashHex = bufToHex(ciphertextHashBuffer);
   const submissionHashBytes = await computeSubmissionHash(
     fullCiphertext,
     wrappedDek,
   );
   const submissionHashHex = bufToHex(submissionHashBytes.buffer as ArrayBuffer);
 
-  const canonical = await submitMemoryCanonical(
-    orgId,
-    epochId,
-    submissionHashHex,
-    identity.pubkeyHex,
-    memoryType,
-  );
+	const canonical = await submitMemoryCanonical(
+		orgId,
+		epochId,
+		submissionHashHex,
+		identity.pubkeyHex,
+		memoryType,
+		ciphertextHashHex,
+		plaintextHashHex,
+		saltHex,
+		wrappedDekHashHex,
+	);
   const signatureHex = await signCanonical(
     identity.privateKey,
     canonical,
@@ -211,8 +236,11 @@ export async function buildSubmitMemoryPayload(
     payload: {
       org_id: orgId,
       epoch_id: epochId,
-      plaintext: memoryText,
       memory_type: memoryType,
+      plaintext_hash: plaintextHashHex,
+      salt: saltHex,
+      ciphertext_hash: ciphertextHashHex,
+      wrapped_dek_hash: wrappedDekHashHex,
       ciphertext: bufToHex(fullCiphertext.buffer as ArrayBuffer),
       wrapped_dek_mod: bufToHex(wrappedDek.buffer as ArrayBuffer),
       submission_hash: submissionHashHex,

@@ -10,7 +10,7 @@ const (
 const (
 	SubmissionStatusPending        = "pending"
 	SubmissionStatusPendingKeyword = "pending_keyword"
-	SubmissionStatusPendingChain  = "pending_chain"
+	SubmissionStatusPendingChain   = "pending_chain"
 	SubmissionStatusCommitted      = "committed"
 	SubmissionStatusDenied         = "denied"
 )
@@ -132,8 +132,11 @@ type MemberEnvelopePair struct {
 type SubmitMemoryRequest struct {
 	OrgID             string   `json:"org_id"`
 	EpochID           int      `json:"epoch_id"`
-	Plaintext         string   `json:"plaintext"`
 	Ciphertext        string   `json:"ciphertext"`
+	PlaintextHash     string   `json:"plaintext_hash"`
+	Salt              string   `json:"salt"`
+	CiphertextHash    string   `json:"ciphertext_hash"`
+	WrappedDekHash    string   `json:"wrapped_dek_hash"`
 	WrappedDekMod     string   `json:"wrapped_dek_mod"`
 	SubmissionHash    string   `json:"submission_hash"`
 	ContributorPubkey string   `json:"contributor_pubkey"`
@@ -157,21 +160,21 @@ type Finding struct {
 }
 
 type PendingQueueItem struct {
-	SubmissionHash    string    `json:"submission_hash"`
-	OrgID             string    `json:"org_id"`
-	EpochID           int       `json:"epoch_id"`
-	ContributorPubkey string    `json:"contributor_pubkey"`
-	ContributorWallet string    `json:"contributor_wallet,omitempty"`
-	ContributorDisplayName string `json:"contributor_display_name,omitempty"`
-	CiphertextHex     string    `json:"ciphertext_hex"`
-	WrappedDekMod     string    `json:"wrapped_dek_mod"`
-	StackHint         []string  `json:"stack_hint"`
-	MemoryType        string    `json:"memory_type"`
-	CreatedAt         time.Time `json:"created_at"`
-	Status            string    `json:"status"`
-	Votes             int       `json:"votes"`
-	RequiredApprovals int       `json:"required_approvals"`
-	VoterPubkeys      []string  `json:"voter_pubkeys,omitempty"`
+	SubmissionHash         string    `json:"submission_hash"`
+	OrgID                  string    `json:"org_id"`
+	EpochID                int       `json:"epoch_id"`
+	ContributorPubkey      string    `json:"contributor_pubkey"`
+	ContributorWallet      string    `json:"contributor_wallet,omitempty"`
+	ContributorDisplayName string    `json:"contributor_display_name,omitempty"`
+	CiphertextHex          string    `json:"ciphertext_hex"`
+	WrappedDekMod          string    `json:"wrapped_dek_mod"`
+	StackHint              []string  `json:"stack_hint"`
+	MemoryType             string    `json:"memory_type"`
+	CreatedAt              time.Time `json:"created_at"`
+	Status                 string    `json:"status"`
+	Votes                  int       `json:"votes"`
+	RequiredApprovals      int       `json:"required_approvals"`
+	VoterPubkeys           []string  `json:"voter_pubkeys,omitempty"`
 }
 
 type KeywordWithWeight struct {
