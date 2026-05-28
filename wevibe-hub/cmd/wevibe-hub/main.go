@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"strings"
@@ -39,6 +40,17 @@ func corsOrigins() []string {
 
 func main() {
 	cfg := config.Load()
+	retrievalRanker := &retrieval.ProbabilisticRanker{
+		Temperature:       cfg.RetrievalTemperature,
+		NewMemBoostMult:   cfg.RetrievalNewMemBoostMult,
+		NewMemBoostWindow: cfg.RetrievalNewMemBoostWindow,
+		GraceEpochs:       20,
+		RNG:               rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+	retrieval.SetRetrievalRanker(retrievalRanker)
+	log.Printf("retrieval ranker configured: T=%.2f boost=%.2f window=%d",
+		retrievalRanker.Temperature, retrievalRanker.NewMemBoostMult, retrievalRanker.NewMemBoostWindow)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := db.RunMigrations(cfg.DatabaseURL); err != nil {

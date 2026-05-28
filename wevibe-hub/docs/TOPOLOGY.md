@@ -524,31 +524,34 @@ The `last_chain_submission_at` field is now updated by the ChainWatcher when `Ms
 
 ## Qdrant Chain Parity (CO-224)
 
-## Qdrant Chain Parity (CO-224)
-
 ### Retrieval Architecture
 
-Chain is the authority for retrieval metadata (`keywords`, `retrieval_confidence_bps`, `state`).
+Chain is the authority for retrieval metadata (`keyword_weights`, `state`).
 Hub mirrors that metadata into Qdrant for fast lookup and ranking.
 
 **Qdrant payload fields (approved memories):**
-- Required: `cid`, `org_id`, `epoch_id`, `content_flags`, `keywords`, `confidence_bps`, `lifecycle_state`
+- Required: `cid`, `org_id`, `epoch_id`, `content_flags`, `keyword_weights`, `lifecycle_state`, `memory_type`
 - Optional embedding metadata: `embedding_model_id`, `embedding_schema_version`, `vector_dim`
 
 **Keyword lifecycle:**
-- `UpsertPoint` writes `keywords` from `IndexEntry.Keywords` at approval time
+- `UpsertPoint` writes `keyword_weights` from `IndexEntry.Keywords` at approval time
 - `UpdateMemoryKeywords` is restored and used by merge/rename keyword handlers
 - PostgreSQL `memory_keywords` remains the write-ahead cache; Qdrant is the retrieval cache
 
-**Confidence/state lifecycle:**
-- `UpsertPoint` writes initial values at approval (`confidence_bps=10000`, `lifecycle_state=APPROVED`)
-- `UpdateMemoryConfidenceAndState` updates payload by (`org_id`, `cid`) via Qdrant `set_payload`
-- `SyncEpochData` (new, `internal/chain/sync.go`) polls chain gRPC each interval and reconciles payload deltas
+**State lifecycle:**
+- `UpsertPoint` writes initial lifecycle data at approval (`lifecycle_state=ACTIVE`)
+- `UpdateMemoryState` updates payload by (`org_id`, `cid`) via Qdrant `set_payload`
+- `SyncEpochData` (`internal/chain/sync.go`) polls chain gRPC each interval and reconciles lifecycle deltas
 
 **Query behavior (`QueryPoints`):**
 - Always excludes `ARCHIVED`
 - Excludes `DORMANT` by default; caller can include via `include_dormant=true`
-- Ranks by weighted score: base `vector_similarity + keyword_overlap_boost*0.1`, then applies optimistic denial decay `pending_denial_count*0.05` (floored at zero)
+- Ranks with D-9.4 flow:
+  - `raw_score = vector_similarity + keyword_overlap_boost*0.1`
+  - `optimistic_score = max(0, raw_score - pending_denial_count*0.05)`
+  - `query_score = optimistic_score * (1 + boostMult * max(0, 1 - age/window))`, where `window = grace + boostWindow`
+  - position 1 is strict argmax by `query_score`; positions 2..N are sampled without replacement with tempered power-law weights `w_i = (score_i/score_max)^(1/T)`
+- Runtime tuning env vars: `RETRIEVAL_TEMPERATURE` (default `0.7`), `RETRIEVAL_NEW_MEM_BOOST_MULT` (default `0.5`), `RETRIEVAL_NEW_MEM_BOOST_WINDOW` (default `30`)
 - Uses Qdrant payload metadata directly (no PostgreSQL keyword read on query path)
 
 **Scroll behavior (`ScrollApprovedMemories`):**
@@ -738,7 +741,7 @@ const (
 ## Data Stores
 
 - **PostgreSQL** — orgs, members (including `pre_pubkey`), epoch manifests (including `umbral_pk`), pending submissions (including `umbral_capsule`, `umbral_ciphertext`, and `banned`), moderation queue, audit log, credit ledger, key envelopes, recovery shares, dashboard keys, delegate keys, keyword vocabulary, serve_events (with `event_type IN ('serve', 'denial')` and `reason` column), reports (with `resolution` tracking), wallet addresses (nullable, unique per org).
-- **Qdrant** — vector index + chain-mirrored retrieval metadata for approved memories (`keywords`, `confidence_bps`, `lifecycle_state`) used for filtering/ranking.
+- **Qdrant** — vector index + chain-mirrored retrieval metadata for approved memories (`keyword_weights`, `lifecycle_state`, `memory_type`) used for filtering/ranking.
 - **Object storage** (optional) — ciphertext blobs referenced by CID.
 
 ## Chain Client (`internal/chain/`)
@@ -878,10 +881,13 @@ Removed route:
 
 - `POST /v1/orgs/{orgID}/query` returns memory candidates enriched with trust stats.
 - Query scoring uses a two-step ranking formula:
-  - `base_score = vector_similarity + (keyword_overlap_boost * 0.1)`
-  - `optimistic_score = max(0, base_score - (pending_denial_count * 0.05))`
+  - `raw_score = vector_similarity + (keyword_overlap_boost * 0.1)`
+  - `optimistic_score = max(0, raw_score - (pending_denial_count * 0.05))`
+  - `query_score = optimistic_score * (1 + boostMult * max(0, 1 - age/window))`, where `window = grace + boostWindow`
+  - position assignment: strict top-1, then tempered power-law sampling for positions 2..N using `(score_i/score_max)^(1/T)`
 - `pending_denial_count` is computed from `serve_events` rows where `event_type='denial'` and `status='pending'`, grouped by `memory_content_hash` for the candidate CIDs returned by Qdrant.
 - `DenialDecayBPS` is a hardcoded retrieval constant: `500` (0.05 per pending denial).
+- Retrieval tuning is configured by env vars: `RETRIEVAL_TEMPERATURE=0.7`, `RETRIEVAL_NEW_MEM_BOOST_MULT=0.5`, `RETRIEVAL_NEW_MEM_BOOST_WINDOW=30` (with `grace=20` giving `window=50`).
 - This optimistic adjustment is load-bearing per D-2026-05-25-A: denial impact appears at query time immediately, then naturally disappears from pending counts when watcher bookkeeping flips rows to `status='submitted'`.
 - Retrieval lifecycle tiers are enforced in Qdrant filtering: `ARCHIVED` is hard-excluded, `DORMANT` is hidden by default and only included when requested.
 - Every result includes `retrieval_count`, `acceptance_count`, and `contributor_stats` (account age, contributions, reports upheld, false reports against).

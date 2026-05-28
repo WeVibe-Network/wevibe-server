@@ -45,10 +45,158 @@ const (
 	DenialDecayBPS    = 500
 	ServeBoostBPS     = 100
 	MaxServesPerEpoch = 5
-	IdleDecayBPS      = 50
 )
 
 var ErrInvalidOffset = errors.New("invalid offset token")
+
+type scoredResult struct {
+	result             protocol.MemoryResult
+	weightedScore      float64
+	memoryCreatedEpoch uint64
+}
+
+type ProbabilisticRanker struct {
+	Temperature       float64
+	NewMemBoostMult   float64
+	NewMemBoostWindow uint64
+	GraceEpochs       uint64
+	RNG               *rand.Rand
+}
+
+var defaultRanker *ProbabilisticRanker
+
+func SetRetrievalRanker(r *ProbabilisticRanker) {
+	defaultRanker = r
+}
+
+func getRanker() *ProbabilisticRanker {
+	if defaultRanker != nil {
+		return defaultRanker
+	}
+
+	return &ProbabilisticRanker{
+		Temperature:       0.7,
+		NewMemBoostMult:   0.5,
+		NewMemBoostWindow: 30,
+		GraceEpochs:       20,
+		RNG:               rand.New(rand.NewSource(1)),
+	}
+}
+
+func (r *ProbabilisticRanker) applyNewMemoryBoost(rawScore float64, memoryCreatedEpoch, currentEpoch uint64) float64 {
+	if rawScore == 0 || r.NewMemBoostMult <= 0 || r.NewMemBoostWindow == 0 {
+		return rawScore
+	}
+
+	window := float64(r.GraceEpochs + r.NewMemBoostWindow)
+	if window <= 0 {
+		return rawScore
+	}
+
+	age := float64(0)
+	if currentEpoch > memoryCreatedEpoch {
+		age = float64(currentEpoch - memoryCreatedEpoch)
+	}
+
+	fraction := 1.0 - age/window
+	if fraction < 0 {
+		fraction = 0
+	}
+
+	return rawScore * (1 + r.NewMemBoostMult*fraction)
+}
+
+func (r *ProbabilisticRanker) probabilisticRank(scored []scoredResult, limit int) []scoredResult {
+	if len(scored) == 0 || limit <= 0 {
+		return nil
+	}
+	if limit > len(scored) {
+		limit = len(scored)
+	}
+	if limit <= 1 || len(scored) <= 1 {
+		return scored[:limit]
+	}
+
+	top := scored[0]
+	rest := scored[1:]
+	maxScore := rest[0].weightedScore
+
+	temp := r.Temperature
+	if temp < 0.01 {
+		temp = 0.01
+	}
+	invT := 1.0 / temp
+
+	weights := make([]float64, len(rest))
+	for i, sr := range rest {
+		if maxScore <= 0 {
+			weights[i] = 0
+			continue
+		}
+		ratio := sr.weightedScore / maxScore
+		if ratio < 0 {
+			ratio = 0
+		}
+		weights[i] = math.Pow(ratio, invT)
+	}
+
+	k := limit - 1
+	if k > len(rest) {
+		k = len(rest)
+	}
+
+	rng := r.RNG
+	if rng == nil {
+		rng = rand.New(rand.NewSource(1))
+	}
+
+	sampled := make([]int, 0, k)
+	availIdx := make([]int, len(rest))
+	for i := range availIdx {
+		availIdx[i] = i
+	}
+	availW := append([]float64(nil), weights...)
+
+	for draw := 0; draw < k && len(availIdx) > 0; draw++ {
+		total := 0.0
+		for _, w := range availW {
+			total += w
+		}
+		if total <= 0 {
+			break
+		}
+
+		target := rng.Float64() * total
+		chosen := len(availIdx) - 1
+		cum := 0.0
+		for j, w := range availW {
+			cum += w
+			if target <= cum {
+				chosen = j
+				break
+			}
+		}
+
+		sampled = append(sampled, availIdx[chosen])
+		availIdx = append(availIdx[:chosen], availIdx[chosen+1:]...)
+		availW = append(availW[:chosen], availW[chosen+1:]...)
+	}
+
+	sampledSet := make(map[int]struct{}, len(sampled))
+	for _, idx := range sampled {
+		sampledSet[idx] = struct{}{}
+	}
+
+	out := make([]scoredResult, 0, len(sampled)+1)
+	out = append(out, top)
+	for idx, sr := range rest {
+		if _, ok := sampledSet[idx]; ok {
+			out = append(out, sr)
+		}
+	}
+
+	return out
+}
 
 const (
 	vectorRecallDepth = 30
@@ -344,12 +492,18 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		return nil, false, fmt.Errorf("load pending denial counts: %w", err)
 	}
 
-	type scoredResult struct {
-		result        protocol.MemoryResult
-		weightedScore float64
-	}
-
 	scoredResults := make([]scoredResult, 0, len(searchResp.Result))
+	currentEpoch := uint64(0)
+	for _, e := range epochs {
+		if e < 0 {
+			continue
+		}
+		if uint64(e) > currentEpoch {
+			currentEpoch = uint64(e)
+		}
+	}
+	ranker := getRanker()
+
 	for _, r := range searchResp.Result {
 		payload := r.Payload
 		cid, _ := payload["cid"].(string)
@@ -361,6 +515,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		if epoch, ok := payload["epoch_id"].(float64); ok {
 			epochID = int32(epoch)
 		}
+		memoryCreatedEpoch := getRESTUint64(payload, "epoch_id")
 		authorized := false
 		for _, e := range epochs {
 			if e == epochID {
@@ -416,10 +571,18 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 				ContentFlags:   contentFlags,
 				Keywords:       keywords,
 			},
-			weightedScore: finalScore,
+			weightedScore:      finalScore,
+			memoryCreatedEpoch: memoryCreatedEpoch,
 		})
 	}
 
+	sort.SliceStable(scoredResults, func(i, j int) bool {
+		return scoredResults[i].weightedScore > scoredResults[j].weightedScore
+	})
+	for i := range scoredResults {
+		// D-9.4 new-memory boost (linear decay over grace+boostWindow epochs).
+		scoredResults[i].weightedScore = ranker.applyNewMemoryBoost(scoredResults[i].weightedScore, scoredResults[i].memoryCreatedEpoch, currentEpoch)
+	}
 	sort.SliceStable(scoredResults, func(i, j int) bool {
 		return scoredResults[i].weightedScore > scoredResults[j].weightedScore
 	})
@@ -427,11 +590,12 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	if limit == 0 || limit > uint64(len(scoredResults)) {
 		limit = uint64(len(scoredResults))
 	}
+	// D-9.4 power-law sampler. Source: wevibe-sim/ranking-fix.js:73-111.
+	rankedResults := ranker.probabilisticRank(scoredResults, int(limit))
 
 	var memoryResults []protocol.MemoryResult
 	var topScore, secondScore float64
-	for i := uint64(0); i < limit; i++ {
-		sr := scoredResults[i]
+	for i, sr := range rankedResults {
 		// CO-021: surface the post-decay final score so consumers (including
 		// the denial-loop smoke test) can observe the optimistic ledger.
 		// ScoringBreakdown is the pre-existing carrier for this value; only
