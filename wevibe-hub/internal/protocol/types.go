@@ -257,6 +257,7 @@ type MemoryResult struct {
 	Capsule          string              `json:"capsule,omitempty"`
 	ContentFlags     []string            `json:"content_flags"`
 	Keywords         []KeywordWithWeight `json:"keywords,omitempty"`
+	MatchedKeywords  []string            `json:"matched_keywords,omitempty"`
 	Breakdown        *ScoringBreakdown   `json:"scoring_breakdown,omitempty"`
 	ChainAttested    bool                `json:"chain_attested"`
 	RetrievalCount   int                 `json:"retrieval_count"`

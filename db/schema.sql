@@ -314,6 +314,7 @@ CREATE TABLE serve_events (
     nullifier           TEXT        NOT NULL,
     model_id            TEXT        NOT NULL DEFAULT '',
     turn_count          INTEGER     NOT NULL DEFAULT 0,
+    matched_keywords    TEXT[]      NOT NULL,
     reporter_pubkey     TEXT        NOT NULL,
     reason              TEXT,
     event_type          TEXT        NOT NULL DEFAULT 'serve'

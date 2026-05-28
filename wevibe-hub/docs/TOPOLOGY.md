@@ -705,6 +705,26 @@ const (
 
 **Removed:** All references to memory-level `confidence_bps`. Keyword weights ARE the health metric.
 
+## Matched Keyword Persistence (CO-033a)
+
+Hub persists the per-serve matched-keyword set — the intersection of the served memory's keywords and the query's keyword set — on every `serve_events` row. Sim source: `wevibe-sim/ranking-fix.js:184`. Chain side: `wevibe-chain/x/serve/types/msgs.go:32-34` rejects empty sets per D-4.2 Implementation Clarifications (DMO-007) since CO-031 Rev 2.
+
+**Schema (`serve_events`):**
+- `matched_keywords TEXT[] NOT NULL` (migration `000005_add_serve_events_matched_keywords.up.sql`). No default — every INSERT must supply the value explicitly. Pre-MVP wipe required per D-13.9 when applying against a non-empty table; dogfood resets state via `docker compose down -v` in `wevibe-meta/Makefile`.
+
+**Write path (`internal/serves/serves.go`):**
+- `RecordServe` (POST `/v1/orgs/{orgID}/serves`): client supplies `matched_keywords []string` (required). `normalizeMatchedKeywords` lowercases, trims, and dedupes; rejects empty / nil / whitespace-only input. The canonical slice is written into `serve_events.matched_keywords`. The handler at `internal/api/handlers/serves.go:81-86` catches the "matched_keywords" substring in validation errors and returns HTTP 400.
+- `RecordDenial` (POST `/v1/orgs/{orgID}/denials`): supplies `'{}'::TEXT[]` literal because denial-side matched_keywords is out of CO-033a scope (chain `DenialEntry` proto has no `matched_keywords` field at chain commit 533d18b). CO-033b may add denial matched_keywords if a chain proto change lands.
+
+**Read path:**
+- `protocol.MemoryResult.MatchedKeywords []string` (json `matched_keywords,omitempty`) — populated at retrieval time. `internal/retrieval/retrieval.go QueryPoints` extracts the matched-keyword details returned by `computeKeywordScore`, lowercases/trims/dedupes, sorts deterministically, and drops the candidate when the query supplied keywords but the intersection is empty (consistent with the sim's `applyNewMemoryBoost` base==0 short-circuit).
+- All `serve_events` SELECTs (`GetPendingServes`, `GetPendingDenials`, `GetServeEventByNullifier`, the post-INSERT SELECTs inside `RecordServe` / `RecordDenial`) scan `matched_keywords` into `ServeEventRecord.MatchedKeywords`.
+
+**Chain submission gap (CO-033b territory):**
+- No production code currently broadcasts `MsgSubmitServeBatch`. `internal/chain/submit.go:SubmitServeBatch` exists as a typed wrapper but has no caller (per WHITEPAPER.md:72 the broadcaster is the dashboard via the relay endpoint per CO-011a.4, but the dashboard caller is still unimplemented — `wevibe-server/wevibe-dashboard/app/(dashboard)/chain-submit/page.tsx:212` shows the stub). CO-033b builds: (1) `wevibe-protocol` JS bindings regen so `ServeEntry.matchedKeywords` exists on the wire, (2) the dashboard `MsgSubmitServeBatch` caller, (3) MCP + opencode-plugin payload updates so `POST /v1/serves` includes `matched_keywords`, (4) the empirical replay harness that measures chain.gap against sim.
+
+**Side fix (CO-033a):** `RecordServe` previously wrote `NULL` to `reason` but the post-INSERT SELECT scanned into a non-pointer string field, raising "cannot scan NULL into *string". Fix: write `''` (empty string) on serve INSERT. R-ONE-PATH: one canonical empty value, no NULL/'' duality. No call site depended on the NULL semantic (`rg "reason IS NULL"` returned zero).
+
 ## Deployment Diagram (CO-258)
 
 ```
@@ -740,7 +760,7 @@ const (
 
 ## Data Stores
 
-- **PostgreSQL** — orgs, members (including `pre_pubkey`), epoch manifests (including `umbral_pk`), pending submissions (including `umbral_capsule`, `umbral_ciphertext`, and `banned`), moderation queue, audit log, credit ledger, key envelopes, recovery shares, dashboard keys, delegate keys, keyword vocabulary, serve_events (with `event_type IN ('serve', 'denial')` and `reason` column), reports (with `resolution` tracking), wallet addresses (nullable, unique per org).
+- **PostgreSQL** — orgs, members (including `pre_pubkey`), epoch manifests (including `umbral_pk`), pending submissions (including `umbral_capsule`, `umbral_ciphertext`, and `banned`), moderation queue, audit log, credit ledger, key envelopes, recovery shares, dashboard keys, delegate keys, keyword vocabulary, serve_events (with `event_type IN ('serve', 'denial')`, `reason` column, and `matched_keywords TEXT[] NOT NULL` column added by CO-033a migration 000005), reports (with `resolution` tracking), wallet addresses (nullable, unique per org).
 - **Qdrant** — vector index + chain-mirrored retrieval metadata for approved memories (`keyword_weights`, `lifecycle_state`, `memory_type`) used for filtering/ranking.
 - **Object storage** (optional) — ciphertext blobs referenced by CID.
 

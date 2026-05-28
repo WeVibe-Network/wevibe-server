@@ -539,7 +539,27 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			storedKeywords = append(storedKeywords, kw)
 		}
 
-		keywordBoost, _, _ := computeKeywordScore(storedWeights, storedKeywords, queryWeightsMap)
+		keywordBoost, matchedKeywordDetails, _ := computeKeywordScore(storedWeights, storedKeywords, queryWeightsMap)
+
+		matchedKeywords := make([]string, 0, len(matchedKeywordDetails))
+		seenMatched := make(map[string]struct{}, len(matchedKeywordDetails))
+		for _, detail := range matchedKeywordDetails {
+			keyword := strings.ToLower(strings.TrimSpace(detail.Keyword))
+			if keyword == "" {
+				continue
+			}
+			if _, exists := seenMatched[keyword]; exists {
+				continue
+			}
+			seenMatched[keyword] = struct{}{}
+			matchedKeywords = append(matchedKeywords, keyword)
+		}
+		sort.Strings(matchedKeywords)
+
+		if len(queryWeightsMap) > 0 && len(matchedKeywords) == 0 {
+			continue
+		}
+
 		finalScore := vectorScore + keywordBoost*keywordBoostFactor
 		if count := pendingDenialCounts[cid]; count > 0 {
 			// D-2026-05-25-A invariant: consumer denials must impact ranking
@@ -563,13 +583,14 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 
 		scoredResults = append(scoredResults, scoredResult{
 			result: protocol.MemoryResult{
-				CID:            cid,
-				OrgID:          orgID,
-				EpochID:        int(epochID),
-				LifecycleState: lifecycleState,
-				MemoryType:     memoryType,
-				ContentFlags:   contentFlags,
-				Keywords:       keywords,
+				CID:             cid,
+				OrgID:           orgID,
+				EpochID:         int(epochID),
+				LifecycleState:  lifecycleState,
+				MemoryType:      memoryType,
+				ContentFlags:    contentFlags,
+				Keywords:        keywords,
+				MatchedKeywords: matchedKeywords,
 			},
 			weightedScore:      finalScore,
 			memoryCreatedEpoch: memoryCreatedEpoch,
