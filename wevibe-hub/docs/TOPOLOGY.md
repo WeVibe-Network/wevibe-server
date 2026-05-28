@@ -450,20 +450,16 @@ The hub implements a multi-stage memory lifecycle that decouples approval from k
 
 **Vote flow:** Moderators cast approval votes on `pending` submissions. When quorum is reached (or leader override), status transitions to `pending_keyword`. Only `pending` submissions are votable — `pending_keyword`, `pending_chain`, `committed`, and `denied` block further voting.
 
-**Schema updates (CO-238, CO-020):**
+**Schema updates (CO-238, CO-020, CO-030):**
 ```sql
 -- pending_submissions additions
 status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied'))
+    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied', 'ready', 'approved'))
 moderator_pubkey TEXT           -- moderator who approved
 approved_at TIMESTAMPTZ          -- when approved
 extraction_result JSONB         -- hub-verified keywords + scores
 extraction_feedback TEXT         -- leader feedback for rerun
 verified_at TIMESTAMPTZ          -- when keywords were verified
-
--- orgs additions
-last_batch_extraction_at TIMESTAMPTZ  -- leader activity tracking
-last_chain_submission_at TIMESTAMPTZ   -- leader activity tracking
 ```
 
 **Indexes:** `idx_pending_submissions_status ON pending_submissions(org_id, status)`
