@@ -16,7 +16,6 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/serves"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
@@ -228,6 +227,7 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		EpochID    int    `json:"epoch_id"`
 		MemoryHash string `json:"memory_hash"`
 		Nullifier  string `json:"nullifier"`
 		Reason     string `json:"reason"`
@@ -237,9 +237,13 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	epoch, err := orgs.GetCurrentEpoch(r.Context(), pool, orgID)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+	// Epoch is supplied by the caller (the live chain epoch), matching the serve
+	// path. It must be the same epoch the originating serve was recorded under so
+	// that the chain's per-epoch denial count, matched-keyword index, and
+	// ApplyDenialDecay all align with the serve and run outside the grace window.
+	epoch := req.EpochID
+	if epoch < 0 {
+		http.Error(w, `{"error":"epoch_id must be non-negative"}`, http.StatusBadRequest)
 		return
 	}
 
