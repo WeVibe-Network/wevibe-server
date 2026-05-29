@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -14,12 +15,26 @@ import (
 )
 
 func qdrantAvailable() bool {
-	conn, err := net.Dial("tcp", "localhost:6333")
+	conn, err := net.DialTimeout("tcp", "localhost:6333", 1*time.Second)
 	if err != nil {
 		return false
 	}
 	conn.Close()
-	return true
+
+	req, err := http.NewRequest("GET", "http://localhost:6333/collections", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("api-key", "test-api-key-for-unit-tests-only")
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return false
+	}
+	return resp.StatusCode < 500
 }
 
 type emptyPendingDenialDB struct{}

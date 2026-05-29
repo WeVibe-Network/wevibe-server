@@ -259,8 +259,8 @@ func TestUpdateReport_Escalate(t *testing.T) {
 
 	rec, err := reports.Create(ctx, env.pool, env.orgID, protocol.CreateReportRequest{
 		MemoryCID: "cid-escalate",
-		Reason:    "spam",
-	}, env.member.pubkeyHex, "member")
+Reason:    "incorrect",
+		}, env.member.pubkeyHex, "member")
 	if err != nil {
 		t.Fatalf("create report: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestUpdateReport_ResolveActions(t *testing.T) {
 		t.Run(tc.action, func(t *testing.T) {
 			rec, err := reports.Create(ctx, env.pool, env.orgID, protocol.CreateReportRequest{
 				MemoryCID: fmt.Sprintf("cid-%s", tc.action),
-				Reason:    "spam",
+				Reason:    "incorrect",
 			}, env.member.pubkeyHex, "member")
 			if err != nil {
 				t.Fatalf("create report: %v", err)
@@ -425,7 +425,7 @@ func TestReportAuthEnforcement(t *testing.T) {
 	t.Run("member cannot patch", func(t *testing.T) {
 		rec, err := reports.Create(context.Background(), env.pool, env.orgID, protocol.CreateReportRequest{
 			MemoryCID: "cid-lock",
-			Reason:    "spam",
+			Reason:    "incorrect",
 		}, env.member.pubkeyHex, "member")
 		if err != nil {
 			t.Fatalf("create report: %v", err)

@@ -459,6 +459,7 @@ export interface Submission {
   epoch_id: number;
   memory_type: MemoryType;
   status: SubmissionStatus;
+  matched_keywords?: string[];
   plaintext?: string | null;
   memory_cid?: string | null;
   encrypted_envelope?: string | null;
@@ -499,7 +500,13 @@ export interface OrgHealth {
 }
 
 export async function getSubmissionsByStatus(orgId: string, status: string): Promise<Submission[]> {
-  return hubFetch<Submission[]>(`/v1/orgs/${orgId}/submissions?status=${encodeURIComponent(status)}`);
+  const response = await hubFetch<Submission[] | { submissions?: Submission[] }>(
+    `/v1/orgs/${orgId}/submissions?status=${encodeURIComponent(status)}`,
+  );
+  if (Array.isArray(response)) {
+    return response;
+  }
+  return response.submissions ?? [];
 }
 
 export async function submitKeywordResults(orgId: string, memories: MemoryKeywordResult[]): Promise<{ status: string; processed_count: number }> {

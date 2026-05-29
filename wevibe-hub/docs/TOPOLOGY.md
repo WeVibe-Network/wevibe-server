@@ -150,6 +150,23 @@ As of Sprint 26 / CO-260, `wevibe-mcp` is the single client for consumer-side hu
 
 **Scope boundary:** Dashboard continues to call hub directly for moderation/admin flows; the "single client" rule applies only to the consumer surface.
 
+## Sprint 32 — CO-033b Serve + Members Corrections
+
+### Pending submissions now surface `matched_keywords`
+
+`GET /v1/orgs/{orgID}/submissions?status=pending_chain` (handler: `ListSubmissions` in `internal/api/handlers/keyword_extraction.go`) now includes `matched_keywords` on each returned submission row.
+
+Implementation notes:
+- `SubmissionRecord` includes `MatchedKeywords []string`.
+- Query uses `LEFT JOIN LATERAL` to pull the latest serve event keywords from `serve_events` where `serve_events.serve_key = pending_submissions.submission_hash` and `event_type='serve'`.
+- Empty result normalizes to `[]` (`COALESCE(..., ARRAY[]::TEXT[])`).
+
+This is the dashboard chain-submit contract for CO-033b: there is no keyword proxy path.
+
+### `ListMembers` column parity fix
+
+`internal/members/members.go::ListMembers` SELECT now includes `dismissed_reports_count` to match `MemberRecord` and avoid missing-column scan mismatches.
+
 ## Sprint 27 Gap Blitz (CO-265)
 
 ### Contributor Submission Status Endpoint

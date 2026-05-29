@@ -20,6 +20,17 @@ Browser (Next.js App)
 5. WebSocket stream pushes serve metrics, confidence decay alerts, and contest updates in real time.
 6. Rotation page uploads anchor manifest; hub validates and submits rotation completion to wevibe-chain.
 
+## Sprint 32 — CO-033b Serve Batch Submit Path
+
+`app/(dashboard)/chain-submit/page.tsx` now runs a live serve-broadcast flow for `pending_chain` submissions:
+
+1. Fetch `GET /v1/orgs/{orgID}/submissions?status=pending_chain` via `lib/hub-client.ts::getSubmissionsByStatus`.
+2. Require non-empty `matched_keywords` on every pending row (no fallback to `extraction_result`).
+3. Build `/wevibe.serve.v1.MsgSubmitServeBatch` with `lib/chain-client.ts::buildServeBatchMsg`.
+4. Broadcast through `directBroadcast`.
+
+`buildServeBatchMsg` enforces the chain/hub contract that `matched_keywords` is required and non-empty, and emits repeated field-8 string entries for every keyword in each `ServeEntry`.
+
 ## CO-011a.4 — Category A / Category B Broadcast Split (Decision C, F)
 
 All chain-bound writes from the dashboard go through one of two paths. The hub no longer brokers chain writes for the dashboard.

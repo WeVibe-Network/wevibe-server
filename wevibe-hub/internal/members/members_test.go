@@ -28,6 +28,10 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+func testPubkey(t *testing.T, suffix string) string {
+	return strings.Repeat(fmt.Sprintf("%c", 'a'+t.Name()[0]%26), 64-len(suffix)) + suffix
+}
+
 func TestInviteMember_GetMember(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -388,17 +392,17 @@ func TestListOrgsForMember(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
-	leaderPubkey := strings.Repeat("a", 64)
-	memberPubkey := strings.Repeat("b", 64)
+	leaderPubkey := testPubkey(t, "l")
+	memberPubkey := testPubkey(t, "m")
 
 	orgReq := protocol.CreateOrgRequest{
 		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
-		LeaderX25519Pubkey: strings.Repeat("c", 64),
+		LeaderX25519Pubkey: testPubkey(t, "lx"),
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
-		Signature:          strings.Repeat("d", 128),
+		Signature:          testPubkey(t, "s"),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
 	_, err := orgs.CreateOrg(ctx, pool, orgReq)

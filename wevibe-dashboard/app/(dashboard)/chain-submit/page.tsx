@@ -15,7 +15,7 @@ import {
   type SanitizationFinding,
 } from '@/lib/hub-client';
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
-import { buildDenialBatchMsg } from '@/lib/chain-client';
+import { buildDenialBatchMsg, buildServeBatchMsg } from '@/lib/chain-client';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
@@ -202,16 +202,77 @@ export default function ChainSubmitPage() {
     }
   }, [loadAll]);
 
-  const handleSubmitBatch = useCallback(() => {
+  const handleSubmitBatch = useCallback(async () => {
     if (!ORG_ID) return;
     if (pendingChain.length === 0) return;
+
+    const { connectWallet } = await import('@/lib/wallet-connect');
+    const walletConnection = await connectWallet().catch(() => null);
+    const walletAddress = walletConnection?.address ?? null;
+    if (!walletAddress) {
+      setError('No wallet connected');
+      return;
+    }
 
     setBusy('chain');
     setError(null);
     setTxResult(null);
-    setNotice('Batch chain submission has been deprecated. Individual memory submissions via relay are pending implementation.');
-    setBusy(null);
-  }, [pendingChain]);
+    setNotice(null);
+
+    try {
+      const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';
+      const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
+
+      const pendingServes = await getSubmissionsByStatus(ORG_ID, 'pending_chain');
+      if (pendingServes.length === 0) {
+        setNotice('No pending serves to submit');
+        setBusy(null);
+        return;
+      }
+
+      const servesWithKeywords = pendingServes.filter(
+        (s): s is Submission & { matched_keywords: string[] } =>
+          Array.isArray(s.matched_keywords) && s.matched_keywords.length > 0,
+      );
+      if (servesWithKeywords.length !== pendingServes.length) {
+        const missingCount = pendingServes.length - servesWithKeywords.length;
+        setError(`Cannot submit: ${missingCount} serve(s) missing matched_keywords (D-4.2 violation).`);
+        setBusy(null);
+        return;
+      }
+
+      const epochResp = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}`, { headers: authHeaders });
+      const epochData = await epochResp.json() as { current_epoch?: number };
+      const epoch = epochData.current_epoch ?? 0;
+
+      const { directBroadcast } = await import('@/lib/chain-client');
+
+      const entries = servesWithKeywords.map((s): import('@/lib/chain-client').ServeEntryInput => ({
+        memory_content_hash: new Uint8Array(),
+        serve_key: s.submission_hash,
+        contributor_id: s.contributor_pubkey,
+        nullifier: new Uint8Array(),
+        model_id: '',
+        turn_count: 0,
+        contributor_wallet: '',
+        matched_keywords: s.matched_keywords,
+      }));
+
+      const msg = buildServeBatchMsg(walletAddress, ORG_ID, epoch, entries);
+      const result = await directBroadcast(walletAddress, [msg]);
+
+      if (result.code === 0) {
+        setTxResult({ tx_hash: result.txHash, committed_count: entries.length });
+        setNotice(null);
+      } else {
+        setError(`Chain rejected: ${result.rawLog}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }, [ORG_ID, pendingChain]);
 
   const handleDenialBatchSubmit = useCallback(async () => {
     const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';

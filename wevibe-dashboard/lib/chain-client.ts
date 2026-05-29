@@ -100,6 +100,25 @@ export interface DenialEntry {
   reason: string;
 }
 
+export interface ServeEntryInput {
+  memory_content_hash: Uint8Array;
+  serve_key: string;
+  contributor_id: string;
+  nullifier: Uint8Array;
+  model_id: string;
+  turn_count: number;
+  contributor_wallet: string;
+  matched_keywords: string[];
+}
+
+function encodeRepeatedStringField(tag: number, values: string[]): number[] {
+  const fields: number[] = [];
+  for (const value of values) {
+    fields.push(...encodeStringField(tag, value));
+  }
+  return fields;
+}
+
 function encodeVarint(value: number): number[] {
   const result: number[] = [];
   let v = value;
@@ -146,6 +165,50 @@ export function buildDenialBatchMsg(
 
   return {
     typeUrl: '/wevibe.serve.v1.MsgSubmitDenialBatch',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildServeBatchMsg(
+  signer: string,
+  orgId: string,
+  epoch: number,
+  entries: ServeEntryInput[],
+): EncodeObject {
+  for (const entry of entries) {
+    if (!entry.matched_keywords || entry.matched_keywords.length === 0) {
+      throw new Error('matched_keywords must be non-empty per D-4.2');
+    }
+    for (const kw of entry.matched_keywords) {
+      if (!kw || kw.trim() === '') {
+        throw new Error('matched_keywords entries must be non-empty strings');
+      }
+    }
+  }
+
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeVarint(0x18), ...encodeVarint(epoch),
+  ];
+
+  for (const entry of entries) {
+    fields.push(0x22);
+    const entryFields: number[] = [
+      ...encodeBytesField(0x0a, Buffer.from(entry.memory_content_hash).toString('hex')),
+      ...encodeStringField(0x12, entry.serve_key),
+      ...encodeStringField(0x1a, entry.contributor_id),
+      ...encodeBytesField(0x22, Buffer.from(entry.nullifier).toString('hex')),
+      ...encodeStringField(0x2a, entry.model_id),
+      ...encodeVarint(0x30), ...encodeVarint(entry.turn_count),
+      ...encodeStringField(0x3a, entry.contributor_wallet),
+      ...encodeRepeatedStringField(0x42, entry.matched_keywords),
+    ];
+    fields.push(...encodeVarint(entryFields.length), ...entryFields);
+  }
+
+  return {
+    typeUrl: '/wevibe.serve.v1.MsgSubmitServeBatch',
     value: Uint8Array.from(fields),
   };
 }
