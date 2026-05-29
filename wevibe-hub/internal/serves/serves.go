@@ -318,6 +318,41 @@ func MarkSubmitted(ctx context.Context, pool *pgxpool.Pool, ids []int64, txHash 
 	return nil
 }
 
+// MarkServesSubmitted updates the given serve_events rows to status='submitted'
+// after a successful chain broadcast, scoped to event_type='serve' to prevent
+// accidental cross-type updates from a misuse of the API.
+func MarkServesSubmitted(ctx context.Context, pool *pgxpool.Pool, ids []int64, txHash string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := pool.Exec(ctx, `
+		UPDATE serve_events
+		SET status = 'submitted', tx_hash = $1, submitted_at = NOW()
+		WHERE id = ANY($2) AND event_type = 'serve'
+	`, txHash, ids)
+	if err != nil {
+		return fmt.Errorf("mark serves submitted: %w", err)
+	}
+	return nil
+}
+
+// MarkDenialsSubmitted updates the given serve_events rows to status='submitted'
+// after a successful chain broadcast, scoped to event_type='denial'.
+func MarkDenialsSubmitted(ctx context.Context, pool *pgxpool.Pool, ids []int64, txHash string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := pool.Exec(ctx, `
+		UPDATE serve_events
+		SET status = 'submitted', tx_hash = $1, submitted_at = NOW()
+		WHERE id = ANY($2) AND event_type = 'denial'
+	`, txHash, ids)
+	if err != nil {
+		return fmt.Errorf("mark denials submitted: %w", err)
+	}
+	return nil
+}
+
 func MarkFailed(ctx context.Context, pool *pgxpool.Pool, ids []int64) error {
 	if len(ids) == 0 {
 		return nil

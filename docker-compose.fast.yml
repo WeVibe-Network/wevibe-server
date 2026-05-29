@@ -1,0 +1,4 @@
+services:
+  wevibe-chain:
+    environment:
+      WEVIBE_EPOCH_DURATION_SECONDS: "2"

@@ -455,6 +455,10 @@ func GetMemory(w http.ResponseWriter, r *http.Request) {
 			"contributor_pubkey": cm.ContributorPubkey,
 			"state":              cm.State,
 			"memory_type":        cm.MemoryType,
+			"serve_count_total":  cm.ServeCountTotal,
+			"denial_count_total": cm.DenialCountTotal,
+			"last_active_epoch":  cm.LastActiveEpoch,
+			"archived_epoch":     cm.ArchivedEpoch,
 			"source":             "chain",
 		})
 		return

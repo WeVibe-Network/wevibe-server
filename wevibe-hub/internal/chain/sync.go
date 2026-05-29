@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const epochSyncBatchSize = 128
+const epochSyncBatchSize = 50
 
 // SyncEpochData polls the chain for confidence/state changes and updates Qdrant.
 // Called once per epoch (or on a configurable interval).

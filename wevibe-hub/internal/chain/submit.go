@@ -222,6 +222,11 @@ type ServeEntryInput struct {
 	Nullifier         []byte
 	ModelID           string
 	TurnCount         uint32
+	// MatchedKeywords is the intersection of the served memory's keywords and
+	// the query's keyword set, computed at retrieval time. Required, non-empty.
+	// Per DECISIONS.md D-4.2 Implementation Clarifications (DMO-007) and
+	// chain x/serve which rejects empty sets at keeper.go:458-460.
+	MatchedKeywords []string
 }
 
 type DenialEntryInput struct {
@@ -229,6 +234,13 @@ type DenialEntryInput struct {
 	Nullifier  []byte
 	DenyKey    string
 	Reason     string
+	// MatchedKeywords is carried for symmetry with ServeEntryInput and to
+	// support a future chain-side denial matched_keywords proto extension
+	// (see DECISIONS.md D-4.2 Implementation Clarifications, DMO-007). The
+	// current chain proto (x/serve commit 533d18b) does NOT include this
+	// field on DenialEntry, so it is accepted on the input struct but not
+	// propagated into servetypes.DenialEntry until the proto is extended.
+	MatchedKeywords []string
 }
 
 func (c *GrpcClient) SubmitServeBatch(ctx context.Context, orgID string, epoch uint64, entries []ServeEntryInput) (string, error) {
@@ -242,6 +254,9 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, orgID string, epoch u
 		if len(e.Nullifier) != 32 {
 			return "", fmt.Errorf("entry %d: nullifier must be 32 bytes, got %d", i, len(e.Nullifier))
 		}
+		if len(e.MatchedKeywords) == 0 {
+			return "", fmt.Errorf("entry %d: matched_keywords cannot be empty", i)
+		}
 	}
 
 	serves := make([]*servetypes.ServeEntry, len(entries))
@@ -254,6 +269,7 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, orgID string, epoch u
 			Nullifier:         e.Nullifier,
 			ModelId:           e.ModelID,
 			TurnCount:         e.TurnCount,
+			MatchedKeywords:   e.MatchedKeywords,
 		}
 	}
 
@@ -264,23 +280,18 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, orgID string, epoch u
 		Serves: serves,
 	}
 
-	var allMsgs []types.Msg
-	allMsgs = append(allMsgs, msg)
-	for _, e := range entries {
-		contributorID := e.ContributorWallet
-		if contributorID == "" {
-			contributorID = e.ContributorID
-		}
-		allMsgs = append(allMsgs, &reputationtypes.MsgIncrementServe{
-			Authority:     c.submitter.String(),
-			ContributorId: contributorID,
-			OrgId:         orgID,
-			MemoryCid:     hex.EncodeToString(e.MemoryContentHash),
-			ServeCount:    uint64(e.TurnCount),
-		})
-	}
+	// NOTE (CO-035): we intentionally do NOT bundle MsgIncrementServe here.
+	// The chain's x/serve keeper invokes ReputationKeeper.RecordServe()
+	// internally when processing MsgSubmitServeBatch (see
+	// wevibe-chain/x/serve/keeper/keeper.go:276). Submitting
+	// MsgIncrementServe from the hub fails authorization
+	// (msg.Authority != keeper.authority — only the gov module address is
+	// accepted by reputation/keeper/msg_server.go:75-77) which causes the
+	// entire bundled TX to roll back atomically, leaving serve_count_total=0
+	// on the chain. This was the secondary defect surfaced once the
+	// hub→chain pipeline started broadcasting in CO-035.
 
-	txHash, err := c.BroadcastMsgs(ctx, allMsgs...)
+	txHash, err := c.BroadcastMsgs(ctx, msg)
 	if err != nil {
 		return "", fmt.Errorf("broadcast: %w", err)
 	}

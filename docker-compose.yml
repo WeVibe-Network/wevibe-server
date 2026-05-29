@@ -68,6 +68,7 @@ services:
       CHAIN_ID: wevibe-local-1
       MONIKER: wevibe-validator
       WEVIBED_HOME: /root/.wevibed
+      WEVIBE_EPOCH_DURATION_SECONDS: "${WEVIBE_EPOCH_DURATION_SECONDS:-}"
     entrypoint: ["/usr/local/bin/init-chain.sh", "start"]
     ports:
       - "26656:26656"
