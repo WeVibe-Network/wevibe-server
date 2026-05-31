@@ -278,6 +278,7 @@ export interface CreateOrgRequest {
   org_id: string;
   leader_pubkey: string;
   leader_x25519_pubkey: string;
+  leader_wallet: string;
   org_name: string;
   domain: string;
   enc_envelope: string;
@@ -287,8 +288,14 @@ export interface CreateOrgRequest {
   signature: string;
 }
 
-export async function createOrg(body: CreateOrgRequest): Promise<OrgSummary> {
-  return hubFetch<OrgSummary>('/v1/orgs', {
+export interface CreateOrgResponse extends OrgSummary {
+  hub_serving_key_address: string;
+  epoch_sk?: string;
+  epoch_pk?: string;
+}
+
+export async function createOrg(body: CreateOrgRequest): Promise<CreateOrgResponse> {
+  return hubFetch<CreateOrgResponse>('/v1/orgs', {
     method: 'POST',
     body: JSON.stringify(body),
   });
@@ -432,7 +439,7 @@ export async function rotateEpoch(orgId: string): Promise<{ status: string; buff
 
 // === CO-238 Task F: Batch Keyword Extraction Pipeline ===
 
-export type MemoryType = 'correct_implementation' | 'negative_signal';
+export type MemoryType = 'memory';
 
 export type SubmissionStatus =
   | 'pending_moderation'
@@ -548,6 +555,33 @@ export async function removeSubmission(orgId: string, hash: string): Promise<{ s
 
 export async function getOrgHealth(orgId: string): Promise<OrgHealth> {
   return hubFetch<OrgHealth>(`/v1/orgs/${orgId}/health`);
+}
+
+export interface PreparedBatchMemory {
+  submission_hash: string;
+  contributor_pubkey: string;
+  contributor_wallet: string;
+  committing_leader: string;
+  keywords: string[];
+  memory_type: MemoryType;
+  plaintext_hash: string;
+  salt: string;
+  ciphertext_hash: string;
+  contributor_sig: string;
+  encrypted_blob: string;
+  wrapped_dek_enc: string;
+}
+
+export interface PreparedBatchSubmitResponse {
+  batch: PreparedBatchMemory[];
+  verification: 'passed';
+}
+
+export async function prepareBatchSubmit(orgId: string): Promise<PreparedBatchSubmitResponse> {
+  return hubFetch<PreparedBatchSubmitResponse>(`/v1/orgs/${orgId}/moderation/batch-submit`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
 }
 
 export interface ProfileChainStats {

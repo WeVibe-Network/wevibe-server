@@ -23,7 +23,7 @@ export interface MemoryCandidate {
   context: string;
   avoid: string | null;
   stack: string[];
-  memory_type: 'correct_implementation' | 'negative_signal';
+  memory_type: 'memory';
 }
 
 export type ExtractionStatus =

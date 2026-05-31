@@ -13,6 +13,9 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	authsigning "github.com/cosmos/cosmos-sdk/x/auth/signing"
 	authztypes "github.com/cosmos/cosmos-sdk/x/authz"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -31,7 +34,47 @@ var (
 	ErrGranterMismatch     = errors.New("inner messages have different granters")
 	ErrDisallowedType      = errors.New("message type not allowed for relay")
 	ErrUnexpectedMsgType   = errors.New("expected MsgExec, got different message type")
+	// Direct (non-delegate) leader-signing path (D-S32-CO044-LEADER-DUAL-PATH).
+	ErrNotSigVerifiable = errors.New("tx is not signature-verifiable")
+	ErrMultipleSigners  = errors.New("direct relay tx must have exactly one signer")
+	ErrSignerMismatch   = errors.New("tx signer does not match wallet_address")
+	ErrNoMsgs           = errors.New("tx contains no messages")
 )
+
+// verifySecp256k1Signature verifies a 64-byte (r||s) ECDSA signature over
+// sha256(canonicalBody) against a 33-byte compressed secp256k1 pubkey. Shared
+// by the delegate path (delegate session key) and the direct path (leader
+// wallet key) — D-S32-CO044-LEADER-DUAL-PATH.
+func verifySecp256k1Signature(pubkeyBytes []byte, canonicalBody, sigB64 string) error {
+	if len(pubkeyBytes) != 33 {
+		return ErrInvalidPubkey
+	}
+
+	sigBytes, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		return ErrInvalidSignature
+	}
+	if len(sigBytes) != 64 {
+		return ErrInvalidSignature
+	}
+
+	msgHash := sha256.Sum256([]byte(canonicalBody))
+
+	btcecPubkey, err := btcec.ParsePubKey(pubkeyBytes)
+	if err != nil {
+		return ErrInvalidPubkey
+	}
+
+	ecdsaPubkey := btcecPubkey.ToECDSA()
+	r := new(big.Int).SetBytes(sigBytes[:32])
+	s := new(big.Int).SetBytes(sigBytes[32:])
+
+	if !ecdsa.Verify(ecdsaPubkey, msgHash[:], r, s) {
+		return ErrSignatureVerifyFail
+	}
+
+	return nil
+}
 
 func ParseCanonicalBody(raw []byte) (orgID, walletAddr, txBytesB64 string, err error) {
 	body := string(raw)
@@ -94,29 +137,70 @@ func VerifyDelegateSignature(pool *pgxpool.Pool, walletAddr, canonicalBody, sigB
 		return ErrInvalidPubkey
 	}
 
-	sigBytes, err := base64.StdEncoding.DecodeString(sigB64)
+	return verifySecp256k1Signature(pubkeyBytes, canonicalBody, sigB64)
+}
+
+// ExtractSingleSignerPubKey returns the sole signer pubkey of a directly-signed
+// tx (the direct/non-delegate leader-signing path). Direct relay txs must carry
+// exactly one signer — the leader wallet.
+func ExtractSingleSignerPubKey(tx sdk.Tx) (cryptotypes.PubKey, error) {
+	sigTx, ok := tx.(authsigning.SigVerifiableTx)
+	if !ok {
+		return nil, ErrNotSigVerifiable
+	}
+	pubkeys, err := sigTx.GetPubKeys()
 	if err != nil {
-		return ErrInvalidSignature
+		return nil, err
 	}
-	if len(sigBytes) != 64 {
-		return ErrInvalidSignature
+	if len(pubkeys) != 1 {
+		return nil, ErrMultipleSigners
 	}
+	if pubkeys[0] == nil {
+		return nil, ErrInvalidPubkey
+	}
+	return pubkeys[0], nil
+}
 
-	msgHash := sha256.Sum256([]byte(canonicalBody))
-
-	btcecPubkey, err := btcec.ParsePubKey(pubkeyBytes)
+// VerifyWalletSignature authenticates a direct-path relay request: the tx must
+// be signed by exactly one key whose bech32 address equals walletAddr, and that
+// same key must have signed the canonical relay body in the Authorization
+// header. Returns the verified signer pubkey. D-S32-CO044-LEADER-DUAL-PATH.
+func VerifyWalletSignature(tx sdk.Tx, walletAddr, canonicalBody, sigB64 string) (cryptotypes.PubKey, error) {
+	pk, err := ExtractSingleSignerPubKey(tx)
 	if err != nil {
-		return ErrInvalidPubkey
+		return nil, err
 	}
-
-	ecdsaPubkey := btcecPubkey.ToECDSA()
-	r := new(big.Int).SetBytes(sigBytes[:32])
-	s := new(big.Int).SetBytes(sigBytes[32:])
-
-	if !ecdsa.Verify(ecdsaPubkey, msgHash[:], r, s) {
-		return ErrSignatureVerifyFail
+	if sdk.AccAddress(pk.Address()).String() != walletAddr {
+		return nil, ErrSignerMismatch
 	}
+	if err := verifySecp256k1Signature(pk.Bytes(), canonicalBody, sigB64); err != nil {
+		return nil, err
+	}
+	return pk, nil
+}
 
+// ValidateDirectMsgs enforces that every message in a directly-signed relay tx
+// is relay-allowed and is signed by walletAddr (the leader wallet is the msg
+// authority). The chain enforces the actual leader/authority semantics; this is
+// the hub-side relay gate.
+func ValidateDirectMsgs(tx sdk.Tx, walletAddr string) error {
+	msgs := tx.GetMsgs()
+	if len(msgs) == 0 {
+		return ErrNoMsgs
+	}
+	for _, msg := range msgs {
+		typeURL := sdk.MsgTypeURL(msg)
+		if !IsRelayAllowed(typeURL) {
+			return fmt.Errorf("%w: %s", ErrDisallowedType, typeURL)
+		}
+		signer, err := getFieldValue(msg, GranterFieldByMsgType[typeURL])
+		if err != nil {
+			return err
+		}
+		if signer != walletAddr {
+			return ErrSignerMismatch
+		}
+	}
 	return nil
 }
 

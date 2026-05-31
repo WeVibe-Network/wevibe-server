@@ -1,3 +1,5 @@
+import { connectWallet, detectWallets, type WalletProvider } from './wallet-connect';
+
 function bufToHex(buf: ArrayBuffer): string {
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, '0'))
@@ -84,7 +86,7 @@ async function keywordsHash(keywords: { keyword: string; weight: number }[]): Pr
   return sha256Hex(joined);
 }
 
-export type MemoryType = 'correct_implementation' | 'negative_signal';
+export type MemoryType = 'memory';
 
 export async function submitMemoryCanonical(
 	orgId: string,
@@ -231,4 +233,31 @@ export async function closeOrgCanonical(
     `signed_by:${signedBy}`,
   ].join('\n');
   return new TextEncoder().encode(msg);
+}
+
+export async function getWalletAddress(): Promise<string> {
+  const available = detectWallets();
+  if (available.length === 0) {
+    throw new Error('No wallet extension detected (install Keplr or Leap).');
+  }
+
+  const orderedProviders: WalletProvider[] = [];
+  if (available.includes('keplr')) {
+    orderedProviders.push('keplr');
+  }
+  if (available.includes('leap')) {
+    orderedProviders.push('leap');
+  }
+
+  let lastError: Error | null = null;
+  for (const provider of orderedProviders) {
+    try {
+      const connection = await connectWallet(provider);
+      return connection.address;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  throw lastError ?? new Error('Failed to connect wallet');
 }

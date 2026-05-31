@@ -386,9 +386,9 @@ func (c *GrpcClient) GetMemoriesBatch(ctx context.Context, orgID string, content
 func mapChainMemoryTypeToString(memoryType memorytypes.MemoryType) string {
 	switch memoryType {
 	case memorytypes.MemoryType_MEMORY_TYPE_CORRECT_IMPLEMENTATION:
-		return protocol.MemoryTypeCorrectImplementation
+		return protocol.MemoryTypeMemory
 	case memorytypes.MemoryType_MEMORY_TYPE_NEGATIVE_SIGNAL:
-		return protocol.MemoryTypeNegativeSignal
+		return protocol.MemoryTypeMemory
 	default:
 		return ""
 	}

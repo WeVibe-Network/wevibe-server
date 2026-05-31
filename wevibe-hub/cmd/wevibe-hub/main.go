@@ -268,6 +268,7 @@ func main() {
 
 		r.Post("/v1/test/embed", handlers.TestEmbed)
 		r.Get("/v1/test/orgs/{orgID}/queue", handlers.TestGetQueue)
+		r.Get("/v1/test/orgs/{orgID}/serve-queue", handlers.TestServeQueueDepth)
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Port)

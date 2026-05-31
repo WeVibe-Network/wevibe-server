@@ -8,7 +8,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -92,17 +95,10 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Synchronous chain relay (CO-035 R-SYNC-RELAY): submit the just-recorded
-	// serve to chain immediately, in the same request cycle. On success update
-	// the Postgres row to status='submitted'. On failure log and leave the row
-	// status='pending' for a future retry sweep — but do NOT fail the HTTP
-	// response to the consumer; the local record is durable regardless.
-	if chainClient != nil {
-		submitServeToChainSync(r.Context(), chainClient, pool, orgID, record)
-	} else {
-		slog.Warn("chain client not configured; serve recorded to Postgres only",
-			"org_id", orgID, "serve_id", record.ID)
-	}
+	// Chain relay is intentionally decoupled from the request path. A single
+	// serve request should never block on block inclusion; instead we enqueue an
+	// org-level relay pass that flushes pending serves/denials in batch TXs.
+	enqueueServeRelay(orgID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -112,72 +108,285 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// submitServeToChainSync constructs a single-entry MsgSubmitServeBatch and
-// broadcasts it. Errors are logged and the Postgres row is left as 'pending'
-// — never propagated to the HTTP caller. The contributor wallet is resolved
-// from the members table; absence is logged but does not block submission
-// because the chain accepts an empty contributor_wallet on a serve entry
-// (the chain x/serve keeper treats empty wallet as "no wallet on file").
-func submitServeToChainSync(ctx context.Context, cc *chain.GrpcClient, p poolType, orgID string, record *serves.ServeEventRecord) {
+const (
+	serveRelayFetchLimit = 500
+	serveRelayQueueSize  = 256
+	serveRelayTimeout    = 3 * time.Minute
+	serveRelayWorkers    = 8
+)
+
+var (
+	serveRelayWorkerOnce sync.Once
+	serveRelayMu         sync.Mutex
+	serveRelayQueued     map[string]struct{}
+	serveRelayCh         chan string
+)
+
+// poolType is the concrete pgxpool.Pool type used throughout the handlers
+// package. Declared as a named alias so relay helpers read clearly without
+// re-importing pgxpool everywhere.
+type poolType = *pgxpool.Pool
+
+func ensureServeRelayWorker() {
+	serveRelayWorkerOnce.Do(func() {
+		serveRelayQueued = make(map[string]struct{})
+		serveRelayCh = make(chan string, serveRelayQueueSize)
+		for i := 0; i < serveRelayWorkers; i++ {
+			go serveRelayWorker()
+		}
+	})
+}
+
+func enqueueServeRelay(orgID string) {
+	if chainClient == nil {
+		slog.Warn("chain client not configured; serve/denial relay skipped", "org_id", orgID)
+		return
+	}
+	if pool == nil {
+		return
+	}
+
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return
+	}
+
+	ensureServeRelayWorker()
+
+	serveRelayMu.Lock()
+	if _, exists := serveRelayQueued[orgID]; exists {
+		serveRelayMu.Unlock()
+		return
+	}
+	serveRelayQueued[orgID] = struct{}{}
+	serveRelayMu.Unlock()
+
+	select {
+	case serveRelayCh <- orgID:
+	default:
+		go func() {
+			serveRelayCh <- orgID
+		}()
+	}
+}
+
+func serveRelayWorker() {
+	for orgID := range serveRelayCh {
+		if chainClient == nil || pool == nil {
+			serveRelayMu.Lock()
+			delete(serveRelayQueued, orgID)
+			serveRelayMu.Unlock()
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), serveRelayTimeout)
+		err := relayPendingEventsByOrg(ctx, chainClient, pool, orgID)
+		cancel()
+		if err != nil {
+			slog.Error("serve relay flush failed", "org_id", orgID, "err", err)
+		}
+
+		serveRelayMu.Lock()
+		delete(serveRelayQueued, orgID)
+		serveRelayMu.Unlock()
+
+		hasPending, pendingErr := serves.HasPendingEvents(context.Background(), pool, orgID)
+		if pendingErr != nil {
+			slog.Error("serve relay pending check failed", "org_id", orgID, "err", pendingErr)
+			continue
+		}
+		if hasPending {
+			enqueueServeRelay(orgID)
+		}
+	}
+}
+
+func relayPendingEventsByOrg(ctx context.Context, cc *chain.GrpcClient, p poolType, orgID string) error {
+	// Relay per epoch, serves-then-denials, oldest epoch first.
+	//
+	// Draining ALL pending serves before ANY pending denials (the previous
+	// behaviour) starves denials under sustained serve volume: they land in a
+	// burst tens of epochs after their originating serve — past the decay
+	// settle window — so the per-epoch denial weight decrement is never applied
+	// and bad memories never receive timely denial decay. Processing one epoch
+	// at a time keeps each epoch's denials landing immediately after its serves
+	// (within the settle lag) while preserving the invariant that a serve
+	// attestation is committed on-chain before its denial: for any epoch E we
+	// submit serves[E] before denials[E], and epochs are processed ascending so
+	// a denial can never be submitted before the serve it references
+	// (serveEpoch <= denialEpoch always).
+	for {
+		serveRecords, err := serves.GetPendingServes(ctx, p, orgID, serveRelayFetchLimit)
+		if err != nil {
+			return fmt.Errorf("load pending serves: %w", err)
+		}
+		denialRecords, err := serves.GetPendingDenials(ctx, p, orgID, serveRelayFetchLimit)
+		if err != nil {
+			return fmt.Errorf("load pending denials: %w", err)
+		}
+		if len(serveRecords) == 0 && len(denialRecords) == 0 {
+			return nil
+		}
+
+		servesByEpoch := groupRecordsByEpoch(serveRecords)
+		denialsByEpoch := groupRecordsByEpoch(denialRecords)
+
+		for _, epochID := range sortedUnionEpochs(servesByEpoch, denialsByEpoch) {
+			if recs := servesByEpoch[epochID]; len(recs) > 0 {
+				if err := submitServeEpoch(ctx, cc, p, orgID, epochID, recs); err != nil {
+					return err
+				}
+			}
+			if recs := denialsByEpoch[epochID]; len(recs) > 0 {
+				if err := submitDenialEpoch(ctx, cc, p, orgID, epochID, recs); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+// groupRecordsByEpoch buckets serve_event records by their epoch_id, preserving
+// the input (created_at ASC) ordering within each bucket.
+func groupRecordsByEpoch(records []serves.ServeEventRecord) map[int]([]serves.ServeEventRecord) {
+	byEpoch := make(map[int][]serves.ServeEventRecord)
+	for _, record := range records {
+		byEpoch[record.EpochID] = append(byEpoch[record.EpochID], record)
+	}
+	return byEpoch
+}
+
+// sortedUnionEpochs returns the ascending union of epoch keys across the two
+// maps. Ascending order guarantees a denial is never relayed before the serve
+// attestation it references (serveEpoch <= denialEpoch).
+func sortedUnionEpochs(a, b map[int][]serves.ServeEventRecord) []int {
+	seen := make(map[int]struct{}, len(a)+len(b))
+	for e := range a {
+		seen[e] = struct{}{}
+	}
+	for e := range b {
+		seen[e] = struct{}{}
+	}
+	epochs := make([]int, 0, len(seen))
+	for e := range seen {
+		epochs = append(epochs, e)
+	}
+	sort.Ints(epochs)
+	return epochs
+}
+
+func submitServeEpoch(ctx context.Context, cc *chain.GrpcClient, db poolType, orgID string, epochID int, records []serves.ServeEventRecord) error {
+	entries := make([]chain.ServeEntryInput, 0, len(records))
+	ids := make([]int64, 0, len(records))
+	for _, record := range records {
+		entry, buildErr := serveEntryFromRecord(record)
+		if buildErr != nil {
+			return fmt.Errorf("build serve entry id=%d: %w", record.ID, buildErr)
+		}
+		entries = append(entries, entry)
+		ids = append(ids, record.ID)
+	}
+
+	faucetURL := os.Getenv("FAUCET_URL")
+	txHash, submitErr := cc.SubmitServeBatch(ctx, db, faucetURL, orgID, uint64(epochID), entries)
+	if submitErr != nil {
+		return fmt.Errorf("submit serve batch epoch=%d size=%d: %w", epochID, len(entries), submitErr)
+	}
+	if markErr := serves.MarkServesSubmitted(ctx, db, ids, txHash); markErr != nil {
+		return fmt.Errorf("mark serve batch submitted epoch=%d tx=%s: %w", epochID, txHash, markErr)
+	}
+
+	slog.Info("relay submitted serve batch",
+		"org_id", orgID,
+		"epoch", epochID,
+		"entries", len(entries),
+		"tx_hash", txHash,
+	)
+
+	return nil
+}
+
+func submitDenialEpoch(ctx context.Context, cc *chain.GrpcClient, db poolType, orgID string, epochID int, records []serves.ServeEventRecord) error {
+	entries := make([]chain.DenialEntryInput, 0, len(records))
+	ids := make([]int64, 0, len(records))
+	for _, record := range records {
+		entry, buildErr := denialEntryFromRecord(record)
+		if buildErr != nil {
+			return fmt.Errorf("build denial entry id=%d: %w", record.ID, buildErr)
+		}
+		entries = append(entries, entry)
+		ids = append(ids, record.ID)
+	}
+
+	faucetURL := os.Getenv("FAUCET_URL")
+	txHash, submitErr := cc.SubmitDenialBatch(ctx, db, faucetURL, orgID, uint64(epochID), entries)
+	if submitErr != nil {
+		return fmt.Errorf("submit denial batch epoch=%d size=%d: %w", epochID, len(entries), submitErr)
+	}
+	if markErr := serves.MarkDenialsSubmitted(ctx, db, ids, txHash); markErr != nil {
+		return fmt.Errorf("mark denial batch submitted epoch=%d tx=%s: %w", epochID, txHash, markErr)
+	}
+
+	slog.Info("relay submitted denial batch",
+		"org_id", orgID,
+		"epoch", epochID,
+		"entries", len(entries),
+		"tx_hash", txHash,
+	)
+
+	return nil
+}
+
+func serveEntryFromRecord(record serves.ServeEventRecord) (chain.ServeEntryInput, error) {
 	memHash, err := hex.DecodeString(record.MemoryContentHash)
 	if err != nil || len(memHash) != 32 {
-		slog.Error("invalid memory_content_hash on just-recorded serve; cannot relay",
-			"id", record.ID, "memory_content_hash", record.MemoryContentHash, "err", err)
-		return
+		return chain.ServeEntryInput{}, fmt.Errorf("invalid memory_content_hash %q", record.MemoryContentHash)
 	}
 	nullifier, err := hex.DecodeString(record.Nullifier)
 	if err != nil || len(nullifier) != 32 {
-		slog.Error("invalid nullifier on just-recorded serve; cannot relay",
-			"id", record.ID, "nullifier", record.Nullifier, "err", err)
-		return
+		return chain.ServeEntryInput{}, fmt.Errorf("invalid nullifier %q", record.Nullifier)
 	}
 	if len(record.MatchedKeywords) == 0 {
-		// RecordServe already enforces non-empty matched_keywords; defensive log.
-		slog.Error("empty matched_keywords on just-recorded serve; cannot relay",
-			"id", record.ID)
-		return
+		return chain.ServeEntryInput{}, fmt.Errorf("matched_keywords cannot be empty")
 	}
 
-	wallet := record.ContributorWallet
-	if wallet == "" {
-		// Resolve from members; wallet may be NULL for non-leader members.
-		if w, lookupErr := members.GetWalletAddress(ctx, p, orgID, record.ContributorID); lookupErr == nil && w != nil {
-			wallet = *w
-		}
-	}
-
-	entry := chain.ServeEntryInput{
+	return chain.ServeEntryInput{
 		MemoryContentHash: memHash,
 		ServeKey:          record.ServeKey,
 		ContributorID:     record.ContributorID,
-		ContributorWallet: wallet,
+		ContributorWallet: strings.TrimSpace(record.ContributorWallet),
 		Nullifier:         nullifier,
 		ModelID:           record.ModelID,
 		TurnCount:         uint32(record.TurnCount),
 		MatchedKeywords:   record.MatchedKeywords,
-	}
-
-	txHash, err := cc.SubmitServeBatch(ctx, orgID, uint64(record.EpochID), []chain.ServeEntryInput{entry})
-	if err != nil {
-		slog.Error("synchronous serve chain submission failed; row left as pending",
-			"org_id", orgID, "serve_id", record.ID, "memory_cid", record.MemoryContentHash,
-			"epoch", record.EpochID, "err", err)
-		return
-	}
-	if markErr := serves.MarkServesSubmitted(ctx, p, []int64{record.ID}, txHash); markErr != nil {
-		slog.Error("mark serve submitted failed (chain TX already broadcast)",
-			"org_id", orgID, "serve_id", record.ID, "tx_hash", txHash, "err", markErr)
-		return
-	}
-	slog.Info("synchronous serve submitted to chain",
-		"org_id", orgID, "serve_id", record.ID, "memory_cid", record.MemoryContentHash,
-		"epoch", record.EpochID, "tx_hash", txHash)
+	}, nil
 }
 
-// poolType is the concrete pgxpool.Pool type used throughout the handlers
-// package. Declared as a named alias so submitServe/DenialToChainSync read
-// clearly without re-importing pgxpool here.
-type poolType = *pgxpool.Pool
+func denialEntryFromRecord(record serves.ServeEventRecord) (chain.DenialEntryInput, error) {
+	memHash, err := hex.DecodeString(record.MemoryContentHash)
+	if err != nil || len(memHash) != 32 {
+		return chain.DenialEntryInput{}, fmt.Errorf("invalid memory_content_hash %q", record.MemoryContentHash)
+	}
+	nullifier, err := hex.DecodeString(record.Nullifier)
+	if err != nil || len(nullifier) != 32 {
+		return chain.DenialEntryInput{}, fmt.Errorf("invalid nullifier %q", record.Nullifier)
+	}
+	denyKey := strings.TrimSpace(record.ServeKey)
+	if denyKey == "" {
+		denyKey = strings.TrimSpace(record.ReporterPubkey)
+	}
+	if denyKey == "" {
+		return chain.DenialEntryInput{}, fmt.Errorf("deny key is empty")
+	}
+
+	return chain.DenialEntryInput{
+		MemoryHash:      memHash,
+		Nullifier:       nullifier,
+		DenyKey:         denyKey,
+		Reason:          record.Reason,
+		MatchedKeywords: record.MatchedKeywords,
+	}, nil
+}
 
 func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
@@ -268,13 +477,8 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Synchronous chain relay (CO-035 R-SYNC-RELAY): same pattern as serves.
-	if chainClient != nil {
-		submitDenialToChainSync(r.Context(), chainClient, pool, orgID, record)
-	} else {
-		slog.Warn("chain client not configured; denial recorded to Postgres only",
-			"org_id", orgID, "denial_id", record.ID)
-	}
+	// Denials are flushed through the same async org-level relay queue as serves.
+	enqueueServeRelay(orgID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -282,60 +486,4 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 		"status":    "recorded",
 		"nullifier": record.Nullifier,
 	})
-}
-
-// submitDenialToChainSync constructs a single-entry MsgSubmitDenialBatch and
-// broadcasts it. Mirrors submitServeToChainSync — failures are logged, the
-// Postgres row remains 'pending' for a future retry sweep, HTTP response is
-// unaffected.
-func submitDenialToChainSync(ctx context.Context, cc *chain.GrpcClient, p poolType, orgID string, record *serves.ServeEventRecord) {
-	memHash, err := hex.DecodeString(record.MemoryContentHash)
-	if err != nil || len(memHash) != 32 {
-		slog.Error("invalid memory_content_hash on just-recorded denial; cannot relay",
-			"id", record.ID, "memory_content_hash", record.MemoryContentHash, "err", err)
-		return
-	}
-	nullifier, err := hex.DecodeString(record.Nullifier)
-	if err != nil || len(nullifier) != 32 {
-		slog.Error("invalid nullifier on just-recorded denial; cannot relay",
-			"id", record.ID, "nullifier", record.Nullifier, "err", err)
-		return
-	}
-	if record.Reason == "" {
-		slog.Error("empty reason on just-recorded denial; cannot relay",
-			"id", record.ID)
-		return
-	}
-
-	// RecordDenial stores reporter_pubkey in the serve_key column for denial
-	// rows (serves.go INSERT). Chain-side validation requires deny_key
-	// non-empty; reporter_pubkey is the natural fit.
-	denyKey := record.ServeKey
-	if denyKey == "" {
-		denyKey = record.ReporterPubkey
-	}
-
-	entry := chain.DenialEntryInput{
-		MemoryHash:      memHash,
-		Nullifier:       nullifier,
-		DenyKey:         denyKey,
-		Reason:          record.Reason,
-		MatchedKeywords: record.MatchedKeywords,
-	}
-
-	txHash, err := cc.SubmitDenialBatch(ctx, orgID, uint64(record.EpochID), []chain.DenialEntryInput{entry})
-	if err != nil {
-		slog.Error("synchronous denial chain submission failed; row left as pending",
-			"org_id", orgID, "denial_id", record.ID, "memory_cid", record.MemoryContentHash,
-			"epoch", record.EpochID, "err", err)
-		return
-	}
-	if markErr := serves.MarkDenialsSubmitted(ctx, p, []int64{record.ID}, txHash); markErr != nil {
-		slog.Error("mark denial submitted failed (chain TX already broadcast)",
-			"org_id", orgID, "denial_id", record.ID, "tx_hash", txHash, "err", markErr)
-		return
-	}
-	slog.Info("synchronous denial submitted to chain",
-		"org_id", orgID, "denial_id", record.ID, "memory_cid", record.MemoryContentHash,
-		"epoch", record.EpochID, "tx_hash", txHash)
 }

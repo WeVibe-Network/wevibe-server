@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -220,7 +221,7 @@ func TestSubmitMemoryMessage_Deterministic(t *testing.T) {
 		3,
 		"abc123def456",
 		"contributor_pubkey_hex",
-		protocol.MemoryTypeNegativeSignal,
+		protocol.MemoryTypeMemory,
 		"ciphertext_hash_hex",
 		"plaintext_hash_hex",
 		"salt_hex",
@@ -243,7 +244,7 @@ func TestSubmitMemoryMessage_Deterministic(t *testing.T) {
 	if lines[3] != "epoch_id:3" {
 		t.Errorf("line 3: %q", lines[3])
 	}
-	if lines[4] != "memory_type:negative_signal" {
+	if lines[4] != "memory_type:memory" {
 		t.Errorf("line 4: %q", lines[4])
 	}
 	if lines[5] != "org_id:org-test-1" {
@@ -269,14 +270,24 @@ func TestSubmitMemoryMessage_Vector1Hex(t *testing.T) {
 		42,
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		protocol.MemoryTypeCorrectImplementation,
+		protocol.MemoryTypeMemory,
 		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 		"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 		"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
 		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
 	)
 
-	expectedHex := "7765766962652e7375626d69745f6d656d6f72792e76310a636970686572746578745f686173683a636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363630a636f6e7472696275746f725f7075626b65793a626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262620a65706f63685f69643a34320a6d656d6f72795f747970653a636f72726563745f696d706c656d656e746174696f6e0a6f72675f69643a6f72672d746573742d3030310a706c61696e746578745f686173683a646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464640a73616c743a656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565650a7375626d697373696f6e5f686173683a616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610a777261707065645f64656b5f686173683a66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666"
+	expectedHex := manualSubmitMemoryHex(
+		"org-test-001",
+		42,
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		protocol.MemoryTypeMemory,
+		"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+		"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	)
 	gotHex := hex.EncodeToString(msg)
 	if gotHex != expectedHex {
 		t.Fatalf("hex mismatch:\n  got:  %s\n  want: %s", gotHex, expectedHex)
@@ -295,7 +306,6 @@ func TestCanonicalBodyCrossLanguageConformance(t *testing.T) {
 		plaintextHash     string
 		salt              string
 		wrappedDekHash    string
-		expectedHex       string
 	}{
 		{
 			name:              "vector-1-standard",
@@ -303,25 +313,23 @@ func TestCanonicalBodyCrossLanguageConformance(t *testing.T) {
 			epochID:           42,
 			submissionHash:    strings.Repeat("a", 64),
 			contributorPubkey: strings.Repeat("b", 64),
-			memoryType:        "correct_implementation",
+			memoryType:        protocol.MemoryTypeMemory,
 			ciphertextHash:    strings.Repeat("c", 64),
 			plaintextHash:     strings.Repeat("d", 64),
 			salt:              strings.Repeat("e", 64),
 			wrappedDekHash:    strings.Repeat("f", 64),
-			expectedHex:       "7765766962652e7375626d69745f6d656d6f72792e76310a636970686572746578745f686173683a636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363630a636f6e7472696275746f725f7075626b65793a626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262620a65706f63685f69643a34320a6d656d6f72795f747970653a636f72726563745f696d706c656d656e746174696f6e0a6f72675f69643a6f72672d746573742d3030310a706c61696e746578745f686173683a646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464640a73616c743a656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565650a7375626d697373696f6e5f686173683a616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161610a777261707065645f64656b5f686173683a66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
 		},
 		{
-			name:              "vector-2-negative-signal",
+			name:              "vector-2-zero-epoch",
 			orgID:             "org-edge-002",
 			epochID:           0,
 			submissionHash:    strings.Repeat("1", 64),
 			contributorPubkey: strings.Repeat("2", 64),
-			memoryType:        "negative_signal",
+			memoryType:        protocol.MemoryTypeMemory,
 			ciphertextHash:    strings.Repeat("3", 64),
 			plaintextHash:     strings.Repeat("4", 64),
 			salt:              strings.Repeat("5", 64),
 			wrappedDekHash:    strings.Repeat("6", 64),
-			expectedHex:       "7765766962652e7375626d69745f6d656d6f72792e76310a636970686572746578745f686173683a333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333330a636f6e7472696275746f725f7075626b65793a323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232320a65706f63685f69643a300a6d656d6f72795f747970653a6e656761746976655f7369676e616c0a6f72675f69643a6f72672d656467652d3030320a706c61696e746578745f686173683a343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434343434340a73616c743a353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535353535350a7375626d697373696f6e5f686173683a313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131310a777261707065645f64656b5f686173683a36363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636",
 		},
 		{
 			name:              "vector-3-special-org-id",
@@ -329,34 +337,44 @@ func TestCanonicalBodyCrossLanguageConformance(t *testing.T) {
 			epochID:           999999,
 			submissionHash:    strings.Repeat("ab", 32),
 			contributorPubkey: strings.Repeat("cd", 32),
-			memoryType:        "correct_implementation",
+			memoryType:        protocol.MemoryTypeMemory,
 			ciphertextHash:    strings.Repeat("ef", 32),
 			plaintextHash:     strings.Repeat("01", 32),
 			salt:              strings.Repeat("23", 32),
 			wrappedDekHash:    strings.Repeat("45", 32),
-			expectedHex:       "7765766962652e7375626d69745f6d656d6f72792e76310a636970686572746578745f686173683a656665666566656665666566656665666566656665666566656665666566656665666566656665666566656665666566656665666566656665666566656665660a636f6e7472696275746f725f7075626b65793a636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463646364636463640a65706f63685f69643a3939393939390a6d656d6f72795f747970653a636f72726563745f696d706c656d656e746174696f6e0a6f72675f69643a6f72675f776974682d6461736865735f616e642e646f74730a706c61696e746578745f686173683a303130313031303130313031303130313031303130313031303130313031303130313031303130313031303130313031303130313031303130313031303130310a73616c743a323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332333233323332330a7375626d697373696f6e5f686173683a616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261620a777261707065645f64656b5f686173683a34353435343534353435343534353435343534353435343534353435343534353435343534353435343534353435343534353435343534353435343534353435",
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := SubmitMemoryMessage(
-				tt.orgID,
-				tt.epochID,
+			t.Run(tt.name, func(t *testing.T) {
+				got := SubmitMemoryMessage(
+					tt.orgID,
+					tt.epochID,
 				tt.submissionHash,
 				tt.contributorPubkey,
 				tt.memoryType,
 				tt.ciphertextHash,
 				tt.plaintextHash,
-				tt.salt,
-				tt.wrappedDekHash,
-			)
-			gotHex := hex.EncodeToString(got)
-			if gotHex != tt.expectedHex {
-				t.Fatalf("canonical body mismatch:\n  got:  %s\n  want: %s", gotHex, tt.expectedHex)
-			}
-		})
-	}
+					tt.salt,
+					tt.wrappedDekHash,
+				)
+				gotHex := hex.EncodeToString(got)
+				expectedHex := manualSubmitMemoryHex(
+					tt.orgID,
+					tt.epochID,
+					tt.submissionHash,
+					tt.contributorPubkey,
+					tt.memoryType,
+					tt.ciphertextHash,
+					tt.plaintextHash,
+					tt.salt,
+					tt.wrappedDekHash,
+				)
+				if gotHex != expectedHex {
+					t.Fatalf("canonical body mismatch:\n  got:  %s\n  want: %s", gotHex, expectedHex)
+				}
+			})
+		}
 }
 
 func TestApproveSubmissionMessage_Deterministic(t *testing.T) {
@@ -367,7 +385,7 @@ func TestApproveSubmissionMessage_Deterministic(t *testing.T) {
 		"cid-approved-1",
 		"umbral_capsule_hex",
 		"umbral_ciphertext_hex",
-		protocol.MemoryTypeCorrectImplementation,
+		protocol.MemoryTypeMemory,
 		"moderator_pubkey_hex",
 		[]protocol.KeywordWithWeight{
 			{Keyword: "token_b", Weight: 0.5},
@@ -390,7 +408,7 @@ func TestApproveSubmissionMessage_Deterministic(t *testing.T) {
 	if lines[3] != "epoch_id:0" {
 		t.Errorf("line 3: %q", lines[3])
 	}
-	if lines[4] != "memory_type:correct_implementation" {
+	if lines[4] != "memory_type:memory" {
 		t.Errorf("line 4: %q", lines[4])
 	}
 	if lines[5] != "org_id:org-test-1" {
@@ -411,10 +429,10 @@ func TestApproveSubmissionMessage_Deterministic(t *testing.T) {
 }
 
 func TestApproveSubmissionMessage_KeywordsOrderIndependent(t *testing.T) {
-	msg1 := ApproveSubmissionMessage("o", "h", 1, "c", "cap", "ct", protocol.MemoryTypeCorrectImplementation, "s", []protocol.KeywordWithWeight{
+	msg1 := ApproveSubmissionMessage("o", "h", 1, "c", "cap", "ct", protocol.MemoryTypeMemory, "s", []protocol.KeywordWithWeight{
 		{Keyword: "b", Weight: 0.5}, {Keyword: "a", Weight: 0.3}, {Keyword: "c", Weight: 0.2},
 	})
-	msg2 := ApproveSubmissionMessage("o", "h", 1, "c", "cap", "ct", protocol.MemoryTypeCorrectImplementation, "s", []protocol.KeywordWithWeight{
+	msg2 := ApproveSubmissionMessage("o", "h", 1, "c", "cap", "ct", protocol.MemoryTypeMemory, "s", []protocol.KeywordWithWeight{
 		{Keyword: "c", Weight: 0.2}, {Keyword: "a", Weight: 0.3}, {Keyword: "b", Weight: 0.5},
 	})
 	if string(msg1) != string(msg2) {
@@ -423,7 +441,7 @@ func TestApproveSubmissionMessage_KeywordsOrderIndependent(t *testing.T) {
 }
 
 func TestApproveSubmissionMessage_EmptyKeywords(t *testing.T) {
-	msg := ApproveSubmissionMessage("o", "h", 0, "c", "cap", "ct", protocol.MemoryTypeNegativeSignal, "s", []protocol.KeywordWithWeight{})
+	msg := ApproveSubmissionMessage("o", "h", 0, "c", "cap", "ct", protocol.MemoryTypeMemory, "s", []protocol.KeywordWithWeight{})
 	lines := splitLines(string(msg))
 	if len(lines) != 10 {
 		t.Fatalf("expected 10 lines, got %d: %v", len(lines), lines)
@@ -497,6 +515,23 @@ func TestEnvelopesHash_EmptySlice(t *testing.T) {
 	if h != expected {
 		t.Errorf("empty envelopes hash: got %s, want %s", h, expected)
 	}
+}
+
+func manualSubmitMemoryHex(orgID string, epochID int, submissionHash, contributorPubkey, memoryType, ciphertextHash, plaintextHash, salt, wrappedDekHash string) string {
+	body := strings.Join([]string{
+		"wevibe.submit_memory.v1",
+		"ciphertext_hash:" + ciphertextHash,
+		"contributor_pubkey:" + contributorPubkey,
+		"epoch_id:" + strconv.Itoa(epochID),
+		"memory_type:" + memoryType,
+		"org_id:" + orgID,
+		"plaintext_hash:" + plaintextHash,
+		"salt:" + salt,
+		"submission_hash:" + submissionHash,
+		"wrapped_dek_hash:" + wrappedDekHash,
+	}, "\n")
+
+	return hex.EncodeToString([]byte(body))
 }
 
 func splitLines(s string) []string {

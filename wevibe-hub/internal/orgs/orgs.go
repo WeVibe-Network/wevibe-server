@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,10 +23,15 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 	}
 	defer tx.Rollback(ctx)
 
+	leaderWallet := strings.TrimSpace(req.LeaderWallet)
+	if leaderWallet == "" {
+		return nil, fmt.Errorf("leader_wallet is required")
+	}
+
 	_, err = tx.Exec(ctx, `
-		INSERT INTO orgs (org_id, leader_pubkey, org_name, domain, fee_model)
-		VALUES ($1, $2, $3, $4, $5)
-	`, req.OrgID, req.LeaderPubkey, req.OrgName, req.Domain, req.FeeModel)
+		INSERT INTO orgs (org_id, leader_pubkey, leader_wallet_address, org_name, domain, fee_model)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, req.OrgID, req.LeaderPubkey, leaderWallet, req.OrgName, req.Domain, req.FeeModel)
 	if err != nil {
 		return nil, fmt.Errorf("insert org: %w", err)
 	}
@@ -39,9 +45,9 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch)
-		VALUES ($1, $2, $3, 'leader', 0)
-	`, req.OrgID, req.LeaderPubkey, req.LeaderX25519Pubkey)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, wallet_address)
+		VALUES ($1, $2, $3, 'leader', 0, $4)
+	`, req.OrgID, req.LeaderPubkey, req.LeaderX25519Pubkey, leaderWallet)
 	if err != nil {
 		return nil, fmt.Errorf("insert leader member: %w", err)
 	}
@@ -125,12 +131,17 @@ func GetRotationPendingSince(ctx context.Context, pool *pgxpool.Pool, orgID stri
 }
 
 func BufferSubmission(ctx context.Context, pool *pgxpool.Pool, orgID string, req protocol.SubmitMemoryRequest) error {
+	memoryType := strings.TrimSpace(req.MemoryType)
+	if !protocol.IsValidMemoryType(memoryType) {
+		return fmt.Errorf("invalid memory_type: %s", req.MemoryType)
+	}
+
 	canonical := verify.SubmitMemoryMessage(
 		req.OrgID,
 		req.EpochID,
 		req.SubmissionHash,
 		req.ContributorPubkey,
-		req.MemoryType,
+		memoryType,
 		req.CiphertextHash,
 		req.PlaintextHash,
 		req.Salt,
@@ -143,7 +154,7 @@ func BufferSubmission(ctx context.Context, pool *pgxpool.Pool, orgID string, req
 	_, err := pool.Exec(ctx, `
 		INSERT INTO rotation_buffer (org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, submission_hash, stack_hint, memory_type, plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, orgID, req.EpochID, req.ContributorPubkey, req.Ciphertext, req.WrappedDekMod, req.ContributorSig, req.SubmissionHash, req.StackHint, req.MemoryType, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash)
+	`, orgID, req.EpochID, req.ContributorPubkey, req.Ciphertext, req.WrappedDekMod, req.ContributorSig, req.SubmissionHash, req.StackHint, memoryType, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash)
 	return err
 }
 

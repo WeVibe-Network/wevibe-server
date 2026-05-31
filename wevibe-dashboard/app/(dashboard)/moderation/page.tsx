@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConnectionState, WeVibeMcpClient, getMcpClient } from '@/lib/mcp-client';
 import { SanitizationFinding } from '@/lib/hub-client';
 
-type MemoryType = 'correct_implementation' | 'negative_signal';
+type MemoryType = 'memory';
 
 type QueueItem = {
   submission_hash: string;
@@ -335,17 +335,9 @@ export default function ModerationPage() {
                 <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
                   <span className="font-mono">{item.submission_hash}</span>
                   <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">Epoch {item.epoch_id}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      item.memory_type === 'correct_implementation'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : 'bg-rose-100 text-rose-700'
-                    }`}
-                  >
-                    {item.memory_type === 'correct_implementation'
-                      ? 'Correct implementation'
-                      : 'Negative signal'}
-                  </span>
+				  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+					Memory
+				  </span>
                   {item.stack_hint?.map(tag => (
                     <span key={tag} className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-600">
                       {tag}

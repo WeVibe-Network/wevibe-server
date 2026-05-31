@@ -2,13 +2,19 @@ package relay
 
 import (
 	"bytes"
+	"encoding/base64"
 	"testing"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+	cryptocodec "github.com/cosmos/cosmos-sdk/crypto/codec"
+	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/tx/signing"
+	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	authztypes "github.com/cosmos/cosmos-sdk/x/authz"
-	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	"github.com/cosmos/gogoproto/proto"
+	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 )
 
 func TestParseCanonicalBody_Valid(t *testing.T) {
@@ -186,5 +192,123 @@ func TestExtractInnerGranter_DisallowedType(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(err.Error()), []byte("not allowed")) {
 		t.Errorf("expected 'not allowed' error, got %v", err)
+	}
+}
+// ── Direct (non-delegate) leader-signing path — D-S32-CO044-LEADER-DUAL-PATH ──
+
+func init() {
+	sdk.GetConfig().SetBech32PrefixForAccount("wevibe", "wevibepub")
+}
+
+// buildDirectTx constructs a single-signer tx carrying msg, with the signer
+// pubkey embedded (so GetPubKeys resolves), as a directly-signed leader tx.
+func buildDirectTx(t *testing.T, priv *secp256k1.PrivKey, msg sdk.Msg) sdk.Tx {
+	t.Helper()
+	registry := codectypes.NewInterfaceRegistry()
+	cryptocodec.RegisterInterfaces(registry)
+	memorytypes.RegisterInterfaces(registry)
+	cdc := codec.NewProtoCodec(registry)
+	cfg := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
+
+	b := cfg.NewTxBuilder()
+	if err := b.SetMsgs(msg); err != nil {
+		t.Fatalf("set msgs: %v", err)
+	}
+	if err := b.SetSignatures(signing.SignatureV2{
+		PubKey: priv.PubKey(),
+		Data: &signing.SingleSignatureData{
+			SignMode:  signing.SignMode_SIGN_MODE_DIRECT,
+			Signature: nil,
+		},
+		Sequence: 0,
+	}); err != nil {
+		t.Fatalf("set signatures: %v", err)
+	}
+	return b.GetTx()
+}
+
+func signBody(t *testing.T, priv *secp256k1.PrivKey, body string) string {
+	t.Helper()
+	sig, err := priv.Sign([]byte(body))
+	if err != nil {
+		t.Fatalf("sign body: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(sig)
+}
+
+func TestVerifyWalletSignature_Valid(t *testing.T) {
+	priv := secp256k1.GenPrivKey()
+	walletAddr := sdk.AccAddress(priv.PubKey().Address()).String()
+	body := "WV-RELAY-v1\norg_id:o\nwallet_address:" + walletAddr + "\ntx_bytes_base64:AA=="
+
+	tx := buildDirectTx(t, priv, &memorytypes.MsgApproveMemory{Signer: walletAddr, OrgId: "o"})
+	sigB64 := signBody(t, priv, body)
+
+	pk, err := VerifyWalletSignature(tx, walletAddr, body, sigB64)
+	if err != nil {
+		t.Fatalf("expected valid wallet signature, got %v", err)
+	}
+	if sdk.AccAddress(pk.Address()).String() != walletAddr {
+		t.Errorf("returned pubkey address mismatch")
+	}
+}
+
+func TestVerifyWalletSignature_AddressMismatch(t *testing.T) {
+	priv := secp256k1.GenPrivKey()
+	other := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address()).String()
+	body := "WV-RELAY-v1\norg_id:o\nwallet_address:" + other + "\ntx_bytes_base64:AA=="
+
+	tx := buildDirectTx(t, priv, &memorytypes.MsgApproveMemory{Signer: other, OrgId: "o"})
+	sigB64 := signBody(t, priv, body)
+
+	if _, err := VerifyWalletSignature(tx, other, body, sigB64); err != ErrSignerMismatch {
+		t.Fatalf("expected ErrSignerMismatch, got %v", err)
+	}
+}
+
+func TestVerifyWalletSignature_BadSig(t *testing.T) {
+	priv := secp256k1.GenPrivKey()
+	walletAddr := sdk.AccAddress(priv.PubKey().Address()).String()
+	body := "WV-RELAY-v1\norg_id:o\nwallet_address:" + walletAddr + "\ntx_bytes_base64:AA=="
+
+	tx := buildDirectTx(t, priv, &memorytypes.MsgApproveMemory{Signer: walletAddr, OrgId: "o"})
+	// Sign a different body → signature will not verify over `body`.
+	sigB64 := signBody(t, priv, body+"tampered")
+
+	if _, err := VerifyWalletSignature(tx, walletAddr, body, sigB64); err != ErrSignatureVerifyFail {
+		t.Fatalf("expected ErrSignatureVerifyFail, got %v", err)
+	}
+}
+
+func TestValidateDirectMsgs_Allowed(t *testing.T) {
+	priv := secp256k1.GenPrivKey()
+	walletAddr := sdk.AccAddress(priv.PubKey().Address()).String()
+	tx := buildDirectTx(t, priv, &memorytypes.MsgApproveMemory{Signer: walletAddr, OrgId: "o"})
+
+	if err := ValidateDirectMsgs(tx, walletAddr); err != nil {
+		t.Fatalf("expected allowed msg to pass, got %v", err)
+	}
+}
+
+func TestValidateDirectMsgs_SignerMismatch(t *testing.T) {
+	priv := secp256k1.GenPrivKey()
+	walletAddr := sdk.AccAddress(priv.PubKey().Address()).String()
+	// msg signer is someone else
+	tx := buildDirectTx(t, priv, &memorytypes.MsgApproveMemory{Signer: "wevibe1other", OrgId: "o"})
+
+	if err := ValidateDirectMsgs(tx, walletAddr); err != ErrSignerMismatch {
+		t.Fatalf("expected ErrSignerMismatch, got %v", err)
+	}
+}
+
+func TestValidateDirectMsgs_DisallowedType(t *testing.T) {
+	priv := secp256k1.GenPrivKey()
+	walletAddr := sdk.AccAddress(priv.PubKey().Address()).String()
+	// MsgExec is not in the relay allow-list as a top-level direct msg
+	tx := buildDirectTx(t, priv, &authztypes.MsgExec{Grantee: walletAddr})
+
+	err := ValidateDirectMsgs(tx, walletAddr)
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("not allowed")) {
+		t.Fatalf("expected 'not allowed' error, got %v", err)
 	}
 }

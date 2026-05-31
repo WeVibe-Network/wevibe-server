@@ -108,7 +108,7 @@ func buildReq(t *testing.T, orgID string) (protocol.SubmitMemoryRequest, ed25519
 	plaintextHashHex := sha256Hex([]byte("test-plaintext"))
 	saltHex := "0000000000000000000000000000000000000000000000000000000000000000"
 	wrappedDekHashHex := sha256Hex(dkBytes)
-	memoryType := protocol.MemoryTypeCorrectImplementation
+	memoryType := protocol.MemoryTypeMemory
 	canonical := verify.SubmitMemoryMessage(orgID, 0, hashHex, contribPub, memoryType, ciphertextHashHex, plaintextHashHex, saltHex, wrappedDekHashHex)
 	sig := ed25519.Sign(priv, canonical)
 
@@ -327,7 +327,7 @@ func TestHubNeverStoresPlaintext(t *testing.T) {
 
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	contribPub := hex.EncodeToString(pub)
-	memoryType := protocol.MemoryTypeCorrectImplementation
+	memoryType := protocol.MemoryTypeMemory
 	canonical := verify.SubmitMemoryMessage(orgID, 0, hashHex, contribPub, memoryType, ciphertextHashHex, plaintextHashHex, saltHex, wrappedDekHashHex)
 	sig := ed25519.Sign(priv, canonical)
 	insertMember(t, pool, orgID, contribPub)

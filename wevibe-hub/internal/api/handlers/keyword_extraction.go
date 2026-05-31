@@ -247,6 +247,10 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("invalid status: %s (expected pending_keyword)", status)})
 			continue
 		}
+		if !protocol.IsValidMemoryType(memoryType) {
+			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("invalid memory_type: %s", memoryType)})
+			continue
+		}
 
 		if len(mem.Classified) == 0 {
 			results = append(results, result{Hash: mem.SubmissionHash, Error: "no classified keywords provided"})
@@ -313,11 +317,9 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if memoryType == protocol.MemoryTypeNegativeSignal {
-			if len(ciphertextHex) > protocol.MaxNegativeSignalChars*2 {
-				results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("negative_signal plaintext too long: %d chars (max %d)", len(ciphertextHex)/2, protocol.MaxNegativeSignalChars)})
-				continue
-			}
+		if len(ciphertextHex) > protocol.MaxMemoryChars*2 {
+			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("memory plaintext too long: %d chars (max %d)", len(ciphertextHex)/2, protocol.MaxMemoryChars)})
+			continue
 		}
 
 		newExtractionData, err := json.Marshal(map[string]interface{}{

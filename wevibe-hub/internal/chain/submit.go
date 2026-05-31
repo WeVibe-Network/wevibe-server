@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/cosmos/cosmos-sdk/types"
+	"github.com/jackc/pgx/v5/pgxpool"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	orgtypes "github.com/wevibe-network/wevibe-chain/x/org/types"
-	reputationtypes "github.com/wevibe-network/wevibe-chain/x/reputation/types"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
@@ -31,125 +32,18 @@ type BatchMemory struct {
 	ApprovedMemoryType  string
 }
 
-func (c *GrpcClient) SubmitMemoryToChain(ctx context.Context, orgID string, mem BatchMemory) (string, error) {
-	if len(mem.ContentHash) != 32 {
-		return "", fmt.Errorf("content_hash must be 32 bytes, got %d", len(mem.ContentHash))
-	}
-	if len(mem.EncryptedBlob) == 0 {
-		return "", fmt.Errorf("encrypted_blob cannot be empty")
-	}
-	if !protocol.IsValidMemoryType(mem.SubmittedMemoryType) {
-		return "", fmt.Errorf("invalid submitted memory_type: %s", mem.SubmittedMemoryType)
-	}
-	if !protocol.IsValidMemoryType(mem.ApprovedMemoryType) {
-		return "", fmt.Errorf("invalid approved memory_type: %s", mem.ApprovedMemoryType)
-	}
-
-	submittedMemoryType, err := mapMemoryTypeToChainEnum(mem.SubmittedMemoryType)
-	if err != nil {
-		return "", err
-	}
-	approvedMemoryType, err := mapMemoryTypeToChainEnum(mem.ApprovedMemoryType)
-	if err != nil {
-		return "", err
-	}
-
-	msgCommit := &memorytypes.MsgSubmitCommitment{
-		Signer:            c.submitter.String(),
-		OrgId:             orgID,
-		ContentHash:       mem.ContentHash,
-		Keywords:          mem.Keywords,
-		ContributorId:     mem.ContributorID,
-		ContributorWallet: mem.ContributorWallet,
-		MemoryType:        submittedMemoryType,
-	}
-
-	msgApprove := &memorytypes.MsgApproveMemory{
-		Signer:           c.submitter.String(),
-		OrgId:            orgID,
-		ContentHash:      mem.ContentHash,
-		EncryptedBlob:    mem.EncryptedBlob,
-		CommittingLeader: mem.CommittingLeader,
-		WrappedDekEnc:    mem.WrappedDekEnc,
-		PlaintextHash:    mem.PlaintextHash,
-		Salt:             mem.Salt,
-		CiphertextHash:   mem.CiphertextHash,
-		ContributorSig:   mem.ContributorSig,
-		MemoryType:       approvedMemoryType,
-	}
-
-	txHash, err := c.BroadcastMsgs(ctx, msgCommit, msgApprove)
-	if err != nil {
-		return "", fmt.Errorf("broadcast: %w", err)
-	}
-
-	return txHash, nil
-}
-
 func mapMemoryTypeToChainEnum(memoryType string) (memorytypes.MemoryType, error) {
 	switch memoryType {
-	case protocol.MemoryTypeCorrectImplementation:
+	case protocol.MemoryTypeMemory:
 		return memorytypes.MemoryType_MEMORY_TYPE_CORRECT_IMPLEMENTATION, nil
-	case protocol.MemoryTypeNegativeSignal:
-		return memorytypes.MemoryType_MEMORY_TYPE_NEGATIVE_SIGNAL, nil
 	default:
 		return memorytypes.MemoryType_MEMORY_TYPE_UNSPECIFIED, fmt.Errorf("invalid memory_type: %s", memoryType)
 	}
 }
 
-func (c *GrpcClient) UpdateOrgChainConfig(
-	ctx context.Context,
-	orgID string,
-	serveAttestationRequired bool,
-	minContributionsPerEpoch uint64,
-	contestStakeVibe uint64,
-	repTiers []*orgtypes.RepTier,
-) (string, error) {
-	if len(repTiers) == 0 {
-		return "", fmt.Errorf("rep_tiers cannot be empty")
-	}
-
-	msgConfig := &orgtypes.MsgSetOrgConfig{
-		Signer:                   c.submitter.String(),
-		OrgId:                    orgID,
-		ServeAttestationRequired: serveAttestationRequired,
-		MinContributionsPerEpoch: minContributionsPerEpoch,
-		ContestStakeVibe:         contestStakeVibe,
-	}
-
-	msgRepTiers := &orgtypes.MsgSetRepTiers{
-		Signer: c.submitter.String(),
-		OrgId:  orgID,
-		Tiers:  repTiers,
-	}
-
-	txHash, err := c.BroadcastMsgs(ctx, msgConfig, msgRepTiers)
-	if err != nil {
-		return "", fmt.Errorf("broadcast: %w", err)
-	}
-
-	return txHash, nil
-}
-
-func (c *GrpcClient) SubmitMemoryBatch(ctx context.Context, orgID string, memories []BatchMemory) ([]string, error) {
-	var txHashes []string
-	for _, mem := range memories {
-		txHash, err := c.SubmitMemoryToChain(ctx, orgID, mem)
-		if err != nil {
-			return txHashes, fmt.Errorf("batch submit failed at tx %d: %w", len(txHashes), err)
-		}
-		txHashes = append(txHashes, txHash)
-	}
-	return txHashes, nil
-}
-
-func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, orgID string, memories []BatchMemory) (string, []string, error) {
+func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, memories []BatchMemory) (string, []string, error) {
 	if len(memories) == 0 {
 		return "", nil, nil
-	}
-	if len(memories) == 1 {
-		txHash, err := c.SubmitMemoryToChain(ctx, orgID, memories[0])
-		return txHash, []string{txHash}, err
 	}
 
 	var allMsgs []types.Msg
@@ -161,6 +55,9 @@ func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, orgID string, 
 		}
 		if len(mem.EncryptedBlob) == 0 {
 			return "", nil, fmt.Errorf("encrypted_blob cannot be empty")
+		}
+		if strings.TrimSpace(mem.ContributorWallet) == "" {
+			return "", nil, fmt.Errorf("contributor_wallet cannot be empty")
 		}
 		if !protocol.IsValidMemoryType(mem.SubmittedMemoryType) {
 			return "", nil, fmt.Errorf("invalid submitted memory_type: %s", mem.SubmittedMemoryType)
@@ -178,18 +75,10 @@ func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, orgID string, 
 			return "", nil, err
 		}
 
-		msgCommit := &memorytypes.MsgSubmitCommitment{
-			Signer:            c.submitter.String(),
-			OrgId:             orgID,
-			ContentHash:       mem.ContentHash,
-			Keywords:          mem.Keywords,
-			ContributorId:     mem.ContributorID,
-			ContributorWallet: mem.ContributorWallet,
-			MemoryType:        submittedMemoryType,
-		}
+		msgCommit := buildSubmitCommitmentMsg("", orgID, mem, submittedMemoryType)
 
 		msgApprove := &memorytypes.MsgApproveMemory{
-			Signer:           c.submitter.String(),
+			Signer:           "",
 			OrgId:            orgID,
 			ContentHash:      mem.ContentHash,
 			EncryptedBlob:    mem.EncryptedBlob,
@@ -206,12 +95,27 @@ func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, orgID string, 
 		submissionHashes = append(submissionHashes, hex.EncodeToString(mem.ContentHash))
 	}
 
-	txHash, err := c.BroadcastMsgs(ctx, allMsgs...)
+	txResponse, err := c.BroadcastMsgsForOrg(ctx, db, faucetURL, orgID, allMsgs...)
 	if err != nil {
 		return "", nil, fmt.Errorf("broadcast: %w", err)
 	}
+	if txResponse == nil {
+		return "", nil, fmt.Errorf("broadcast: missing tx response")
+	}
 
-	return txHash, submissionHashes, nil
+	return txResponse.TxHash, submissionHashes, nil
+}
+
+func buildSubmitCommitmentMsg(signer, orgID string, mem BatchMemory, submittedMemoryType memorytypes.MemoryType) *memorytypes.MsgSubmitCommitment {
+	return &memorytypes.MsgSubmitCommitment{
+		Signer:            signer,
+		OrgId:             orgID,
+		ContentHash:       mem.ContentHash,
+		Keywords:          mem.Keywords,
+		ContributorId:     mem.ContributorID,
+		ContributorWallet: mem.ContributorWallet,
+		MemoryType:        submittedMemoryType,
+	}
 }
 
 type ServeEntryInput struct {
@@ -243,7 +147,7 @@ type DenialEntryInput struct {
 	MatchedKeywords []string
 }
 
-func (c *GrpcClient) SubmitServeBatch(ctx context.Context, orgID string, epoch uint64, entries []ServeEntryInput) (string, error) {
+func (c *GrpcClient) SubmitServeBatch(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, epoch uint64, entries []ServeEntryInput) (string, error) {
 	if len(entries) == 0 {
 		return "", fmt.Errorf("at least one entry required")
 	}
@@ -274,7 +178,7 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, orgID string, epoch u
 	}
 
 	msg := &servetypes.MsgSubmitServeBatch{
-		Signer: c.submitter.String(),
+		Signer: "",
 		OrgId:  orgID,
 		Epoch:  epoch,
 		Serves: serves,
@@ -291,15 +195,18 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, orgID string, epoch u
 	// on the chain. This was the secondary defect surfaced once the
 	// hub→chain pipeline started broadcasting in CO-035.
 
-	txHash, err := c.BroadcastMsgs(ctx, msg)
+	txResponse, err := c.BroadcastMsgsForOrgCommit(ctx, db, faucetURL, orgID, msg)
 	if err != nil {
 		return "", fmt.Errorf("broadcast: %w", err)
 	}
+	if txResponse == nil {
+		return "", fmt.Errorf("broadcast: missing tx response")
+	}
 
-	return txHash, nil
+	return txResponse.TxHash, nil
 }
 
-func (c *GrpcClient) SubmitDenialBatch(ctx context.Context, orgID string, epoch uint64, entries []DenialEntryInput) (string, error) {
+func (c *GrpcClient) SubmitDenialBatch(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, epoch uint64, entries []DenialEntryInput) (string, error) {
 	if len(entries) == 0 {
 		return "", fmt.Errorf("at least one entry required")
 	}
@@ -328,83 +235,52 @@ func (c *GrpcClient) SubmitDenialBatch(ctx context.Context, orgID string, epoch 
 	}
 
 	msg := &servetypes.MsgSubmitDenialBatch{
-		Signer:  c.submitter.String(),
+		Signer:  "",
 		OrgId:   orgID,
 		Epoch:   epoch,
 		Entries: denials,
 	}
 
-	txHash, err := c.BroadcastMsgs(ctx, msg)
+	txResponse, err := c.BroadcastMsgsForOrgCommit(ctx, db, faucetURL, orgID, msg)
 	if err != nil {
 		return "", fmt.Errorf("broadcast: %w", err)
 	}
+	if txResponse == nil {
+		return "", fmt.Errorf("broadcast: missing tx response")
+	}
 
-	return txHash, nil
+	return txResponse.TxHash, nil
 }
 
-type ReportMemoryInput struct {
-	ContentHash    []byte
-	ReporterID     string
-	ReporterWallet string
-	Reason         string
-	Epoch          uint64
-}
-
-func (c *GrpcClient) SubmitMemoryReport(ctx context.Context, orgID string, input ReportMemoryInput, contributorWalletAddress string) (string, error) {
-	if len(input.ContentHash) != 32 {
-		return "", fmt.Errorf("content_hash must be 32 bytes, got %d", len(input.ContentHash))
-	}
-	if input.ReporterID == "" {
-		return "", fmt.Errorf("reporter_id cannot be empty")
-	}
-	if input.Reason == "" {
-		return "", fmt.Errorf("reason cannot be empty")
+func (c *GrpcClient) RegisterOrgOnChain(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID, leader, domain, hubServingKey, leaderWallet string, storageQuota, retrievalBudget uint64) (string, error) {
+	trimmedHubServingKey := strings.TrimSpace(hubServingKey)
+	if trimmedHubServingKey == "" {
+		return "", fmt.Errorf("hub_serving_key is required")
 	}
 
-	msg := &memorytypes.MsgReportMemory{
-		Signer:            c.submitter.String(),
-		OrgId:             orgID,
-		ContentHash:       input.ContentHash,
-		ContributorPubkey: input.ReporterID,
-		ReporterPubkey:    input.ReporterID,
-		Reason:            input.Reason,
+	trimmedLeaderWallet := strings.TrimSpace(leaderWallet)
+	if trimmedLeaderWallet == "" {
+		return "", fmt.Errorf("leader_wallet is required")
 	}
 
-	contributorID := contributorWalletAddress
-
-	var allMsgs []types.Msg
-	allMsgs = append(allMsgs, msg)
-	if contributorID != "" {
-		allMsgs = append(allMsgs, &reputationtypes.MsgRecordBan{
-			Authority:     c.submitter.String(),
-			ContributorId: contributorID,
-			OrgId:         orgID,
-			MemoryCid:     hex.EncodeToString(input.ContentHash),
-		})
-	}
-
-	txHash, err := c.BroadcastMsgs(ctx, allMsgs...)
-	if err != nil {
-		return "", fmt.Errorf("broadcast report: %w", err)
-	}
-
-	return txHash, nil
-}
-
-func (c *GrpcClient) RegisterOrgOnChain(ctx context.Context, orgID, leader, domain string, storageQuota, retrievalBudget uint64) (string, error) {
 	msg := &orgtypes.MsgRegisterOrg{
-		Signer:          c.submitter.String(),
+		Signer:          "",
 		OrgId:           orgID,
 		Leader:          leader,
 		StorageQuota:    storageQuota,
 		RetrievalBudget: retrievalBudget,
 		Domain:          domain,
+		HubServingKey:   trimmedHubServingKey,
+		LeaderWallet:    trimmedLeaderWallet,
 	}
 
-	txHash, err := c.BroadcastMsgs(ctx, msg)
+	txResponse, err := c.BroadcastMsgsForOrg(ctx, db, faucetURL, orgID, msg)
 	if err != nil {
 		return "", fmt.Errorf("broadcast register org: %w", err)
 	}
+	if txResponse == nil {
+		return "", fmt.Errorf("broadcast register org: missing tx response")
+	}
 
-	return txHash, nil
+	return txResponse.TxHash, nil
 }

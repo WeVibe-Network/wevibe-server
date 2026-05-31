@@ -13,14 +13,14 @@ function isMemoryCandidate(value: unknown): value is MemoryCandidate {
     return false;
   }
 
-  return (
-    typeof value.insight === 'string'
-    && typeof value.context === 'string'
-    && (value.avoid === null || typeof value.avoid === 'string')
-    && Array.isArray(value.stack)
-    && value.stack.every((entry) => typeof entry === 'string')
-    && (value.memory_type === 'correct_implementation' || value.memory_type === 'negative_signal')
-  );
+	return (
+		typeof value.insight === 'string'
+		&& typeof value.context === 'string'
+		&& (value.avoid === null || typeof value.avoid === 'string')
+		&& Array.isArray(value.stack)
+		&& value.stack.every((entry) => typeof entry === 'string')
+		&& value.memory_type === 'memory'
+	);
 }
 
 export async function POST(request: NextRequest) {

@@ -3,6 +3,9 @@ import { OfflineSigner } from '@cosmjs/proto-signing';
 import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
 import { MsgGrant, MsgRevoke } from 'cosmjs-types/cosmos/authz/v1beta1/tx';
 import { GenericAuthorization } from 'cosmjs-types/cosmos/authz/v1beta1/authz';
+import { buildRelayCanonicalBody } from './canonical-body';
+import { connectWallet, getOfflineSigner, type WalletProvider } from './wallet-connect';
+import { postRelayCanonicalBody } from './relay-client';
 
 export interface EncodeObject {
   typeUrl: string;
@@ -111,6 +114,18 @@ export interface ServeEntryInput {
   matched_keywords: string[];
 }
 
+interface KeywordWeightInput {
+  keyword: string;
+  weight?: string;
+}
+
+interface RelayBroadcastResponse {
+  tx_hash: string;
+  code: number;
+  raw_log: string;
+  height: number;
+}
+
 function encodeRepeatedStringField(tag: number, values: string[]): number[] {
   const fields: number[] = [];
   for (const value of values) {
@@ -138,6 +153,244 @@ function encodeStringField(tag: number, value: string): number[] {
 function encodeBytesField(tag: number, value: string): number[] {
   const bytes = [...Buffer.from(value, 'hex')];
   return [tag, ...encodeVarint(bytes.length), ...bytes];
+}
+
+function encodeBytesFieldFromBytes(tag: number, value: Uint8Array): number[] {
+  const bytes = [...value];
+  return [tag, ...encodeVarint(bytes.length), ...bytes];
+}
+
+function encodeNestedField(tag: number, fields: number[]): number[] {
+  return [tag, ...encodeVarint(fields.length), ...fields];
+}
+
+function mapMemoryType(memoryType: string): number {
+  if (memoryType !== 'memory') {
+    throw new Error(`unsupported memory_type: ${memoryType}`);
+  }
+  return 1;
+}
+
+function base64Encode(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+async function connectSupportedWallet(): Promise<{ provider: WalletProvider }> {
+  const providers: WalletProvider[] = ['keplr', 'leap'];
+  let lastError: Error | null = null;
+
+  for (const provider of providers) {
+    try {
+      const walletConnection = await connectWallet(provider);
+      return { provider: walletConnection.provider };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+
+  throw lastError ?? new Error('No supported wallet available (Keplr or Leap)');
+}
+
+export function buildSubmitCommitmentMsg(
+  signer: string,
+  orgId: string,
+  contentHash: Uint8Array,
+  keywords: KeywordWeightInput[],
+  contributorId: string,
+  contributorWallet: string,
+  memoryType: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeBytesFieldFromBytes(0x1a, contentHash),
+  ];
+
+  for (const keyword of keywords) {
+    const nested: number[] = [
+      ...encodeStringField(0x0a, keyword.keyword),
+      ...encodeStringField(0x12, keyword.weight ?? '1.0'),
+    ];
+    fields.push(...encodeNestedField(0x22, nested));
+  }
+
+  fields.push(
+    ...encodeStringField(0x2a, contributorId),
+    ...encodeStringField(0x32, contributorWallet),
+    ...encodeVarint(0x38),
+    ...encodeVarint(mapMemoryType(memoryType)),
+  );
+
+  return {
+    typeUrl: '/wevibe.memory.v1.MsgSubmitCommitment',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildApproveMemoryMsg(
+  signer: string,
+  orgId: string,
+  contentHash: Uint8Array,
+  encryptedBlob: Uint8Array,
+  committingLeader: string,
+  wrappedDekEnc: Uint8Array,
+  plaintextHash: Uint8Array,
+  salt: Uint8Array,
+  ciphertextHash: Uint8Array,
+  contributorSig: Uint8Array,
+  memoryType: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeBytesFieldFromBytes(0x1a, contentHash),
+    ...encodeBytesFieldFromBytes(0x22, encryptedBlob),
+    ...encodeStringField(0x32, committingLeader),
+    ...encodeBytesFieldFromBytes(0x3a, wrappedDekEnc),
+    ...encodeVarint(0x40),
+    ...encodeVarint(mapMemoryType(memoryType)),
+    ...encodeBytesFieldFromBytes(0x4a, plaintextHash),
+    ...encodeBytesFieldFromBytes(0x52, salt),
+    ...encodeBytesFieldFromBytes(0x5a, ciphertextHash),
+    ...encodeBytesFieldFromBytes(0x62, contributorSig),
+  ];
+
+  return {
+    typeUrl: '/wevibe.memory.v1.MsgApproveMemory',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildReportMemoryMsg(args: {
+  signer: string;
+  orgId: string;
+  contentHash: Uint8Array;
+  contributorPubkey: string;
+  approvingModerators: string[];
+  upholdingModerators: string[];
+  reporterPubkey: string;
+  reason: string;
+  plaintext?: Uint8Array;
+  ciphertext?: Uint8Array;
+  capsule?: Uint8Array;
+  plaintextHash?: Uint8Array;
+  plaintextOversized?: boolean;
+}): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, args.signer),
+    ...encodeStringField(0x12, args.orgId),
+    ...encodeBytesFieldFromBytes(0x1a, args.contentHash),
+    ...encodeStringField(0x22, args.contributorPubkey),
+  ];
+
+  for (const mod of args.approvingModerators) {
+    fields.push(...encodeStringField(0x2a, mod));
+  }
+  for (const mod of args.upholdingModerators) {
+    fields.push(...encodeStringField(0x32, mod));
+  }
+
+  fields.push(
+    ...encodeStringField(0x3a, args.reporterPubkey),
+    ...encodeStringField(0x42, args.reason),
+  );
+
+  if (args.plaintext && args.plaintext.length > 0) {
+    fields.push(...encodeBytesFieldFromBytes(0x4a, args.plaintext));
+  }
+  if (args.ciphertext && args.ciphertext.length > 0) {
+    fields.push(...encodeBytesFieldFromBytes(0x52, args.ciphertext));
+  }
+  if (args.capsule && args.capsule.length > 0) {
+    fields.push(...encodeBytesFieldFromBytes(0x5a, args.capsule));
+  }
+  if (args.plaintextHash && args.plaintextHash.length > 0) {
+    fields.push(...encodeBytesFieldFromBytes(0x62, args.plaintextHash));
+  }
+  if (args.plaintextOversized) {
+    fields.push(...encodeVarint(0x68), ...encodeVarint(1));
+  }
+
+  return {
+    typeUrl: '/wevibe.memory.v1.MsgReportMemory',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildRegisterOrgMsg(
+  signer: string,
+  orgId: string,
+  leader: string,
+  storageQuota: number,
+  retrievalBudget: number,
+  domain: string,
+  hubServingKey: string,
+  leaderWallet: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeStringField(0x1a, leader),
+    ...encodeVarint(0x20), ...encodeVarint(storageQuota),
+    ...encodeVarint(0x28), ...encodeVarint(retrievalBudget),
+    ...encodeStringField(0x32, domain),
+    ...encodeStringField(0x3a, hubServingKey),
+    ...encodeStringField(0x42, leaderWallet),
+  ];
+
+  return {
+    typeUrl: '/wevibe.org.v1.MsgRegisterOrg',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export async function relayOrgDecision(
+  orgID: string,
+  msgs: EncodeObject[],
+  memo = '',
+): Promise<string> {
+  const chainId = process.env.NEXT_PUBLIC_WEVIBE_CHAIN_ID || 'wevibe-local-1';
+  const wallet = await connectSupportedWallet();
+  const signer = getOfflineSigner(chainId, wallet.provider);
+  const client = await getSigningClient(signer);
+
+  const [account] = await signer.getAccounts();
+  if (!account) {
+    throw new Error('No account found from connected wallet');
+  }
+
+  const fee = {
+    amount: [{ denom: 'uvibe', amount: '5000' }],
+    gas: '200000',
+  };
+
+  const txRaw = await client.sign(account.address, msgs, fee, memo);
+  const txBytes = TxRaw.encode(txRaw).finish();
+  const txBytesBase64 = base64Encode(txBytes);
+  const canonicalBody = buildRelayCanonicalBody(orgID, account.address, txBytesBase64);
+
+  const walletApi = wallet.provider === 'keplr' ? window.keplr : window.leap;
+  if (!walletApi) {
+    throw new Error('Connected wallet provider not available');
+  }
+  await walletApi.enable(chainId);
+  const signed = await walletApi.signArbitrary(chainId, account.address, canonicalBody);
+
+  const result = await postRelayCanonicalBody(
+    orgID,
+    `Wallet ${signed.signature}`,
+    canonicalBody,
+  ) as RelayBroadcastResponse;
+
+  if (!result.tx_hash) {
+    throw new Error('Relay broadcast missing tx_hash');
+  }
+
+  return result.tx_hash;
 }
 
 export function buildDenialBatchMsg(

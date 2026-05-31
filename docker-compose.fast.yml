@@ -2,3 +2,7 @@ services:
   wevibe-chain:
     environment:
       WEVIBE_EPOCH_DURATION_SECONDS: "2"
+  wevibe-faucet: {}
+  wevibe-hub:
+    environment:
+      GAS_STRATEGY: "simulate-retry"

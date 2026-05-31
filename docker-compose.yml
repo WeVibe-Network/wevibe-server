@@ -20,8 +20,8 @@
 #   make docker-up      # Bring up the containerized stack
 #   make docker-down    # Tear down + WIPE volumes
 #
-# Schema changes are migration-driven. Add SQL files under ./db/migrations/
-# and hub applies them automatically at startup.
+# Schema source of truth is ./db/schema.sql. Pre-MVP schema updates are
+# applied by resetting local volumes and restarting the hub.
 
 services:
   wevibe-postgres:
@@ -113,6 +113,7 @@ services:
       WEVIBE_CHAIN_ID: "wevibe-local-1"
       WEVIBE_CHAIN_GRPC_URL: "tcp://wevibe-chain:9090"
       WEVIBE_CHAIN_SUBMITTER_MNEMONIC: "${WEVIBE_CHAIN_SUBMITTER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}"
+      GAS_STRATEGY: "simulate-retry"
       OLLAMA_URL: http://host.docker.internal:11434
       WEVIBE_CHAIN_RPC_URL: tcp://wevibe-chain:26657
       WEVIBE_UMBRAL_SIDECAR_ADDR: "wevibe-umbral:4460"
@@ -164,6 +165,30 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+
+
+  wevibe-faucet:
+    build:
+      context: ../faucet
+      dockerfile: Dockerfile
+    container_name: wevibe-faucet
+    restart: unless-stopped
+    environment:
+      LISTEN_ADDR: ":4470"
+      CHAIN_RPC: "tcp://wevibe-chain:26657"
+      CHAIN_ID: "wevibe-local-1"
+      FAUCET_MNEMONIC: "${FAUCET_MNEMONIC:-legal winner thank year wave sausage worth useful legal winner thank yellow}"
+      RATE_LIMIT_WINDOW_SECONDS: "60"
+      RATE_LIMIT_MAX: "1"
+    depends_on:
+      wevibe-chain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4470/v1/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
 
 
   wevibe-dashboard:

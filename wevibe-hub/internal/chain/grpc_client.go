@@ -16,8 +16,11 @@ import (
 	"github.com/cosmos/cosmos-sdk/crypto/hd"
 	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	txtypes "github.com/cosmos/cosmos-sdk/types/tx"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	"github.com/jackc/pgx/v5/pgxpool"
 	attesttypes "github.com/wevibe-network/wevibe-chain/x/attestation/types"
 	bwtypes "github.com/wevibe-network/wevibe-chain/x/bandwidth/types"
 	emissionstypes "github.com/wevibe-network/wevibe-chain/x/emissions/types"
@@ -29,21 +32,33 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+type orgSigner struct {
+	orgID      string
+	keyringUID string
+	address    sdk.AccAddress
+	addressStr string
+	mu         sync.Mutex
+	seqLoaded  bool
+	accountNum uint64
+	nextSeq    uint64
+}
+
 type GrpcClient struct {
 	conn      *grpc.ClientConn
 	codec     codec.Codec
 	registry  codectypes.InterfaceRegistry
-	submitter sdk.AccAddress
 	kr        keyring.Keyring
+	mnemonic  string
 	chainID   string
 	rpcURL    string
 	txConfig  client.TxConfig
 	authQuery authtypes.QueryClient
+	bankQuery banktypes.QueryClient
+	txSim     txSimulator
+	gasMode   gasStrategy
 
-	fallbackMu            sync.Mutex
-	fallbackStateLoaded   bool
-	fallbackAccountNumber uint64
-	fallbackSequence      uint64
+	orgSigners   map[string]*orgSigner
+	orgSignersMu sync.RWMutex
 
 	memoryQuery    memorytypes.QueryClient
 	orgQuery       orgtypes.QueryClient
@@ -65,6 +80,11 @@ func NewGrpcClient(grpcURL, chainID, mnemonic string) (*GrpcClient, error) {
 	rpcURL := strings.TrimSpace(os.Getenv("WEVIBE_CHAIN_RPC_URL"))
 	if parsed, err := url.Parse(rpcURL); err == nil && parsed.Host != "" {
 		rpcURL = "http://" + parsed.Host
+	}
+
+	gasMode, err := parseGasStrategy(os.Getenv("GAS_STRATEGY"))
+	if err != nil {
+		return nil, err
 	}
 
 	conn, err := grpc.NewClient(normalizedGRPCURL,
@@ -92,31 +112,30 @@ func NewGrpcClient(grpcURL, chainID, mnemonic string) (*GrpcClient, error) {
 	}
 
 	hdPath := "m/44'/118'/0'/0/0"
-	info, err := kb.NewAccount("submitter", mnemonic, "", hdPath, hd.Secp256k1)
+	_, err = kb.NewAccount("submitter", mnemonic, "", hdPath, hd.Secp256k1)
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("derive submitter key: %w", err)
 	}
 
-	addr, err := info.GetAddress()
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("get submitter address: %w", err)
-	}
-
 	txConfig := authtx.NewTxConfig(cdc, authtx.DefaultSignModes)
 	authQuery := authtypes.NewQueryClient(conn)
+	bankQuery := banktypes.NewQueryClient(conn)
 
 	return &GrpcClient{
 		conn:           conn,
 		codec:          cdc,
 		registry:       registry,
-		submitter:      addr,
 		kr:             kb,
+		mnemonic:       mnemonic,
 		chainID:        chainID,
 		rpcURL:         rpcURL,
 		txConfig:       txConfig,
 		authQuery:      authQuery,
+		bankQuery:      bankQuery,
+		txSim:          txtypes.NewServiceClient(conn),
+		gasMode:        gasMode,
+		orgSigners:     make(map[string]*orgSigner),
 		memoryQuery:    memorytypes.NewQueryClient(conn),
 		orgQuery:       orgtypes.NewQueryClient(conn),
 		serveQuery:     servetypes.NewQueryClient(conn),
@@ -135,10 +154,17 @@ func (c *GrpcClient) Close() error {
 }
 
 func (c *GrpcClient) SubmitterAddress() string {
-	if c.submitter == nil {
+	record, err := c.kr.Key("submitter")
+	if err != nil {
 		return ""
 	}
-	return c.submitter.String()
+
+	address, err := record.GetAddress()
+	if err != nil {
+		return ""
+	}
+
+	return address.String()
 }
 
 func (c *GrpcClient) GetOrgQueryClient() orgtypes.QueryClient {
@@ -182,7 +208,17 @@ func (c *GrpcClient) GetKeyring() keyring.Keyring {
 }
 
 func (c *GrpcClient) GetSubmitterAddress() sdk.AccAddress {
-	return c.submitter
+	record, err := c.kr.Key("submitter")
+	if err != nil {
+		return nil
+	}
+
+	address, err := record.GetAddress()
+	if err != nil {
+		return nil
+	}
+
+	return address
 }
 
 func (c *GrpcClient) GetTxConfig() client.TxConfig {
@@ -195,4 +231,48 @@ func (c *GrpcClient) GetChainID() string {
 
 func (c *GrpcClient) BroadcastTxSync(ctx context.Context, txBytes []byte) (string, error) {
 	return c.broadcastTxSync(ctx, txBytes)
+}
+
+func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID string) (*orgSigner, error) {
+	trimmedOrgID := strings.TrimSpace(orgID)
+	if trimmedOrgID == "" {
+		return nil, fmt.Errorf("orgID is required")
+	}
+	if db == nil {
+		return nil, fmt.Errorf("db is required")
+	}
+
+	c.orgSignersMu.RLock()
+	if signer, ok := c.orgSigners[trimmedOrgID]; ok {
+		c.orgSignersMu.RUnlock()
+		return signer, nil
+	}
+	c.orgSignersMu.RUnlock()
+
+	c.orgSignersMu.Lock()
+	defer c.orgSignersMu.Unlock()
+
+	if signer, ok := c.orgSigners[trimmedOrgID]; ok {
+		return signer, nil
+	}
+
+	addressStr, keyringUID, err := c.EnsureOrgAccount(ctx, db, trimmedOrgID)
+	if err != nil {
+		return nil, err
+	}
+
+	address, err := sdk.AccAddressFromBech32(addressStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse org signer address %s: %w", addressStr, err)
+	}
+
+	signer := &orgSigner{
+		orgID:      trimmedOrgID,
+		keyringUID: keyringUID,
+		address:    address,
+		addressStr: addressStr,
+	}
+	c.orgSigners[trimmedOrgID] = signer
+
+	return signer, nil
 }

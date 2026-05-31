@@ -116,7 +116,7 @@ func TestSubmitMemory_RejectsZeroEpoch(t *testing.T) {
 		SubmissionHash:    strings.Repeat("c", 64),
 		ContributorPubkey: contributorPubkey,
 		ContributorSig:    strings.Repeat("d", 128),
-		MemoryType:        protocol.MemoryTypeCorrectImplementation,
+		MemoryType:        protocol.MemoryTypeMemory,
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -151,7 +151,7 @@ func TestSubmitMemory_RejectsNegativeEpoch(t *testing.T) {
 		SubmissionHash:    strings.Repeat("c", 64),
 		ContributorPubkey: contributorPubkey,
 		ContributorSig:    strings.Repeat("d", 128),
-		MemoryType:        protocol.MemoryTypeCorrectImplementation,
+		MemoryType:        protocol.MemoryTypeMemory,
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -183,7 +183,7 @@ func TestSubmitMemory_RejectsNonexistentEpoch(t *testing.T) {
 		SubmissionHash:    strings.Repeat("c", 64),
 		ContributorPubkey: contributorPubkey,
 		ContributorSig:    strings.Repeat("d", 128),
-		MemoryType:        protocol.MemoryTypeCorrectImplementation,
+		MemoryType:        protocol.MemoryTypeMemory,
 	}
 	body, _ := json.Marshal(reqBody)
 
@@ -241,7 +241,7 @@ func TestVoteOnSubmission_Quorum(t *testing.T) {
         INSERT INTO pending_submissions
 			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, stack_hint, memory_type)
 		VALUES ($1, $2, 0, $3, $4, $5, $6, ARRAY[]::TEXT[], $7)
-	`, submissionHash, orgID, contributorPubkey, ciphertext, wrapped, strings.Repeat("f", 128), protocol.MemoryTypeCorrectImplementation)
+	`, submissionHash, orgID, contributorPubkey, ciphertext, wrapped, strings.Repeat("f", 128), protocol.MemoryTypeMemory)
 	if err != nil {
 		t.Fatalf("insert pending submission: %v", err)
 	}

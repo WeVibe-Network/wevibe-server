@@ -12,9 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
-	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -63,6 +61,10 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.OrgID = orgID
+	if req.ContributorPubkey != memberPubkey {
+		http.Error(w, `{"error":"contributor_pubkey must match authenticated member"}`, http.StatusForbidden)
+		return
+	}
 
 	if req.Ciphertext == "" || req.WrappedDekMod == "" || req.SubmissionHash == "" ||
 		req.ContributorPubkey == "" || req.ContributorSig == "" || req.PlaintextHash == "" ||
@@ -71,7 +73,7 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !protocol.IsValidMemoryType(req.MemoryType) {
-		http.Error(w, `{"error":"memory_type must be one of: correct_implementation, negative_signal"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"memory_type must be: memory"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -170,7 +172,6 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Trial members cannot contribute. Upgrade to full membership."}`, http.StatusForbidden)
 		return
 	}
-
 	var req struct {
 		Submissions []protocol.SubmitMemoryRequest `json:"submissions"`
 	}
@@ -215,6 +216,11 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 
 	for _, submission := range req.Submissions {
 		submission.OrgID = orgID
+		if submission.ContributorPubkey != memberPubkey {
+			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "contributor_pubkey must match authenticated member"})
+			failed++
+			continue
+		}
 
 		if submission.Ciphertext == "" || submission.WrappedDekMod == "" || submission.SubmissionHash == "" ||
 			submission.ContributorPubkey == "" || submission.ContributorSig == "" || submission.PlaintextHash == "" ||
@@ -225,7 +231,7 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !protocol.IsValidMemoryType(submission.MemoryType) {
-			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "memory_type must be one of: correct_implementation, negative_signal"})
+			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "memory_type must be: memory"})
 			failed++
 			continue
 		}
@@ -468,7 +474,7 @@ func ApproveSubmission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !protocol.IsValidMemoryType(req.MemoryType) {
-		http.Error(w, `{"error":"memory_type must be one of: correct_implementation, negative_signal"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"memory_type must be: memory"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -625,10 +631,6 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
-	if chainClient == nil {
-		http.Error(w, `{"error":"chain client required"}`, http.StatusServiceUnavailable)
-		return
-	}
 
 	orgID := chi.URLParam(r, "orgID")
 	if orgID == "" {
@@ -679,14 +681,22 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type submitResult struct {
-		Hash   string `json:"submission_hash"`
-		TxHash string `json:"tx_hash,omitempty"`
-		Error  string `json:"error,omitempty"`
+	type preparedBatchMemory struct {
+		SubmissionHash   string   `json:"submission_hash"`
+		ContributorPubkey string  `json:"contributor_pubkey"`
+		ContributorWallet string  `json:"contributor_wallet"`
+		CommittingLeader  string  `json:"committing_leader"`
+		Keywords          []string `json:"keywords"`
+		MemoryType        string   `json:"memory_type"`
+		PlaintextHash     string   `json:"plaintext_hash"`
+		Salt              string   `json:"salt"`
+		CiphertextHash    string   `json:"ciphertext_hash"`
+		ContributorSig    string   `json:"contributor_sig"`
+		EncryptedBlob     string   `json:"encrypted_blob"`
+		WrappedDekEnc     string   `json:"wrapped_dek_enc"`
 	}
 
-	var results []submitResult
-	var submitted, failed int
+	prepared := make([]preparedBatchMemory, 0)
 
 	for rows.Next() {
 		var hash, contributor, ciphertext, wrappedDekMod, plaintextHash string
@@ -705,103 +715,110 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 			&memoryType,
 			&walletAddress,
 		); err != nil {
-			log.Printf("batch submit row scan failed: %v", err)
-			failed++
-			continue
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if strings.TrimSpace(walletAddress) == "" {
+			walletAddress = contributor
 		}
 		if !protocol.IsValidMemoryType(memoryType) {
 			log.Printf("batch submit skipping %s: invalid memory_type %q", hash, memoryType)
-			results = append(results, submitResult{Hash: hash, Error: "invalid memory_type"})
-			failed++
-			continue
+			http.Error(w, `{"error":"invalid memory_type"}`, http.StatusBadRequest)
+			return
 		}
 
-		decodeHex := func(fieldName, fieldValue, resultErr string) ([]byte, bool) {
+		decodeHex := func(fieldName, fieldValue string) ([]byte, error) {
 			decoded, decodeErr := hex.DecodeString(fieldValue)
 			if decodeErr != nil {
-				log.Printf("batch submit skipping %s: invalid %s hex: %v", hash, fieldName, decodeErr)
-				results = append(results, submitResult{Hash: hash, Error: resultErr})
-				failed++
-				return nil, false
+				return nil, fmt.Errorf("invalid %s hex: %w", fieldName, decodeErr)
 			}
-			return decoded, true
+			return decoded, nil
 		}
 
-		contentHashBytes, ok := decodeHex("submission_hash", hash, "invalid content hash")
-		if !ok {
-			continue
-		}
-		ciphertextBytes, ok := decodeHex("ciphertext_hex", ciphertext, "invalid ciphertext")
-		if !ok {
-			continue
-		}
-		wrappedDekEncBytes, ok := decodeHex("wrapped_dek_mod", wrappedDekMod, "invalid wrapped dek")
-		if !ok {
-			continue
-		}
-		plaintextHashBytes, ok := decodeHex("plaintext_hash", plaintextHash, "invalid plaintext hash")
-		if !ok {
-			continue
-		}
-		saltBytes, ok := decodeHex("salt", salt, "invalid salt")
-		if !ok {
-			continue
-		}
-		ciphertextHashBytes, ok := decodeHex("ciphertext_hash", ciphertextHash, "invalid ciphertext hash")
-		if !ok {
-			continue
-		}
-		contributorSigBytes, ok := decodeHex("contributor_sig", contributorSig, "invalid contributor signature")
-		if !ok {
-			continue
-		}
-
-		keywords := make([]*memorytypes.KeywordWeight, len(stackHint))
-		for i, kw := range stackHint {
-			keywords[i] = &memorytypes.KeywordWeight{
-				Keyword: kw,
-				Weight:  "1.0",
-			}
-		}
-
-		mem := chain.BatchMemory{
-			ContentHash:         contentHashBytes,
-			PlaintextHash:       plaintextHashBytes,
-			Salt:                saltBytes,
-			CiphertextHash:      ciphertextHashBytes,
-			ContributorSig:      contributorSigBytes,
-			ContributorPubkey:   contributor,
-			Approvers:           []string{signed.Pubkey},
-			CommittingLeader:    signed.Pubkey,
-			Keywords:            keywords,
-			ContributorID:       contributor,
-			ContributorWallet:   walletAddress,
-			EncryptedBlob:       ciphertextBytes,
-			WrappedDekEnc:       wrappedDekEncBytes,
-			SubmittedMemoryType: memoryType,
-			ApprovedMemoryType:  memoryType,
-		}
-
-		txHash, err := chainClient.SubmitMemoryToChain(r.Context(), orgID, mem)
+		contentHashBytes, err := decodeHex("submission_hash", hash)
 		if err != nil {
-			log.Printf("batch submit failed for %s: %v", hash, err)
-			results = append(results, submitResult{Hash: hash, Error: err.Error()})
-			failed++
-			continue
+			log.Printf("batch submit skipping %s: %v", hash, err)
+			http.Error(w, `{"error":"invalid content hash"}`, http.StatusBadRequest)
+			return
+		}
+		if len(contentHashBytes) != 32 {
+			http.Error(w, `{"error":"invalid content hash length"}`, http.StatusBadRequest)
+			return
+		}
+		ciphertextBytes, err := decodeHex("ciphertext_hex", ciphertext)
+		if err != nil {
+			log.Printf("batch submit skipping %s: %v", hash, err)
+			http.Error(w, `{"error":"invalid ciphertext"}`, http.StatusBadRequest)
+			return
+		}
+		if len(ciphertextBytes) == 0 {
+			http.Error(w, `{"error":"empty ciphertext"}`, http.StatusBadRequest)
+			return
+		}
+		wrappedDekEncBytes, err := decodeHex("wrapped_dek_mod", wrappedDekMod)
+		if err != nil {
+			log.Printf("batch submit skipping %s: %v", hash, err)
+			http.Error(w, `{"error":"invalid wrapped dek"}`, http.StatusBadRequest)
+			return
+		}
+		plaintextHashBytes, err := decodeHex("plaintext_hash", plaintextHash)
+		if err != nil {
+			log.Printf("batch submit skipping %s: %v", hash, err)
+			http.Error(w, `{"error":"invalid plaintext hash"}`, http.StatusBadRequest)
+			return
+		}
+		saltBytes, err := decodeHex("salt", salt)
+		if err != nil {
+			log.Printf("batch submit skipping %s: %v", hash, err)
+			http.Error(w, `{"error":"invalid salt"}`, http.StatusBadRequest)
+			return
+		}
+		ciphertextHashBytes, err := decodeHex("ciphertext_hash", ciphertextHash)
+		if err != nil {
+			log.Printf("batch submit skipping %s: %v", hash, err)
+			http.Error(w, `{"error":"invalid ciphertext hash"}`, http.StatusBadRequest)
+			return
+		}
+		contributorSigBytes, err := decodeHex("contributor_sig", contributorSig)
+		if err != nil {
+			log.Printf("batch submit skipping %s: %v", hash, err)
+			http.Error(w, `{"error":"invalid contributor signature"}`, http.StatusBadRequest)
+			return
 		}
 
-		_, _ = pool.Exec(r.Context(), `
-			DELETE FROM approval_votes WHERE org_id = $1 AND submission_hash = $2
-		`, orgID, hash)
+		keywords := make([]string, 0, len(stackHint))
+		for _, kw := range stackHint {
+			trimmed := strings.TrimSpace(kw)
+			if trimmed == "" {
+				continue
+			}
+			keywords = append(keywords, trimmed)
+		}
 
-		results = append(results, submitResult{Hash: hash, TxHash: txHash})
-		submitted++
+		prepared = append(prepared, preparedBatchMemory{
+			SubmissionHash:    hex.EncodeToString(contentHashBytes),
+			ContributorPubkey: contributor,
+			ContributorWallet: walletAddress,
+			CommittingLeader:  signed.Pubkey,
+			Keywords:          keywords,
+			MemoryType:        memoryType,
+			PlaintextHash:     hex.EncodeToString(plaintextHashBytes),
+			Salt:              hex.EncodeToString(saltBytes),
+			CiphertextHash:    hex.EncodeToString(ciphertextHashBytes),
+			ContributorSig:    hex.EncodeToString(contributorSigBytes),
+			EncryptedBlob:     hex.EncodeToString(ciphertextBytes),
+			WrappedDekEnc:     hex.EncodeToString(wrappedDekEncBytes),
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"submitted": submitted,
-		"failed":    failed,
-		"results":   results,
+		"batch":        prepared,
+		"verification": "passed",
 	})
 }

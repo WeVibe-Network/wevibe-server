@@ -1,44 +1,22 @@
-# WeVibe Hub Database Migrations
+# WeVibe Hub Database Schema
 
-This directory contains PostgreSQL schema migrations for `wevibe-hub`.
+`db/schema.sql` is the single source of truth for the hub Postgres schema.
 
-## Prerequisites
+There are no numbered migration files in pre-MVP development. The hub loads
+and applies `schema.sql` directly at startup (`internal/db/migrate.go`).
 
-- Install `golang-migrate` CLI: <https://github.com/golang-migrate/migrate/tree/master/cmd/migrate>
-- Set `DATABASE_URL` (example: `postgres://wevibe:wevibe_dev@localhost:5433/wevibe_hub?sslmode=disable`)
+## Changing the schema
 
-## Create a new migration
-
-```bash
-migrate create -ext sql -dir db/migrations -seq add_feature_name
-```
-
-## Apply migrations
-
-Migrations are applied automatically on `wevibe-hub` startup.
-
-```bash
-migrate -path db/migrations -database "$DATABASE_URL" up
-```
-
-## Roll back one migration
-
-```bash
-migrate -path db/migrations -database "$DATABASE_URL" down 1
-```
-
-## Show current migration version
-
-```bash
-migrate -path db/migrations -database "$DATABASE_URL" version
-```
-
-## Local reset behavior
-
-Pre-MVP local development can still reset state with:
+1. Edit `db/schema.sql`.
+2. Reset local database volumes.
+3. Restart the stack.
 
 ```bash
 docker compose down -v
+docker compose -f docker-compose.yml -f docker-compose.fast.yml up -d --build
 ```
 
-That reset is no longer required for schema changes because startup migrations now apply incrementally.
+## Notes
+
+- Schema changes are destructive in pre-MVP local/dev environments.
+- Do not add `db/migrations/*` files.

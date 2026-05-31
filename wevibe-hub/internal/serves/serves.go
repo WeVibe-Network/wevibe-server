@@ -136,7 +136,7 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, req RecordServeRequest
 	err = pool.QueryRow(ctx, `
 		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '', $11, 'pending')
-		ON CONFLICT (org_id, nullifier) DO UPDATE SET
+		ON CONFLICT (org_id, nullifier, event_type) DO UPDATE SET
 			matched_keywords = EXCLUDED.matched_keywords,
 			reporter_pubkey = EXCLUDED.reporter_pubkey,
 			reason = EXCLUDED.reason,
@@ -203,7 +203,7 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 	err := pool.QueryRow(ctx, `
 		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
 		VALUES ($1, $2, $3, $4, $5, $6, '', 0, '{}'::TEXT[], $7, $8, $9, 'pending')
-		ON CONFLICT (org_id, nullifier) DO UPDATE SET
+		ON CONFLICT (org_id, nullifier, event_type) DO UPDATE SET
 			reporter_pubkey = EXCLUDED.reporter_pubkey,
 			reason = EXCLUDED.reason,
 			event_type = EXCLUDED.event_type,
@@ -236,7 +236,7 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 
 func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int) ([]ServeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT se.id, se.org_id, se.epoch_id, se.memory_content_hash, se.serve_key, se.contributor_id, se.nullifier, se.model_id, se.turn_count, se.matched_keywords, se.reporter_pubkey, se.reason, se.event_type, se.status, se.tx_hash, se.created_at, se.submitted_at, m.wallet_address
+		SELECT se.id, se.org_id, se.epoch_id, se.memory_content_hash, se.serve_key, se.contributor_id, se.nullifier, se.model_id, se.turn_count, se.matched_keywords, se.reporter_pubkey, se.reason, se.event_type, se.status, se.tx_hash, se.created_at, se.submitted_at, COALESCE(m.wallet_address, '')
 		FROM serve_events se
 		JOIN members m ON m.org_id = se.org_id AND m.pubkey = se.contributor_id
 		WHERE se.org_id = $1 AND se.status = 'pending' AND se.event_type = 'serve'
@@ -377,6 +377,21 @@ func CountPending(ctx context.Context, pool *pgxpool.Pool, orgID string) (int64,
 		return 0, fmt.Errorf("count pending: %w", err)
 	}
 	return count, nil
+}
+
+func HasPendingEvents(ctx context.Context, pool *pgxpool.Pool, orgID string) (bool, error) {
+	var exists bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM serve_events
+			WHERE org_id = $1 AND status = 'pending'
+		)
+	`, orgID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check pending serve events: %w", err)
+	}
+	return exists, nil
 }
 
 func GetServeEventByNullifier(ctx context.Context, pool *pgxpool.Pool, orgID, nullifier string) (*ServeEventRecord, error) {

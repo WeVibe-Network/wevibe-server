@@ -102,6 +102,44 @@ type TestUpdateRoleRequest struct {
 	NewRole string `json:"new_role"`
 }
 
+// TestServeQueueDepth reports how many serve/denial events are still pending
+// relay to the chain for an org. The empirical replay polls this between epochs
+// to wait for each epoch's traffic to land on-chain before advancing, bounding
+// relay lag so per-epoch decay is assessed against settled traffic rather than
+// an empty (not-yet-relayed) epoch. Read-only; test-mode only.
+func TestServeQueueDepth(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"db unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	orgID := chi.URLParam(r, "orgID")
+	if orgID == "" {
+		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		return
+	}
+
+	var pendingServes, pendingDenials int
+	if err := pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM serve_events WHERE org_id=$1 AND status='pending' AND event_type='serve'`,
+		orgID).Scan(&pendingServes); err != nil {
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM serve_events WHERE org_id=$1 AND status='pending' AND event_type='denial'`,
+		orgID).Scan(&pendingDenials); err != nil {
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]int{
+		"pending_serves":  pendingServes,
+		"pending_denials": pendingDenials,
+		"pending_total":   pendingServes + pendingDenials,
+	})
+}
+
 func TestGetQueue(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
 		http.Error(w, `{"error":"db unavailable"}`, http.StatusServiceUnavailable)

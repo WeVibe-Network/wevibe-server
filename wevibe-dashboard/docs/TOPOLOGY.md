@@ -676,7 +676,7 @@ wevibe.submit_memory.v1
 ciphertext_hash:<hex>
 contributor_pubkey:<hex>
 epoch_id:<int>
-memory_type:<correct_implementation|negative_signal>
+memory_type:<memory>
 org_id:<string>
 plaintext_hash:<hex>
 salt:<hex>

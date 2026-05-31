@@ -8,15 +8,18 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -44,6 +47,16 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 
 	if req.OrgID == "" || req.LeaderPubkey == "" || req.OrgName == "" || req.Domain == "" {
 		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
+		return
+	}
+	req.LeaderWallet = strings.TrimSpace(req.LeaderWallet)
+	if req.LeaderWallet == "" {
+		http.Error(w, `{"error":"leader_wallet is required"}`, http.StatusBadRequest)
+		return
+	}
+	decodedWallet, err := sdk.GetFromBech32(req.LeaderWallet, "wevibe")
+	if err != nil || sdk.VerifyAddressFormat(decodedWallet) != nil {
+		http.Error(w, `{"error":"leader_wallet must be a valid bech32 address"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -93,33 +106,23 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const (
-		// Chain defaults from org module params: 1 GiB storage and 10_000 retrieval budget.
-		defaultChainStorageQuota    uint64 = 1073741824
-		defaultChainRetrievalBudget uint64 = 10000
-	)
-
 	if chainClient == nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
+	faucetURL := os.Getenv("FAUCET_URL")
 
-	// Org creation is synchronous across Postgres and chain registration.
-	// If chain registration fails, this request must fail (no fallback path).
-	txHash, err := chainClient.RegisterOrgOnChain(
-		r.Context(),
-		req.OrgID,
-		req.LeaderPubkey,
-		req.Domain,
-		defaultChainStorageQuota,
-		defaultChainRetrievalBudget,
-	)
+	hubServingKey, _, err := chainClient.EnsureOrgAccount(r.Context(), pool, org.OrgID)
 	if err != nil {
-		log.Printf("ERROR: failed to register org on chain: org=%s err=%v", req.OrgID, err)
-		http.Error(w, `{"error":"failed to register org on chain"}`, http.StatusInternalServerError)
+		log.Printf("ERROR: failed to derive org serving key: org=%s err=%v", org.OrgID, err)
+		http.Error(w, `{"error":"failed to derive org serving key"}`, http.StatusInternalServerError)
 		return
 	}
-	log.Printf("registered org on chain: org=%s tx_hash=%s", req.OrgID, txHash)
+	if err := chainClient.FundAddressFromFaucet(r.Context(), faucetURL, hubServingKey, chain.TOPUP_AMOUNT); err != nil {
+		log.Printf("ERROR: failed to fund org serving key: org=%s address=%s err=%v", org.OrgID, hubServingKey, err)
+		http.Error(w, `{"error":"failed to fund org serving key"}`, http.StatusInternalServerError)
+		return
+	}
 
 	modEnv := req.ModEnvelope
 	if err := envelopes.Store(r.Context(), pool, req.OrgID, req.LeaderPubkey, 0, req.EncEnvelope, req.SearchEnvelope, &modEnv); err != nil {
@@ -131,12 +134,14 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	resp := struct {
 		*protocol.OrgInfo
-		EpochSK string `json:"epoch_sk,omitempty"`
-		EpochPK string `json:"epoch_pk,omitempty"`
+		HubServingKeyAddress string `json:"hub_serving_key_address"`
+		EpochSK              string `json:"epoch_sk,omitempty"`
+		EpochPK              string `json:"epoch_pk,omitempty"`
 	}{
-		OrgInfo: org,
-		EpochSK: epochSK,
-		EpochPK: epochPK,
+		OrgInfo:              org,
+		HubServingKeyAddress: hubServingKey,
+		EpochSK:              epochSK,
+		EpochPK:              epochPK,
 	}
 	json.NewEncoder(w).Encode(resp)
 }

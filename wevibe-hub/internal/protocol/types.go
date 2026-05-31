@@ -3,8 +3,7 @@ package protocol
 import "time"
 
 const (
-	MemoryTypeCorrectImplementation = "correct_implementation"
-	MemoryTypeNegativeSignal        = "negative_signal"
+	MemoryTypeMemory = "memory"
 )
 
 const (
@@ -30,12 +29,7 @@ const (
 )
 
 func IsValidMemoryType(s string) bool {
-	switch s {
-	case MemoryTypeCorrectImplementation, MemoryTypeNegativeSignal:
-		return true
-	default:
-		return false
-	}
+	return s == MemoryTypeMemory
 }
 
 type OrgInfo struct {
@@ -56,6 +50,7 @@ type OrgInfo struct {
 type CreateOrgRequest struct {
 	OrgID              string   `json:"org_id"`
 	LeaderPubkey       string   `json:"leader_pubkey"`
+	LeaderWallet       string   `json:"leader_wallet"`
 	LeaderX25519Pubkey string   `json:"leader_x25519_pubkey"`
 	OrgName            string   `json:"org_name"`
 	Domain             string   `json:"domain"`

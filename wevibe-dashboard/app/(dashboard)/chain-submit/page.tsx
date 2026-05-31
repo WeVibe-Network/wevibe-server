@@ -8,6 +8,7 @@ import {
   updateKeywords,
   removeSubmission,
   getOrgHealth,
+  prepareBatchSubmit,
   type Submission,
   type KeywordWeight,
   type OrgHealth,
@@ -15,7 +16,12 @@ import {
   type SanitizationFinding,
 } from '@/lib/hub-client';
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
-import { buildDenialBatchMsg, buildServeBatchMsg } from '@/lib/chain-client';
+import {
+  buildApproveMemoryMsg,
+  buildDenialBatchMsg,
+  buildSubmitCommitmentMsg,
+  relayOrgDecision,
+} from '@/lib/chain-client';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
@@ -23,6 +29,14 @@ type MemoryKeywordResult = {
   submission_hash: string;
   classified: KeywordWeight[];
 };
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.trim();
+  if (clean.length % 2 !== 0) {
+    throw new Error('invalid hex input length');
+  }
+  return Uint8Array.from(Buffer.from(clean, 'hex'));
+}
 
 export default function ChainSubmitPage() {
   const [orgHealth, setOrgHealth] = useState<OrgHealth | null>(null);
@@ -220,52 +234,47 @@ export default function ChainSubmitPage() {
     setNotice(null);
 
     try {
-      const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';
-      const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
-
-      const pendingServes = await getSubmissionsByStatus(ORG_ID, 'pending_chain');
-      if (pendingServes.length === 0) {
+      const prepared = await prepareBatchSubmit(ORG_ID);
+      if (!prepared.batch || prepared.batch.length === 0) {
         setNotice('No pending serves to submit');
         setBusy(null);
         return;
       }
 
-      const servesWithKeywords = pendingServes.filter(
-        (s): s is Submission & { matched_keywords: string[] } =>
-          Array.isArray(s.matched_keywords) && s.matched_keywords.length > 0,
-      );
-      if (servesWithKeywords.length !== pendingServes.length) {
-        const missingCount = pendingServes.length - servesWithKeywords.length;
-        setError(`Cannot submit: ${missingCount} serve(s) missing matched_keywords (D-4.2 violation).`);
-        setBusy(null);
-        return;
-      }
+      const msgs = prepared.batch.flatMap((entry) => {
+        const contentHash = hexToBytes(entry.submission_hash);
+        const commitment = buildSubmitCommitmentMsg(
+          walletAddress,
+          ORG_ID,
+          contentHash,
+          entry.keywords.map((keyword) => ({ keyword, weight: '1.0' })),
+          entry.contributor_pubkey,
+          entry.contributor_wallet,
+          entry.memory_type,
+        );
+        const approval = buildApproveMemoryMsg(
+          walletAddress,
+          ORG_ID,
+          contentHash,
+          hexToBytes(entry.encrypted_blob),
+          entry.committing_leader,
+          hexToBytes(entry.wrapped_dek_enc),
+          hexToBytes(entry.plaintext_hash),
+          hexToBytes(entry.salt),
+          hexToBytes(entry.ciphertext_hash),
+          hexToBytes(entry.contributor_sig),
+          entry.memory_type,
+        );
+        return [commitment, approval];
+      });
 
-      const epochResp = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}`, { headers: authHeaders });
-      const epochData = await epochResp.json() as { current_epoch?: number };
-      const epoch = epochData.current_epoch ?? 0;
+      const txHash = await relayOrgDecision(ORG_ID, msgs);
 
-      const { directBroadcast } = await import('@/lib/chain-client');
-
-      const entries = servesWithKeywords.map((s): import('@/lib/chain-client').ServeEntryInput => ({
-        memory_content_hash: new Uint8Array(),
-        serve_key: s.submission_hash,
-        contributor_id: s.contributor_pubkey,
-        nullifier: new Uint8Array(),
-        model_id: '',
-        turn_count: 0,
-        contributor_wallet: '',
-        matched_keywords: s.matched_keywords,
-      }));
-
-      const msg = buildServeBatchMsg(walletAddress, ORG_ID, epoch, entries);
-      const result = await directBroadcast(walletAddress, [msg]);
-
-      if (result.code === 0) {
-        setTxResult({ tx_hash: result.txHash, committed_count: entries.length });
+      if (txHash) {
+        setTxResult({ tx_hash: txHash, committed_count: prepared.batch.length });
         setNotice(null);
       } else {
-        setError(`Chain rejected: ${result.rawLog}`);
+        setError('Chain submission failed: missing transaction hash');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -458,13 +467,9 @@ export default function ChainSubmitPage() {
                       <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs">
                         Epoch {item.epoch_id}
                       </span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    item.memory_type === 'correct_implementation'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-rose-100 text-rose-700'
-                  }`}>
-                    {item.memory_type === 'correct_implementation' ? 'Correct' : 'Negative'}
-                  </span>
+				  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+					Memory
+				  </span>
                   {item.sanitization_findings && item.sanitization_findings.length > 0 && (
                     <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
                       {item.sanitization_findings.length} content issue(s)
@@ -532,13 +537,9 @@ export default function ChainSubmitPage() {
                   <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs">
                     Epoch {item.epoch_id}
                   </span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    item.memory_type === 'correct_implementation'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-rose-100 text-rose-700'
-                  }`}>
-                    {item.memory_type === 'correct_implementation' ? 'Correct' : 'Negative'}
-                  </span>
+				  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+					Memory
+				  </span>
                 </div>
                 <p className="mt-2 text-sm text-zinc-700 line-clamp-2">
                   {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
@@ -663,13 +664,9 @@ export default function ChainSubmitPage() {
                   <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs">
                     Epoch {item.epoch_id}
                   </span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    item.memory_type === 'correct_implementation'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-rose-100 text-rose-700'
-                  }`}>
-                    {item.memory_type === 'correct_implementation' ? 'Correct' : 'Negative'}
-                  </span>
+				  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+					Memory
+				  </span>
                   {item.verified_by && (
                     <span>Verified by {item.verified_by.slice(0, 8)}…</span>
                   )}

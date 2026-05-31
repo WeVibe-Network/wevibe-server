@@ -545,19 +545,13 @@ export default function SessionsPage() {
 
                               <div className="min-w-0 flex-1 space-y-2">
                                 <div className="flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <span
-                                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                                        memory.memory_type === 'correct_implementation'
-                                          ? 'bg-emerald-100 text-emerald-700'
-                                          : 'bg-rose-100 text-rose-700'
-                                      }`}
-                                    >
-                                      {memory.memory_type === 'correct_implementation'
-                                        ? 'Correct implementation'
-                                        : 'Negative signal'}
-                                    </span>
-                                  </div>
+							<div className="flex items-center gap-2">
+							  <span
+								className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+							  >
+								Memory
+							  </span>
+							</div>
 
                                   {showOrgDropdown && (
                                     <select

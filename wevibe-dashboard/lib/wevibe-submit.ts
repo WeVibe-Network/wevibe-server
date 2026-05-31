@@ -176,9 +176,9 @@ export async function buildSubmitMemoryPayload(
 ): Promise<{ status: 'ok'; payload: SubmitMemoryPayload } | { status: 'error'; error: string }> {
   const { memoryText, stackHint, orgId, epochId, memoryType, modPubkeyHex } = params;
 
-  if (memoryType !== 'correct_implementation' && memoryType !== 'negative_signal') {
-    return { status: 'error', error: 'memory_type is required for submission' };
-  }
+	if (memoryType !== 'memory') {
+		return { status: 'error', error: 'memory_type is required for submission' };
+	}
 
   const identity = await getIdentity();
   if (!identity) {

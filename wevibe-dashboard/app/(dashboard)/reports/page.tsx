@@ -8,8 +8,7 @@ import {
   listReports,
   updateReport,
 } from '@/lib/hub-client';
-import { relayBroadcast } from '@/lib/relay-client';
-import type { EncodeObject } from '@/lib/chain-client';
+import { buildReportMemoryMsg, relayOrgDecision } from '@/lib/chain-client';
 import { connectWallet } from '@/lib/wallet-connect';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
@@ -164,21 +163,18 @@ const handleAction = useCallback(
         const walletConn = await connectWallet();
 
         const contentHash = Uint8Array.from(Buffer.from(report.memory_cid, 'hex'));
-        const epoch = 0;
+        const msgReportMemory = buildReportMemoryMsg({
+          signer: walletConn.address,
+          orgId: ORG_ID,
+          contentHash,
+          contributorPubkey: report.reporter_pubkey,
+          approvingModerators: [],
+          upholdingModerators: [],
+          reporterPubkey: report.reporter_pubkey,
+          reason,
+        });
 
-        const msgReportMemory: EncodeObject = {
-          typeUrl: '/wevibe.memory.v1.MsgReportMemory',
-          value: Buffer.from(JSON.stringify({
-            signer: walletConn.address,
-            org_id: ORG_ID,
-            content_hash: contentHash,
-            contributor_pubkey: report.reporter_pubkey,
-            reporter_pubkey: report.reporter_pubkey,
-            reason: report.reason,
-          })),
-        };
-
-        const txHash = await relayBroadcast(ORG_ID, walletConn.address, [msgReportMemory]);
+        const txHash = await relayOrgDecision(ORG_ID, [msgReportMemory]);
         setNotice(`Report committed to chain. TX: ${txHash.slice(0, 12)}...`);
         await refreshReports();
       } catch (err) {

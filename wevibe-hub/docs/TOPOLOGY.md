@@ -512,7 +512,6 @@ GET /v1/orgs/{orgID}/submissions?status={status}
 - Count of classified keywords ≤ 20
 - Sum of classified keyword weights ≈ 1.0 (tolerance: |sum - 1.0| < 0.02)
 - Memory plaintext length ≤ 2000 chars
-- For `negative_signal` memory type: content ≤ 1000 chars
 - No pending suggestions remain (all must be approved/rejected before verification)
 
 ### Multi-Memory Chain Commitment (CO-011a.4)
@@ -1136,7 +1135,7 @@ The `org_id` column and its FK to `orgs` were **dropped** in CO-011a.4. `wallet_
 {
   "org_id":             "...",
   "epoch_id":           0,
-  "memory_type":        "correct_implementation" | "negative_signal",
+  "memory_type":        "memory",
   "ciphertext":         "<hex of encrypted memory bytes>",
   "wrapped_dek_mod":    "<hex of moderator-wrapped DEK>",
   "submission_hash":    "<hex sha256(ciphertext || wrapped_dek_mod)>",
@@ -1160,7 +1159,7 @@ wevibe.submit_memory.v1
 ciphertext_hash:<hex>
 contributor_pubkey:<hex>
 epoch_id:<int>
-memory_type:<correct_implementation|negative_signal>
+memory_type:<memory>
 org_id:<string>
 plaintext_hash:<hex>
 salt:<hex>
@@ -1190,7 +1189,7 @@ Sanitization at intake is disabled (hub no longer sees plaintext); the `sanitiza
 - `TestSubmitToQueue_InvalidPlaintextHashFormat`, `TestSubmitToQueue_InvalidSaltFormat`.
 - `TestHubNeverStoresPlaintext` — sentinel string check across all non-ciphertext columns.
 
-### Schema changes (`db/schema.sql`, `db/migrations/000001_initial_schema.up.sql`)
+### Schema changes (`db/schema.sql`)
 
 `pending_submissions` and `rotation_buffer` both gained four NOT NULL columns:
 

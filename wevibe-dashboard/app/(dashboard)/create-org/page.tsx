@@ -2,9 +2,30 @@
 
 import { FormEvent, useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getIdentity } from '@/lib/wevibe-auth';
-import { createOrgCanonical, signCanonical } from '@/lib/wevibe-signing';
+import { createOrgCanonical, getWalletAddress, signCanonical } from '@/lib/wevibe-signing';
 import { createOrg } from '@/lib/hub-client';
+import { buildRegisterOrgMsg, relayOrgDecision } from '@/lib/chain-client';
+
+const FAUCET_URL = process.env.NEXT_PUBLIC_WEVIBE_FAUCET_URL ?? 'http://localhost:4470';
+const DEFAULT_STORAGE_QUOTA = 1000;
+const DEFAULT_RETRIEVAL_BUDGET = 500;
+const DEFAULT_FAUCET_AMOUNT = 1_000_000;
+
+async function fundLeaderWallet(walletAddress: string): Promise<void> {
+  const resp = await fetch(`${FAUCET_URL}/v1/fund`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      address: walletAddress,
+      amount: DEFAULT_FAUCET_AMOUNT,
+    }),
+  });
+
+  if (!resp.ok) {
+    const payload = await resp.text().catch(() => resp.statusText);
+    throw new Error(`Failed funding leader wallet from faucet: ${payload || resp.statusText}`);
+  }
+}
 
 function bufToHex(buf: ArrayBuffer): string {
   return Array.from(new Uint8Array(buf))
@@ -64,20 +85,15 @@ export default function CreateOrgPage() {
     setSubmitting(true);
 
     try {
-      const identity = await getIdentity();
-      if (!identity) {
-        setError('No dashboard identity. Please generate one in settings first.');
-        setSubmitting(false);
-        return;
-      }
-
       const ephemeralEd25519 = await generateEphemeralEd25519();
       const ephemeralX25519 = await generateEphemeralX25519();
+      const leaderWallet = await getWalletAddress();
+      await fundLeaderWallet(leaderWallet);
 
-      const encEnvelope = '';
-      const searchEnvelope = '';
-      const modEnvelope = '';
-      const pkMod = '';
+      const encEnvelope = 'placeholder-enc-envelope';
+      const searchEnvelope = 'placeholder-search-envelope';
+      const modEnvelope = 'placeholder-mod-envelope';
+      const pkMod = `pkmod-${orgId.trim()}`;
 
       const canonical = await createOrgCanonical(
         orgId.trim(),
@@ -94,10 +110,11 @@ export default function CreateOrgPage() {
 
       const signature = await signCanonical(ephemeralEd25519.privateKey, canonical);
 
-      await createOrg({
+      const createdOrg = await createOrg({
         org_id: orgId.trim(),
         leader_pubkey: ephemeralEd25519.pubkeyHex,
         leader_x25519_pubkey: ephemeralX25519.pubkeyHex,
+        leader_wallet: leaderWallet,
         org_name: orgName.trim(),
         domain: domain.trim(),
         enc_envelope: encEnvelope,
@@ -106,6 +123,19 @@ export default function CreateOrgPage() {
         pk_mod: pkMod,
         signature,
       });
+
+      const msgRegisterOrg = buildRegisterOrgMsg(
+        leaderWallet,
+        orgId.trim(),
+        createdOrg.leader_pubkey,
+        DEFAULT_STORAGE_QUOTA,
+        DEFAULT_RETRIEVAL_BUDGET,
+        domain.trim(),
+        createdOrg.hub_serving_key_address,
+        leaderWallet,
+      );
+
+      await relayOrgDecision(orgId.trim(), [msgRegisterOrg], `register-org:${orgId.trim()}`);
 
       setSuccess(true);
       setTimeout(() => {

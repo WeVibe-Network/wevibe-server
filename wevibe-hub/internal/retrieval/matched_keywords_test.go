@@ -42,7 +42,7 @@ func mockSearchResult(cid string, score float64, keywordWeights map[string]float
 			"content_flags":   []any{},
 			"keyword_weights": keywordWeights,
 			"lifecycle_state": "ACTIVE",
-			"memory_type":     "correct_implementation",
+			"memory_type":     "memory",
 		},
 	}
 }
