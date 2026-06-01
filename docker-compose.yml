@@ -116,6 +116,7 @@ services:
       GAS_STRATEGY: "simulate-retry"
       OLLAMA_URL: http://host.docker.internal:11434
       WEVIBE_CHAIN_RPC_URL: tcp://wevibe-chain:26657
+      FAUCET_URL: http://wevibe-faucet:4470
       WEVIBE_UMBRAL_SIDECAR_ADDR: "wevibe-umbral:4460"
       WEVIBE_HUB_PORT: "4440"
       RETRIEVAL_TEMPERATURE: "0.7"
@@ -135,6 +136,8 @@ services:
       wevibe-umbral:
         condition: service_healthy
       wevibe-social-graph:
+        condition: service_healthy
+      wevibe-faucet:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"

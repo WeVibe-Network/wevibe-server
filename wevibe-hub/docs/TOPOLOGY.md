@@ -514,9 +514,41 @@ GET /v1/orgs/{orgID}/submissions?status={status}
 - Memory plaintext length ≤ 2000 chars
 - No pending suggestions remain (all must be approved/rejected before verification)
 
-### Multi-Memory Chain Commitment (CO-011a.4)
+### Multi-Memory Chain Commitment (CO-011a.4, finalized CO-049)
 
-Chain commitment for batches of approved memories is initiated by the dashboard, which relays `MsgApproveMemory` directly via `POST /v1/relay/broadcast`. The hub has no eager batch-commit handler. Post-confirmation bookkeeping (Qdrant insert, `memory_keywords` population, `pending_submissions.status → committed`) is performed by the ChainWatcher's `processApproveMemoryBookkeeping` handler.
+Stage 3 of the pipeline (atomic batch chain commitment) is a **hub-side handler**:
+`BatchSubmitToChain` (`internal/api/handlers/moderation.go:633`), routed at
+`POST /v1/orgs/{orgID}/moderation/batch-submit` (`cmd/wevibe-hub/main.go:225`, leader-only).
+It:
+1. Loads each `pending_chain` submission, decodes and length-checks the four signed
+   commitments (`plaintext_hash`, `salt`, `ciphertext_hash`, `contributor_sig`).
+2. **Parses `extraction_result` JSONB** into `extractionPayload` and rebuilds the
+   per-memory `KeywordWeight` list.
+3. **Validates keyword weights**: every classified keyword non-empty and unique, count
+   ≤ `protocol.MaxKeywordsPerMemory`, weights finite, and `|Σweight − 1.0| ≤
+   protocol.KeywordWeightTolerance`.
+4. Assembles `chain.BatchMemory` entries. `SubmittedMemoryType` / `ApprovedMemoryType`
+   are string fields set to the DB `"memory"` value (single-type model, D-5.1) — they do
+   not touch the chain enum directly.
+5. Calls `chainClient.SubmitMemoryBatchAtomic(ctx, pool, faucetURL, orgID, memories)`
+   (`internal/chain/submit.go:44`) with `faucetURL` read from the `FAUCET_URL` env. The
+   batch is broadcast as a single leader-signed atomic transaction; gas is **faucet-funded**
+   (the hub's leader chain key is topped up by the `wevibe-faucet` service — see
+   wevibe-infra topology). On success a real on-chain `tx_hash` is returned; status stays
+   `pending_chain` until the ChainWatcher confirms.
+
+Post-confirmation bookkeeping (Qdrant insert, `memory_keywords` population,
+`pending_submissions.status → committed`) is performed by the ChainWatcher's
+`processApproveMemoryBookkeeping` handler.
+
+**Memory-type enum mapping (CO-049):** the protocol string `"memory"`
+(`protocol.MemoryTypeMemory`) maps to the chain enum via `mapMemoryTypeToChainEnum`
+(`internal/chain/submit.go`), which returns `memorytypes.MemoryType_MEMORY_TYPE_MEMORY`
+(invalid types are a hard error, not a silent fallback — R-ONE-PATH). The inverse,
+`mapChainMemoryTypeToString` (`internal/chain/query.go:386`), maps
+`MemoryType_MEMORY_TYPE_MEMORY → "memory"`. The retired
+`MEMORY_TYPE_CORRECT_IMPLEMENTATION` / `MEMORY_TYPE_NEGATIVE_SIGNAL` enum values are
+gone from both directions.
 
 **Org Health endpoint:**
 ```

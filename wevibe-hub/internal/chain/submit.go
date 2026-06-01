@@ -35,7 +35,7 @@ type BatchMemory struct {
 func mapMemoryTypeToChainEnum(memoryType string) (memorytypes.MemoryType, error) {
 	switch memoryType {
 	case protocol.MemoryTypeMemory:
-		return memorytypes.MemoryType_MEMORY_TYPE_CORRECT_IMPLEMENTATION, nil
+		return memorytypes.MemoryType_MEMORY_TYPE_MEMORY, nil
 	default:
 		return memorytypes.MemoryType_MEMORY_TYPE_UNSPECIFIED, fmt.Errorf("invalid memory_type: %s", memoryType)
 	}

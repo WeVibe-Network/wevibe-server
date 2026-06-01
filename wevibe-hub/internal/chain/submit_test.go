@@ -17,7 +17,7 @@ func TestBuildSubmitCommitmentMsg_IncludesContributorWallet(t *testing.T) {
 		}},
 	}
 
-	msg := buildSubmitCommitmentMsg("wevibe1submitter", "org-1", mem, memorytypes.MemoryType_MEMORY_TYPE_CORRECT_IMPLEMENTATION)
+	msg := buildSubmitCommitmentMsg("wevibe1submitter", "org-1", mem, memorytypes.MemoryType_MEMORY_TYPE_MEMORY)
 	if msg.ContributorWallet != mem.ContributorWallet {
 		t.Fatalf("contributor wallet mismatch: got %q want %q", msg.ContributorWallet, mem.ContributorWallet)
 	}

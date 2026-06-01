@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"math"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -664,11 +668,15 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
 		return
 	}
+	if chainClient == nil {
+		http.Error(w, `{"error":"chain client unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
 
 	rows, err := pool.Query(r.Context(), `
 		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.wrapped_dek_mod,
 		       ps.plaintext_hash, ps.salt, ps.ciphertext_hash, ps.contributor_sig,
-		       ps.stack_hint, ps.memory_type,
+		       ps.memory_type, ps.extraction_result,
 		       COALESCE(m.wallet_address, '') AS contributor_wallet
 		FROM pending_submissions ps
 		JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
@@ -681,27 +689,33 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type preparedBatchMemory struct {
-		SubmissionHash   string   `json:"submission_hash"`
-		ContributorPubkey string  `json:"contributor_pubkey"`
-		ContributorWallet string  `json:"contributor_wallet"`
-		CommittingLeader  string  `json:"committing_leader"`
-		Keywords          []string `json:"keywords"`
-		MemoryType        string   `json:"memory_type"`
-		PlaintextHash     string   `json:"plaintext_hash"`
-		Salt              string   `json:"salt"`
-		CiphertextHash    string   `json:"ciphertext_hash"`
-		ContributorSig    string   `json:"contributor_sig"`
-		EncryptedBlob     string   `json:"encrypted_blob"`
-		WrappedDekEnc     string   `json:"wrapped_dek_enc"`
+	type batchResult struct {
+		SubmissionHash string `json:"submission_hash"`
+		Error          string `json:"error,omitempty"`
+	}
+	type classifiedKeyword struct {
+		Keyword string  `json:"keyword"`
+		Weight  float64 `json:"weight"`
+	}
+	type extractionPayload struct {
+		Classified []classifiedKeyword `json:"classified"`
 	}
 
-	prepared := make([]preparedBatchMemory, 0)
+	memories := make([]chain.BatchMemory, 0)
+	results := make([]batchResult, 0)
+
+	decodeHex := func(fieldName, fieldValue string) ([]byte, error) {
+		decoded, decodeErr := hex.DecodeString(fieldValue)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("invalid %s hex: %w", fieldName, decodeErr)
+		}
+		return decoded, nil
+	}
 
 	for rows.Next() {
 		var hash, contributor, ciphertext, wrappedDekMod, plaintextHash string
 		var salt, ciphertextHash, contributorSig, memoryType, walletAddress string
-		var stackHint []string
+		var extractionResult []byte
 		if err := rows.Scan(
 			&hash,
 			&contributor,
@@ -711,8 +725,8 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 			&salt,
 			&ciphertextHash,
 			&contributorSig,
-			&stackHint,
 			&memoryType,
+			&extractionResult,
 			&walletAddress,
 		); err != nil {
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -722,22 +736,12 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 			walletAddress = contributor
 		}
 		if !protocol.IsValidMemoryType(memoryType) {
-			log.Printf("batch submit skipping %s: invalid memory_type %q", hash, memoryType)
 			http.Error(w, `{"error":"invalid memory_type"}`, http.StatusBadRequest)
 			return
 		}
 
-		decodeHex := func(fieldName, fieldValue string) ([]byte, error) {
-			decoded, decodeErr := hex.DecodeString(fieldValue)
-			if decodeErr != nil {
-				return nil, fmt.Errorf("invalid %s hex: %w", fieldName, decodeErr)
-			}
-			return decoded, nil
-		}
-
 		contentHashBytes, err := decodeHex("submission_hash", hash)
 		if err != nil {
-			log.Printf("batch submit skipping %s: %v", hash, err)
 			http.Error(w, `{"error":"invalid content hash"}`, http.StatusBadRequest)
 			return
 		}
@@ -747,7 +751,6 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		}
 		ciphertextBytes, err := decodeHex("ciphertext_hex", ciphertext)
 		if err != nil {
-			log.Printf("batch submit skipping %s: %v", hash, err)
 			http.Error(w, `{"error":"invalid ciphertext"}`, http.StatusBadRequest)
 			return
 		}
@@ -757,58 +760,116 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		}
 		wrappedDekEncBytes, err := decodeHex("wrapped_dek_mod", wrappedDekMod)
 		if err != nil {
-			log.Printf("batch submit skipping %s: %v", hash, err)
 			http.Error(w, `{"error":"invalid wrapped dek"}`, http.StatusBadRequest)
+			return
+		}
+		if len(wrappedDekEncBytes) == 0 {
+			http.Error(w, `{"error":"empty wrapped dek"}`, http.StatusBadRequest)
 			return
 		}
 		plaintextHashBytes, err := decodeHex("plaintext_hash", plaintextHash)
 		if err != nil {
-			log.Printf("batch submit skipping %s: %v", hash, err)
 			http.Error(w, `{"error":"invalid plaintext hash"}`, http.StatusBadRequest)
+			return
+		}
+		if len(plaintextHashBytes) != 32 {
+			http.Error(w, `{"error":"invalid plaintext hash length"}`, http.StatusBadRequest)
 			return
 		}
 		saltBytes, err := decodeHex("salt", salt)
 		if err != nil {
-			log.Printf("batch submit skipping %s: %v", hash, err)
 			http.Error(w, `{"error":"invalid salt"}`, http.StatusBadRequest)
+			return
+		}
+		if len(saltBytes) == 0 {
+			http.Error(w, `{"error":"empty salt"}`, http.StatusBadRequest)
 			return
 		}
 		ciphertextHashBytes, err := decodeHex("ciphertext_hash", ciphertextHash)
 		if err != nil {
-			log.Printf("batch submit skipping %s: %v", hash, err)
 			http.Error(w, `{"error":"invalid ciphertext hash"}`, http.StatusBadRequest)
+			return
+		}
+		if len(ciphertextHashBytes) != 32 {
+			http.Error(w, `{"error":"invalid ciphertext hash length"}`, http.StatusBadRequest)
 			return
 		}
 		contributorSigBytes, err := decodeHex("contributor_sig", contributorSig)
 		if err != nil {
-			log.Printf("batch submit skipping %s: %v", hash, err)
 			http.Error(w, `{"error":"invalid contributor signature"}`, http.StatusBadRequest)
 			return
 		}
-
-		keywords := make([]string, 0, len(stackHint))
-		for _, kw := range stackHint {
-			trimmed := strings.TrimSpace(kw)
-			if trimmed == "" {
-				continue
-			}
-			keywords = append(keywords, trimmed)
+		if len(contributorSigBytes) == 0 {
+			http.Error(w, `{"error":"empty contributor signature"}`, http.StatusBadRequest)
+			return
 		}
 
-		prepared = append(prepared, preparedBatchMemory{
-			SubmissionHash:    hex.EncodeToString(contentHashBytes),
-			ContributorPubkey: contributor,
-			ContributorWallet: walletAddress,
-			CommittingLeader:  signed.Pubkey,
-			Keywords:          keywords,
-			MemoryType:        memoryType,
-			PlaintextHash:     hex.EncodeToString(plaintextHashBytes),
-			Salt:              hex.EncodeToString(saltBytes),
-			CiphertextHash:    hex.EncodeToString(ciphertextHashBytes),
-			ContributorSig:    hex.EncodeToString(contributorSigBytes),
-			EncryptedBlob:     hex.EncodeToString(ciphertextBytes),
-			WrappedDekEnc:     hex.EncodeToString(wrappedDekEncBytes),
+		if len(extractionResult) == 0 {
+			http.Error(w, `{"error":"missing extraction_result"}`, http.StatusBadRequest)
+			return
+		}
+
+		var payload extractionPayload
+		if err := json.Unmarshal(extractionResult, &payload); err != nil {
+			http.Error(w, `{"error":"invalid extraction_result"}`, http.StatusBadRequest)
+			return
+		}
+		if len(payload.Classified) == 0 {
+			http.Error(w, `{"error":"missing classified keywords"}`, http.StatusBadRequest)
+			return
+		}
+		if len(payload.Classified) > protocol.MaxKeywordsPerMemory {
+			http.Error(w, `{"error":"too many classified keywords"}`, http.StatusBadRequest)
+			return
+		}
+
+		keywords := make([]*memorytypes.KeywordWeight, 0, len(payload.Classified))
+		seenKeywords := make(map[string]struct{}, len(payload.Classified))
+		var weightSum float64
+		for _, kw := range payload.Classified {
+			keyword := strings.TrimSpace(kw.Keyword)
+			if keyword == "" {
+				http.Error(w, `{"error":"invalid classified keyword"}`, http.StatusBadRequest)
+				return
+			}
+			if _, exists := seenKeywords[keyword]; exists {
+				http.Error(w, `{"error":"duplicate classified keyword"}`, http.StatusBadRequest)
+				return
+			}
+			seenKeywords[keyword] = struct{}{}
+			if math.IsNaN(kw.Weight) || math.IsInf(kw.Weight, 0) {
+				http.Error(w, `{"error":"invalid classified keyword weight"}`, http.StatusBadRequest)
+				return
+			}
+			weightSum += kw.Weight
+			keywords = append(keywords, &memorytypes.KeywordWeight{
+				Keyword: keyword,
+				Weight:  strconv.FormatFloat(kw.Weight, 'f', -1, 64),
+			})
+		}
+		if math.Abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
+			http.Error(w, `{"error":"classified keyword weights must sum to 1"}`, http.StatusBadRequest)
+			return
+		}
+
+		submissionHash := hex.EncodeToString(contentHashBytes)
+		memories = append(memories, chain.BatchMemory{
+			ContentHash:         contentHashBytes,
+			PlaintextHash:       plaintextHashBytes,
+			Salt:                saltBytes,
+			CiphertextHash:      ciphertextHashBytes,
+			ContributorSig:      contributorSigBytes,
+			ContributorPubkey:   contributor,
+			CommittingLeader:    signed.Pubkey,
+			Keywords:            keywords,
+			ContributorID:       contributor,
+			ContributorWallet:   walletAddress,
+			EncryptedBlob:       ciphertextBytes,
+			WrappedDekEnc:       wrappedDekEncBytes,
+			SubmittedMemoryType: memoryType,
+			ApprovedMemoryType:  memoryType,
 		})
+		results = append(results, batchResult{SubmissionHash: submissionHash})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -816,9 +877,44 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(memories) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"submitted": 0,
+			"failed":    0,
+			"results":   []batchResult{},
+		})
+		return
+	}
+
+	faucetURL := os.Getenv("FAUCET_URL")
+	txHash, submittedHashes, submitErr := chainClient.SubmitMemoryBatchAtomic(r.Context(), pool, faucetURL, orgID, memories)
+	if submitErr != nil {
+		failureResults := make([]batchResult, 0, len(results))
+		for _, item := range results {
+			failureResults = append(failureResults, batchResult{SubmissionHash: item.SubmissionHash, Error: submitErr.Error()})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]any{
+			"submitted": 0,
+			"failed":    len(failureResults),
+			"results":   failureResults,
+		})
+		return
+	}
+
+	successResults := make([]batchResult, 0, len(submittedHashes))
+	for _, submissionHash := range submittedHashes {
+		successResults = append(successResults, batchResult{SubmissionHash: submissionHash})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"batch":        prepared,
-		"verification": "passed",
+		"submitted": len(successResults),
+		"failed":    len(memories) - len(successResults),
+		"results":   successResults,
+		"tx_hash":   txHash,
 	})
 }
