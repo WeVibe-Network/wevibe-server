@@ -72,11 +72,11 @@ func GetMember(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (*
 	var m protocol.MemberRecord
 	err := pool.QueryRow(ctx, `
 		SELECT org_id, pubkey, x25519_pubkey, role, join_epoch,
-			   history_access_from_epoch, authorized_until_epoch, active, joined_at, wallet_address
+			   history_access_from_epoch, authorized_until_epoch, active, membership_active, joined_at, wallet_address
 		FROM members WHERE org_id = $1 AND pubkey = $2
 	`, orgID, pubkey).Scan(
 		&m.OrgID, &m.Pubkey, &m.X25519Pubkey, &m.Role, &m.JoinEpoch,
-		&m.HistoryAccessFromEpoch, &m.AuthorizedUntilEpoch, &m.Active, &m.JoinedAt, &m.WalletAddress,
+		&m.HistoryAccessFromEpoch, &m.AuthorizedUntilEpoch, &m.Active, &m.MembershipActive, &m.JoinedAt, &m.WalletAddress,
 	)
 	if err != nil {
 		return nil, err

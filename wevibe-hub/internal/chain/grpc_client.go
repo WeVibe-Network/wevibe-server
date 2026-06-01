@@ -34,6 +34,7 @@ import (
 
 type orgSigner struct {
 	orgID      string
+	role       OrgKeyRole
 	keyringUID string
 	address    sdk.AccAddress
 	addressStr string
@@ -233,17 +234,22 @@ func (c *GrpcClient) BroadcastTxSync(ctx context.Context, txBytes []byte) (strin
 	return c.broadcastTxSync(ctx, txBytes)
 }
 
-func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID string) (*orgSigner, error) {
+func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID string, role OrgKeyRole) (*orgSigner, error) {
 	trimmedOrgID := strings.TrimSpace(orgID)
 	if trimmedOrgID == "" {
 		return nil, fmt.Errorf("orgID is required")
+	}
+	if !role.valid() {
+		return nil, fmt.Errorf("invalid org key role %q", role)
 	}
 	if db == nil {
 		return nil, fmt.Errorf("db is required")
 	}
 
+	cacheKey := trimmedOrgID + ":" + string(role)
+
 	c.orgSignersMu.RLock()
-	if signer, ok := c.orgSigners[trimmedOrgID]; ok {
+	if signer, ok := c.orgSigners[cacheKey]; ok {
 		c.orgSignersMu.RUnlock()
 		return signer, nil
 	}
@@ -252,11 +258,11 @@ func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID s
 	c.orgSignersMu.Lock()
 	defer c.orgSignersMu.Unlock()
 
-	if signer, ok := c.orgSigners[trimmedOrgID]; ok {
+	if signer, ok := c.orgSigners[cacheKey]; ok {
 		return signer, nil
 	}
 
-	addressStr, keyringUID, err := c.EnsureOrgAccount(ctx, db, trimmedOrgID)
+	addressStr, keyringUID, err := c.EnsureOrgAccount(ctx, db, trimmedOrgID, role)
 	if err != nil {
 		return nil, err
 	}
@@ -268,11 +274,12 @@ func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID s
 
 	signer := &orgSigner{
 		orgID:      trimmedOrgID,
+		role:       role,
 		keyringUID: keyringUID,
 		address:    address,
 		addressStr: addressStr,
 	}
-	c.orgSigners[trimmedOrgID] = signer
+	c.orgSigners[cacheKey] = signer
 
 	return signer, nil
 }

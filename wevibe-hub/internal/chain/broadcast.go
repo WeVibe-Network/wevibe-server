@@ -38,8 +38,8 @@ const (
 	simulateSeedGasLimit         = uint64(1)
 	minGasPriceNum               = int64(25)
 	minGasPriceDen               = int64(1000)
-	MIN_GAS_BALANCE              = int64(100000)
-	TOPUP_AMOUNT                 = int64(1000000)
+	MIN_GAS_BALANCE              = int64(5_000_000)
+	TOPUP_AMOUNT                 = int64(20_000_000)
 	simulateBufferMultiplierNum  = uint64(2)
 	simulateBufferMultiplierDen  = uint64(1)
 	simulateRetryMultiplier      = uint64(2)
@@ -604,20 +604,24 @@ func runSimulateRetryBroadcast(
 	return "", attempts, fmt.Errorf("simulate-retry exhausted")
 }
 
-func (c *GrpcClient) BroadcastMsgsForOrg(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, msgs ...types.Msg) (*types.TxResponse, error) {
-	return c.broadcastMsgsForOrg(ctx, db, faucetURL, orgID, txBroadcastModeSync, msgs...)
+func (c *GrpcClient) BroadcastMsgsForOrgServing(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, msgs ...types.Msg) (*types.TxResponse, error) {
+	return c.broadcastMsgsForOrg(ctx, db, faucetURL, orgID, OrgKeyServing, txBroadcastModeSync, msgs...)
 }
 
-func (c *GrpcClient) BroadcastMsgsForOrgCommit(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, msgs ...types.Msg) (*types.TxResponse, error) {
-	return c.broadcastMsgsForOrg(ctx, db, faucetURL, orgID, txBroadcastModeCommit, msgs...)
+func (c *GrpcClient) BroadcastMsgsForOrgServingCommit(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, msgs ...types.Msg) (*types.TxResponse, error) {
+	return c.broadcastMsgsForOrg(ctx, db, faucetURL, orgID, OrgKeyServing, txBroadcastModeCommit, msgs...)
 }
 
-func (c *GrpcClient) broadcastMsgsForOrg(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, mode txBroadcastMode, msgs ...types.Msg) (*types.TxResponse, error) {
+func (c *GrpcClient) BroadcastMsgsForOrgLeader(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, msgs ...types.Msg) (*types.TxResponse, error) {
+	return c.broadcastMsgsForOrg(ctx, db, faucetURL, orgID, OrgKeyLeader, txBroadcastModeSync, msgs...)
+}
+
+func (c *GrpcClient) broadcastMsgsForOrg(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, role OrgKeyRole, mode txBroadcastMode, msgs ...types.Msg) (*types.TxResponse, error) {
 	if len(msgs) == 0 {
 		return nil, fmt.Errorf("no messages to broadcast")
 	}
 
-	signer, err := c.GetOrgSigner(ctx, db, orgID)
+	signer, err := c.GetOrgSigner(ctx, db, orgID, role)
 	if err != nil {
 		return nil, fmt.Errorf("resolve org signer: %w", err)
 	}
@@ -684,7 +688,7 @@ func (c *GrpcClient) loadOrgSignerState(ctx context.Context, faucetURL string, s
 		return fmt.Errorf("fund org signer %s: %w", signer.addressStr, err)
 	}
 
-	accountNum, nextSeq, err = c.querySignerAccountState(ctx, signer.addressStr)
+	accountNum, nextSeq, err = c.querySignerAccountStateAfterFunding(ctx, signer.addressStr)
 	if err != nil {
 		return fmt.Errorf("query org signer account after funding: %w", err)
 	}
@@ -693,6 +697,32 @@ func (c *GrpcClient) loadOrgSignerState(ctx context.Context, faucetURL string, s
 	signer.nextSeq = nextSeq
 	signer.seqLoaded = true
 	return nil
+}
+
+func (c *GrpcClient) querySignerAccountStateAfterFunding(ctx context.Context, address string) (uint64, uint64, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= accountQueryRetryAttempts; attempt++ {
+		accountNum, nextSeq, err := c.querySignerAccountState(ctx, address)
+		if err == nil {
+			return accountNum, nextSeq, nil
+		}
+
+		if !isAccountNotFoundError(err) {
+			return 0, 0, err
+		}
+
+		lastErr = err
+		if attempt == accountQueryRetryAttempts {
+			break
+		}
+
+		if err := sleepWithContext(ctx, retryBackoff(attempt)); err != nil {
+			return 0, 0, err
+		}
+	}
+
+	return 0, 0, fmt.Errorf("account %s not found after %d retries: %w", address, accountQueryRetryAttempts, lastErr)
 }
 
 func (c *GrpcClient) ensureOrgSignerBalance(ctx context.Context, faucetURL string, signer *orgSigner) error {
@@ -758,6 +788,22 @@ func (c *GrpcClient) querySignerAccountState(ctx context.Context, address string
 		return 0, 0, fmt.Errorf("query account %s: %w", address, lastErr)
 	}
 	return 0, 0, fmt.Errorf("query account %s failed", address)
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *GrpcClient) broadcastSignedMsgsForOrg(ctx context.Context, signer *orgSigner, mode txBroadcastMode, msgs ...types.Msg) (*types.TxResponse, error) {

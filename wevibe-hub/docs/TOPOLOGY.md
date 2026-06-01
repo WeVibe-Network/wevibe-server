@@ -792,6 +792,31 @@ Hub persists the per-serve matched-keyword set — the intersection of the serve
 
 CometBFT RPC is consumed by ChainWatcher via `CometBFTSubscriber`; node URL is sourced from `WEVIBE_CHAIN_RPC_URL` (fallback `tcp://localhost:26657`).
 
+### Two-key per-org gas model (CO-047, D-S32-CO044-KEY-SEPARATION)
+
+Each org has **two** hub-held, HD-derived, faucet-funded chain keys (not one). They carry distinct on-chain authorities and are independently revocable:
+
+| Role (`chain.OrgKeyRole`) | Keyring UID | Signs | On-chain registration |
+|---|---|---|---|
+| `OrgKeyServing` (`"serving"`) | `org-serving-{orgID}` | `MsgSubmitServeBatch`, `MsgSubmitDenialBatch` | `HubServingAddress` |
+| `OrgKeyLeader` (`"leader"`) | `org-leader-{orgID}` | `MsgSubmitCommitment`, `MsgApproveMemory`, `MsgRegisterOrg` (and `MsgReportMemory` if ever hub-submitted) | `LeaderWallet` |
+
+- Both keys are HD-derived from the hub master mnemonic at distinct indices (`m/44'/118'/0'/0/{account_index}`), each index drawn from `org_account_index_seq`.
+- `org_chain_accounts` is **role-keyed**: PK `(org_id, key_role)`, `key_role CHECK IN ('serving','leader')`, one `account_index UNIQUE` per row, and `funded BOOLEAN` (now truthful — set TRUE by `MarkOrgAccountFunded` after each faucet fund).
+- `accounts.go`: `DeriveOrgAccount(orgID, idx, role)`, `EnsureOrgAccount(ctx, db, orgID, role)`. `grpc_client.go`: `GetOrgSigner(ctx, db, orgID, role)` caches per `"{orgID}:{role}"`. `broadcast.go`: role-aware entrypoints `BroadcastMsgsForOrgServing` / `BroadcastMsgsForOrgServingCommit` / `BroadcastMsgsForOrgLeader` (the old role-less `BroadcastMsgsForOrg`/`...Commit` were removed). `submit.go` binds each message type to its authority.
+- `handlers.CreateOrg` ensures + faucet-funds BOTH keys (`TOPUP_AMOUNT` uvibe each), marks both funded, then `RegisterOrgOnChain(... servingAddr /*hub_serving_key*/, leaderAddr /*leader_wallet*/ ...)`. The response surfaces `hub_serving_key_address` and `leader_wallet_address`.
+- The chain required **no change**: `x/org` already separates `HubServingAddress` (`x/serve requireServingKeySigner == GetServingAddress`) from `LeaderWallet` (`x/memory requireLeaderWallet == GetLeaderWallet`); `MsgRegisterOrg` carries both `hub_serving_key` and `leader_wallet`, and `x/org/keeper/msg_server.go` persists both. The prior single-key conflation (one `org-serving-*` key registered as both authorities) was a hub-only bug, fixed in CO-047.
+
+### Subscription credit model (CO-047, D-3.1 / GAP-O6)
+
+Org credits are **hub-internal accounting only**. There is **no per-query credit deduction** (the obsolete `DeductQueryCredit` / `QueryCost` path was removed in CO-047). Recall access is gated by a boolean.
+
+- `members.membership_active BOOLEAN NOT NULL DEFAULT FALSE` — the subscription gate, distinct from `active` (org-membership soft-delete). Recall (`QueryMemories`) requires `membership_active = TRUE` for **non-trial** members; trial members remain governed by the orthogonal trial path (expiry + daily limit).
+- `billing.ProvisionOrgLedger(ctx, pool, orgID, initialBalance, actor)` — seeds the org pool from `fee_model.monthly_credits` at org creation, recording a `subscription_grant` transaction when the grant is > 0. Called by `orgs.CreateOrg` (replaces the removed `EnsureOrgLedger`). The leader member is created `membership_active = TRUE` and is NOT debited (owns the pool).
+- `billing.Subscribe(ctx, pool, orgID, memberPubkey, actor)` — single atomic tx: `SELECT balance FOR UPDATE`, explicit `balance < SubscriptionCost` check → `ErrInsufficientCredits` (does not rely on the `org_credits_balance_check` constraint), debit `SubscriptionCost` (=10) + `lifetime_used`, set `membership_active = TRUE`, record a `subscription` transaction.
+- Admission calls `Subscribe`: `handlers.InviteMember` (after invite) and `handlers.ApproveJoinRequest` (non-trial admissions only). `ErrInsufficientCredits` → HTTP 402; the member row is kept inactive (not rolled back).
+- `members.GetMember` returns `membership_active` (on `protocol.MemberRecord`, `db:"-"`).
+
 ## ChainWatcher (CO-011a.3, CO-011a.4 Activated)
 
 The ChainWatcher detects confirmed transactions on-chain and performs post-confirmation bookkeeping. As of CO-011a.4 it is the **canonical** bookkeeping path for all 5 confirmed-tx handlers — no API handler runs bookkeeping eagerly at submission time.
@@ -863,7 +888,9 @@ internal/chain/watcher_report_org.go — processReportBookkeeping(), processRegi
 
 ### catchUp Mechanism
 
-`Start()` reads `lastHeight` from `watcher_state` table. If `lastHeight > 0`, it calls `catchUp(ctx, lastHeight)` before subscribing to new blocks. `catchUp()` iterates blocks from `lastSeen+1` to current height and calls `processTx()` for each transaction — ensuring missed blocks between shutdown and restart are backfilled.
+`Start()` reads `lastHeight` from the `watcher_state` table. If `lastHeight > 0`, it calls `catchUp(ctx, lastHeight)` before subscribing to new blocks. `catchUp()` iterates blocks from `lastSeen+1` to current height and calls `processTx()` for each transaction — ensuring missed blocks between shutdown and restart are backfilled.
+
+The `watcher_state` table is the restart-safe cursor for this watcher and is defined in `db/schema.sql` (single source of truth — no migrations): one row keyed by `watcher_name` (`TEXT PRIMARY KEY`), with `last_seen_block_height BIGINT` and `updated_at TIMESTAMPTZ`. A seed row `('chain_watcher', 0)` is INSERTed by the schema so `updateLastSeenBlock` (an UPDATE, not an upsert) at the end of every `processBlock` always affects exactly one row. Prior to CO-047 this table was absent from the consolidated schema, so every `processBlock` errored `relation "watcher_state" does not exist` (SQLSTATE 42P01) and the cursor never advanced; CO-047 added the table + seed row.
 
 ### Struct Fields (ChainWatcher)
 

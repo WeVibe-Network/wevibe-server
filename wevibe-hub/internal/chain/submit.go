@@ -95,7 +95,7 @@ func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, db *pgxpool.Po
 		submissionHashes = append(submissionHashes, hex.EncodeToString(mem.ContentHash))
 	}
 
-	txResponse, err := c.BroadcastMsgsForOrg(ctx, db, faucetURL, orgID, allMsgs...)
+	txResponse, err := c.BroadcastMsgsForOrgLeader(ctx, db, faucetURL, orgID, allMsgs...)
 	if err != nil {
 		return "", nil, fmt.Errorf("broadcast: %w", err)
 	}
@@ -195,7 +195,7 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, db *pgxpool.Pool, fau
 	// on the chain. This was the secondary defect surfaced once the
 	// hub→chain pipeline started broadcasting in CO-035.
 
-	txResponse, err := c.BroadcastMsgsForOrgCommit(ctx, db, faucetURL, orgID, msg)
+	txResponse, err := c.BroadcastMsgsForOrgServingCommit(ctx, db, faucetURL, orgID, msg)
 	if err != nil {
 		return "", fmt.Errorf("broadcast: %w", err)
 	}
@@ -241,7 +241,7 @@ func (c *GrpcClient) SubmitDenialBatch(ctx context.Context, db *pgxpool.Pool, fa
 		Entries: denials,
 	}
 
-	txResponse, err := c.BroadcastMsgsForOrgCommit(ctx, db, faucetURL, orgID, msg)
+	txResponse, err := c.BroadcastMsgsForOrgServingCommit(ctx, db, faucetURL, orgID, msg)
 	if err != nil {
 		return "", fmt.Errorf("broadcast: %w", err)
 	}
@@ -274,7 +274,7 @@ func (c *GrpcClient) RegisterOrgOnChain(ctx context.Context, db *pgxpool.Pool, f
 		LeaderWallet:    trimmedLeaderWallet,
 	}
 
-	txResponse, err := c.BroadcastMsgsForOrg(ctx, db, faucetURL, orgID, msg)
+	txResponse, err := c.BroadcastMsgsForOrgLeader(ctx, db, faucetURL, orgID, msg)
 	if err != nil {
 		return "", fmt.Errorf("broadcast register org: %w", err)
 	}

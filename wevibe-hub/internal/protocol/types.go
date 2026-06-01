@@ -90,6 +90,7 @@ type MemberRecord struct {
 	HistoryAccessFromEpoch int       `json:"history_access_from_epoch" db:"history_access_from_epoch"`
 	AuthorizedUntilEpoch   *int      `json:"authorized_until_epoch" db:"authorized_until_epoch"`
 	Active                 bool      `json:"active" db:"active"`
+	MembershipActive       bool      `json:"membership_active" db:"-"`
 	JoinedAt               time.Time `json:"joined_at" db:"joined_at"`
 	WalletAddress          *string   `json:"wallet_address,omitempty"`
 	DisplayName            *string   `json:"display_name,omitempty" db:"-"`

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -275,6 +277,22 @@ func ApproveJoinRequest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
+	}
+
+	// Non-trial join approvals subscribe the new member: the org debits its
+	// credit pool once and activates membership_active. Trial members use the
+	// orthogonal free-tier path (expiry + daily limit) and are NOT subscribed.
+	// Insufficient credits leaves the (already-admitted) member inactive; the
+	// approval is not rolled back.
+	if !isTrial {
+		if subErr := billing.Subscribe(ctx, pool, orgID, requesterPubkey, signed.Pubkey); subErr != nil {
+			if errors.Is(subErr, billing.ErrInsufficientCredits) {
+				http.Error(w, `{"error":"insufficient org credits to subscribe member"}`, http.StatusPaymentRequired)
+				return
+			}
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
 	}
 
 	_ = emitUserNotification(ctx,

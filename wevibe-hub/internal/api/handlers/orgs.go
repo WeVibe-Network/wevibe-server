@@ -27,6 +27,11 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
+const (
+	defaultRegisterOrgStorageQuota    uint64 = 1000
+	defaultRegisterOrgRetrievalBudget uint64 = 500
+)
+
 func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
@@ -112,15 +117,55 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	faucetURL := os.Getenv("FAUCET_URL")
 
-	hubServingKey, _, err := chainClient.EnsureOrgAccount(r.Context(), pool, org.OrgID)
+	servingAddr, _, err := chainClient.EnsureOrgAccount(r.Context(), pool, org.OrgID, chain.OrgKeyServing)
 	if err != nil {
 		log.Printf("ERROR: failed to derive org serving key: org=%s err=%v", org.OrgID, err)
 		http.Error(w, `{"error":"failed to derive org serving key"}`, http.StatusInternalServerError)
 		return
 	}
-	if err := chainClient.FundAddressFromFaucet(r.Context(), faucetURL, hubServingKey, chain.TOPUP_AMOUNT); err != nil {
-		log.Printf("ERROR: failed to fund org serving key: org=%s address=%s err=%v", org.OrgID, hubServingKey, err)
+	leaderAddr, _, err := chainClient.EnsureOrgAccount(r.Context(), pool, org.OrgID, chain.OrgKeyLeader)
+	if err != nil {
+		log.Printf("ERROR: failed to derive org leader key: org=%s err=%v", org.OrgID, err)
+		http.Error(w, `{"error":"failed to derive org leader key"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if err := chainClient.FundAddressFromFaucet(r.Context(), faucetURL, servingAddr, chain.TOPUP_AMOUNT); err != nil {
+		log.Printf("ERROR: failed to fund org serving key: org=%s address=%s err=%v", org.OrgID, servingAddr, err)
 		http.Error(w, `{"error":"failed to fund org serving key"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := chainClient.MarkOrgAccountFunded(r.Context(), pool, org.OrgID, chain.OrgKeyServing); err != nil {
+		log.Printf("ERROR: failed to mark org serving key funded: org=%s err=%v", org.OrgID, err)
+		http.Error(w, `{"error":"failed to record org serving key funding"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if err := chainClient.FundAddressFromFaucet(r.Context(), faucetURL, leaderAddr, chain.TOPUP_AMOUNT); err != nil {
+		log.Printf("ERROR: failed to fund org leader key: org=%s address=%s err=%v", org.OrgID, leaderAddr, err)
+		http.Error(w, `{"error":"failed to fund org leader key"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := chainClient.MarkOrgAccountFunded(r.Context(), pool, org.OrgID, chain.OrgKeyLeader); err != nil {
+		log.Printf("ERROR: failed to mark org leader key funded: org=%s err=%v", org.OrgID, err)
+		http.Error(w, `{"error":"failed to record org leader key funding"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if _, err := chainClient.RegisterOrgOnChain(
+		r.Context(),
+		pool,
+		faucetURL,
+		org.OrgID,
+		org.LeaderPubkey,
+		org.Domain,
+		servingAddr,
+		leaderAddr,
+		defaultRegisterOrgStorageQuota,
+		defaultRegisterOrgRetrievalBudget,
+	); err != nil {
+		log.Printf("ERROR: failed to register org on-chain: org=%s err=%v", org.OrgID, err)
+		http.Error(w, `{"error":"failed to register org on-chain"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -135,11 +180,13 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	resp := struct {
 		*protocol.OrgInfo
 		HubServingKeyAddress string `json:"hub_serving_key_address"`
+		LeaderWalletAddress  string `json:"leader_wallet_address"`
 		EpochSK              string `json:"epoch_sk,omitempty"`
 		EpochPK              string `json:"epoch_pk,omitempty"`
 	}{
 		OrgInfo:              org,
-		HubServingKeyAddress: hubServingKey,
+		HubServingKeyAddress: servingAddr,
+		LeaderWalletAddress:  leaderAddr,
 		EpochSK:              epochSK,
 		EpochPK:              epochPK,
 	}

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -92,6 +91,11 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"trial daily query limit reached"}`, http.StatusForbidden)
 			return
 		}
+	} else if !member.MembershipActive {
+		// Non-trial members must hold an active subscription. Trial members are
+		// governed by the orthogonal trial path above (expiry + daily limit).
+		http.Error(w, `{"error":"membership not active — subscribe to query"}`, http.StatusForbidden)
+		return
 	}
 
 	currentEpoch, err := orgs.GetCurrentEpoch(ctx, pool, req.OrgID)
@@ -138,7 +142,6 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 			req.AgentPubkey, map[string]any{"query": "memory_query"},
 			[]string{}, req.AgentSig,
 		)
-		_ = billing.DeductQueryCredit(ctx, pool, req.OrgID, receipt.ReceiptID)
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(protocol.QueryResponse{Results: []protocol.MemoryResult{}, Contested: false, ReceiptID: receipt.ReceiptID})
@@ -300,10 +303,6 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, `{"error":"receipt failed"}`, http.StatusInternalServerError)
 		return
-	}
-
-	if err := billing.DeductQueryCredit(ctx, pool, req.OrgID, receipt.ReceiptID); err != nil {
-		log.Printf("WARNING: credit deduction failed for org %s: %v", req.OrgID, err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

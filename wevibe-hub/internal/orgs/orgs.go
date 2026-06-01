@@ -45,8 +45,8 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, wallet_address)
-		VALUES ($1, $2, $3, 'leader', 0, $4)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, wallet_address, membership_active)
+		VALUES ($1, $2, $3, 'leader', 0, $4, TRUE)
 	`, req.OrgID, req.LeaderPubkey, req.LeaderX25519Pubkey, leaderWallet)
 	if err != nil {
 		return nil, fmt.Errorf("insert leader member: %w", err)
@@ -56,8 +56,8 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
-	if err := billing.EnsureOrgLedger(ctx, pool, req.OrgID); err != nil {
-		return nil, fmt.Errorf("ensure billing ledger: %w", err)
+	if err := billing.ProvisionOrgLedger(ctx, pool, req.OrgID, req.FeeModel.MonthlyCredits, req.LeaderPubkey); err != nil {
+		return nil, fmt.Errorf("provision billing ledger: %w", err)
 	}
 
 	return GetOrg(ctx, pool, req.OrgID)
