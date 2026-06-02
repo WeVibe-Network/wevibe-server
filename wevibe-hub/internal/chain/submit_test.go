@@ -33,3 +33,80 @@ func bytes32(b byte) []byte {
 	}
 	return out
 }
+
+func TestBuildServeBatchMsg_MapsEntries(t *testing.T) {
+	client := &GrpcClient{}
+	entries := []ServeEntryInput{{
+		MemoryContentHash: bytes32(0x11),
+		ServeKey:          "serve-key-1",
+		ContributorID:     "contributor-1",
+		ContributorWallet: "wevibe1wallet",
+		Nullifier:         bytes32(0x22),
+		ModelID:           "model-1",
+		TurnCount:         3,
+		MatchedKeywords:   []string{"alpha", "beta"},
+	}}
+
+	msg, err := client.BuildServeBatchMsg("org-1", 7, entries)
+	if err != nil {
+		t.Fatalf("BuildServeBatchMsg returned error: %v", err)
+	}
+	if msg.OrgId != "org-1" {
+		t.Fatalf("unexpected org id: got %q want %q", msg.OrgId, "org-1")
+	}
+	if msg.Epoch != 7 {
+		t.Fatalf("unexpected epoch: got %d want %d", msg.Epoch, 7)
+	}
+	if len(msg.Serves) != 1 {
+		t.Fatalf("unexpected serve entry count: got %d want %d", len(msg.Serves), 1)
+	}
+	if msg.Serves[0].ContributorWallet != "wevibe1wallet" {
+		t.Fatalf("unexpected contributor wallet: got %q", msg.Serves[0].ContributorWallet)
+	}
+	if len(msg.Serves[0].MatchedKeywords) != 2 {
+		t.Fatalf("unexpected matched keyword count: got %d want %d", len(msg.Serves[0].MatchedKeywords), 2)
+	}
+}
+
+func TestBuildServeBatchMsg_RejectsEmptyMatchedKeywords(t *testing.T) {
+	client := &GrpcClient{}
+	_, err := client.BuildServeBatchMsg("org-1", 9, []ServeEntryInput{{
+		MemoryContentHash: bytes32(0x11),
+		ServeKey:          "serve-key-1",
+		ContributorID:     "contributor-1",
+		ContributorWallet: "wevibe1wallet",
+		Nullifier:         bytes32(0x22),
+		ModelID:           "model-1",
+		TurnCount:         3,
+	}})
+	if err == nil {
+		t.Fatalf("expected validation error for empty matched keywords")
+	}
+}
+
+func TestBuildDenialBatchMsg_MapsEntries(t *testing.T) {
+	client := &GrpcClient{}
+	entries := []DenialEntryInput{{
+		MemoryHash: bytes32(0x31),
+		Nullifier:  bytes32(0x41),
+		DenyKey:    "deny-key-1",
+		Reason:     "spam",
+	}}
+
+	msg, err := client.BuildDenialBatchMsg("org-7", 11, entries)
+	if err != nil {
+		t.Fatalf("BuildDenialBatchMsg returned error: %v", err)
+	}
+	if msg.OrgId != "org-7" {
+		t.Fatalf("unexpected org id: got %q want %q", msg.OrgId, "org-7")
+	}
+	if msg.Epoch != 11 {
+		t.Fatalf("unexpected epoch: got %d want %d", msg.Epoch, 11)
+	}
+	if len(msg.Entries) != 1 {
+		t.Fatalf("unexpected denial entry count: got %d want %d", len(msg.Entries), 1)
+	}
+	if msg.Entries[0].Reason != "spam" {
+		t.Fatalf("unexpected denial reason: got %q want %q", msg.Entries[0].Reason, "spam")
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	sdktypes "github.com/cosmos/cosmos-sdk/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
@@ -113,6 +114,7 @@ const (
 	serveRelayQueueSize  = 256
 	serveRelayTimeout    = 3 * time.Minute
 	serveRelayWorkers    = 8
+	maxRelayMsgsPerTx    = 200
 )
 
 var (
@@ -201,7 +203,45 @@ func serveRelayWorker() {
 	}
 }
 
+type relayPendingDeps struct {
+	getPendingServes     func(context.Context, poolType, string, int) ([]serves.ServeEventRecord, error)
+	getPendingDenials    func(context.Context, poolType, string, int) ([]serves.ServeEventRecord, error)
+	submitRelayBatch     func(context.Context, *chain.GrpcClient, poolType, string, string, []sdktypes.Msg) (string, error)
+	markServesSubmitted  func(context.Context, poolType, []int64, string) error
+	markDenialsSubmitted func(context.Context, poolType, []int64, string) error
+	logRelayTxSubmission func(orgID string, msgCount, epochCount int, txHash string)
+}
+
+type relayTxBatch struct {
+	msgs      []sdktypes.Msg
+	serveIDs  []int64
+	denialIDs []int64
+	epochs    int
+}
+
 func relayPendingEventsByOrg(ctx context.Context, cc *chain.GrpcClient, p poolType, orgID string) error {
+	deps := relayPendingDeps{
+		getPendingServes:  serves.GetPendingServes,
+		getPendingDenials: serves.GetPendingDenials,
+		submitRelayBatch: func(ctx context.Context, cc *chain.GrpcClient, db poolType, faucetURL, orgID string, msgs []sdktypes.Msg) (string, error) {
+			return cc.SubmitRelayBatch(ctx, db, faucetURL, orgID, msgs)
+		},
+		markServesSubmitted:  serves.MarkServesSubmitted,
+		markDenialsSubmitted: serves.MarkDenialsSubmitted,
+		logRelayTxSubmission: func(orgID string, msgCount, epochCount int, txHash string) {
+			slog.Info("relay submitted serve/denial tx",
+				"org_id", orgID,
+				"entries", msgCount,
+				"epochs", epochCount,
+				"tx_hash", txHash,
+			)
+		},
+	}
+
+	return relayPendingEventsByOrgWithDeps(ctx, cc, p, orgID, deps)
+}
+
+func relayPendingEventsByOrgWithDeps(ctx context.Context, cc *chain.GrpcClient, p poolType, orgID string, deps relayPendingDeps) error {
 	// Relay per epoch, serves-then-denials, oldest epoch first.
 	//
 	// Draining ALL pending serves before ANY pending denials (the previous
@@ -215,12 +255,16 @@ func relayPendingEventsByOrg(ctx context.Context, cc *chain.GrpcClient, p poolTy
 	// submit serves[E] before denials[E], and epochs are processed ascending so
 	// a denial can never be submitted before the serve it references
 	// (serveEpoch <= denialEpoch always).
+	//
+	// enqueueServeRelay/serveRelayQueued guarantees single-flight per org: only
+	// one relay pass runs at a time for a given orgID, so this multi-message TX
+	// path remains serialized for each org signer.
 	for {
-		serveRecords, err := serves.GetPendingServes(ctx, p, orgID, serveRelayFetchLimit)
+		serveRecords, err := deps.getPendingServes(ctx, p, orgID, serveRelayFetchLimit)
 		if err != nil {
 			return fmt.Errorf("load pending serves: %w", err)
 		}
-		denialRecords, err := serves.GetPendingDenials(ctx, p, orgID, serveRelayFetchLimit)
+		denialRecords, err := deps.getPendingDenials(ctx, p, orgID, serveRelayFetchLimit)
 		if err != nil {
 			return fmt.Errorf("load pending denials: %w", err)
 		}
@@ -230,20 +274,109 @@ func relayPendingEventsByOrg(ctx context.Context, cc *chain.GrpcClient, p poolTy
 
 		servesByEpoch := groupRecordsByEpoch(serveRecords)
 		denialsByEpoch := groupRecordsByEpoch(denialRecords)
+		epochs := sortedUnionEpochs(servesByEpoch, denialsByEpoch)
 
-		for _, epochID := range sortedUnionEpochs(servesByEpoch, denialsByEpoch) {
-			if recs := servesByEpoch[epochID]; len(recs) > 0 {
-				if err := submitServeEpoch(ctx, cc, p, orgID, epochID, recs); err != nil {
-					return err
-				}
+		batch := relayTxBatch{msgs: make([]sdktypes.Msg, 0, maxRelayMsgsPerTx)}
+		for _, epochID := range epochs {
+			epochMsgs, serveIDs, denialIDs, buildErr := buildRelayEpochMessages(cc, orgID, epochID, servesByEpoch[epochID], denialsByEpoch[epochID])
+			if buildErr != nil {
+				return buildErr
 			}
-			if recs := denialsByEpoch[epochID]; len(recs) > 0 {
-				if err := submitDenialEpoch(ctx, cc, p, orgID, epochID, recs); err != nil {
+			if len(epochMsgs) == 0 {
+				continue
+			}
+
+			if len(batch.msgs) > 0 && len(batch.msgs)+len(epochMsgs) > maxRelayMsgsPerTx {
+				if err := flushRelayTxBatch(ctx, cc, p, orgID, batch, deps); err != nil {
 					return err
 				}
+				batch = relayTxBatch{msgs: make([]sdktypes.Msg, 0, maxRelayMsgsPerTx)}
+			}
+
+			// Keep each epoch's serve+denial pair together in one transaction.
+			batch.msgs = append(batch.msgs, epochMsgs...)
+			batch.serveIDs = append(batch.serveIDs, serveIDs...)
+			batch.denialIDs = append(batch.denialIDs, denialIDs...)
+			batch.epochs++
+		}
+
+		if len(batch.msgs) > 0 {
+			if err := flushRelayTxBatch(ctx, cc, p, orgID, batch, deps); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, serveRecords, denialRecords []serves.ServeEventRecord) ([]sdktypes.Msg, []int64, []int64, error) {
+	if epochID < 0 {
+		return nil, nil, nil, fmt.Errorf("invalid epoch %d", epochID)
+	}
+
+	msgs := make([]sdktypes.Msg, 0, 2)
+	serveIDs := make([]int64, 0, len(serveRecords))
+	denialIDs := make([]int64, 0, len(denialRecords))
+
+	if len(serveRecords) > 0 {
+		entries := make([]chain.ServeEntryInput, 0, len(serveRecords))
+		for _, record := range serveRecords {
+			entry, buildErr := serveEntryFromRecord(record)
+			if buildErr != nil {
+				return nil, nil, nil, fmt.Errorf("build serve entry id=%d: %w", record.ID, buildErr)
+			}
+			entries = append(entries, entry)
+			serveIDs = append(serveIDs, record.ID)
+		}
+
+		serveMsg, buildErr := cc.BuildServeBatchMsg(orgID, uint64(epochID), entries)
+		if buildErr != nil {
+			return nil, nil, nil, fmt.Errorf("build serve batch epoch=%d size=%d: %w", epochID, len(entries), buildErr)
+		}
+		msgs = append(msgs, serveMsg)
+	}
+
+	if len(denialRecords) > 0 {
+		entries := make([]chain.DenialEntryInput, 0, len(denialRecords))
+		for _, record := range denialRecords {
+			entry, buildErr := denialEntryFromRecord(record)
+			if buildErr != nil {
+				return nil, nil, nil, fmt.Errorf("build denial entry id=%d: %w", record.ID, buildErr)
+			}
+			entries = append(entries, entry)
+			denialIDs = append(denialIDs, record.ID)
+		}
+
+		denialMsg, buildErr := cc.BuildDenialBatchMsg(orgID, uint64(epochID), entries)
+		if buildErr != nil {
+			return nil, nil, nil, fmt.Errorf("build denial batch epoch=%d size=%d: %w", epochID, len(entries), buildErr)
+		}
+		msgs = append(msgs, denialMsg)
+	}
+
+	return msgs, serveIDs, denialIDs, nil
+}
+
+func flushRelayTxBatch(ctx context.Context, cc *chain.GrpcClient, db poolType, orgID string, batch relayTxBatch, deps relayPendingDeps) error {
+	if len(batch.msgs) == 0 {
+		return nil
+	}
+
+	txHash, submitErr := deps.submitRelayBatch(ctx, cc, db, os.Getenv("FAUCET_URL"), orgID, batch.msgs)
+	if submitErr != nil {
+		return fmt.Errorf("submit relay tx epochs=%d msgs=%d: %w", batch.epochs, len(batch.msgs), submitErr)
+	}
+	if markErr := deps.markServesSubmitted(ctx, db, batch.serveIDs, txHash); markErr != nil {
+		return fmt.Errorf("mark serve batch submitted tx=%s: %w", txHash, markErr)
+	}
+	if markErr := deps.markDenialsSubmitted(ctx, db, batch.denialIDs, txHash); markErr != nil {
+		return fmt.Errorf("mark denial batch submitted tx=%s: %w", txHash, markErr)
+	}
+
+	if deps.logRelayTxSubmission != nil {
+		deps.logRelayTxSubmission(orgID, len(batch.msgs), batch.epochs, txHash)
+	}
+
+	return nil
 }
 
 // groupRecordsByEpoch buckets serve_event records by their epoch_id, preserving
@@ -273,68 +406,6 @@ func sortedUnionEpochs(a, b map[int][]serves.ServeEventRecord) []int {
 	}
 	sort.Ints(epochs)
 	return epochs
-}
-
-func submitServeEpoch(ctx context.Context, cc *chain.GrpcClient, db poolType, orgID string, epochID int, records []serves.ServeEventRecord) error {
-	entries := make([]chain.ServeEntryInput, 0, len(records))
-	ids := make([]int64, 0, len(records))
-	for _, record := range records {
-		entry, buildErr := serveEntryFromRecord(record)
-		if buildErr != nil {
-			return fmt.Errorf("build serve entry id=%d: %w", record.ID, buildErr)
-		}
-		entries = append(entries, entry)
-		ids = append(ids, record.ID)
-	}
-
-	faucetURL := os.Getenv("FAUCET_URL")
-	txHash, submitErr := cc.SubmitServeBatch(ctx, db, faucetURL, orgID, uint64(epochID), entries)
-	if submitErr != nil {
-		return fmt.Errorf("submit serve batch epoch=%d size=%d: %w", epochID, len(entries), submitErr)
-	}
-	if markErr := serves.MarkServesSubmitted(ctx, db, ids, txHash); markErr != nil {
-		return fmt.Errorf("mark serve batch submitted epoch=%d tx=%s: %w", epochID, txHash, markErr)
-	}
-
-	slog.Info("relay submitted serve batch",
-		"org_id", orgID,
-		"epoch", epochID,
-		"entries", len(entries),
-		"tx_hash", txHash,
-	)
-
-	return nil
-}
-
-func submitDenialEpoch(ctx context.Context, cc *chain.GrpcClient, db poolType, orgID string, epochID int, records []serves.ServeEventRecord) error {
-	entries := make([]chain.DenialEntryInput, 0, len(records))
-	ids := make([]int64, 0, len(records))
-	for _, record := range records {
-		entry, buildErr := denialEntryFromRecord(record)
-		if buildErr != nil {
-			return fmt.Errorf("build denial entry id=%d: %w", record.ID, buildErr)
-		}
-		entries = append(entries, entry)
-		ids = append(ids, record.ID)
-	}
-
-	faucetURL := os.Getenv("FAUCET_URL")
-	txHash, submitErr := cc.SubmitDenialBatch(ctx, db, faucetURL, orgID, uint64(epochID), entries)
-	if submitErr != nil {
-		return fmt.Errorf("submit denial batch epoch=%d size=%d: %w", epochID, len(entries), submitErr)
-	}
-	if markErr := serves.MarkDenialsSubmitted(ctx, db, ids, txHash); markErr != nil {
-		return fmt.Errorf("mark denial batch submitted epoch=%d tx=%s: %w", epochID, txHash, markErr)
-	}
-
-	slog.Info("relay submitted denial batch",
-		"org_id", orgID,
-		"epoch", epochID,
-		"entries", len(entries),
-		"tx_hash", txHash,
-	)
-
-	return nil
 }
 
 func serveEntryFromRecord(record serves.ServeEventRecord) (chain.ServeEntryInput, error) {

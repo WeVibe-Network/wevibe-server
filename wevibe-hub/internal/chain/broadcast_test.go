@@ -29,15 +29,28 @@ func (m *mockTxSimulator) Simulate(_ context.Context, _ *txtypes.SimulateRequest
 }
 
 func TestEstimateGasLimit_SimulateBufferMultiplier(t *testing.T) {
-	client := &GrpcClient{txSim: &mockTxSimulator{gasUsed: 200_000, gasWanted: 200_000}}
-
-	_, gasLimit, err := client.estimateGasLimit(context.Background(), gasStrategySimulateBuffer, []byte("tx"))
-	if err != nil {
-		t.Fatalf("estimate gas limit returned error: %v", err)
+	testCases := []struct {
+		name         string
+		simulatedGas uint64
+		expectedGas  uint64
+	}{
+		{name: "exact 1.4x", simulatedGas: 100_000, expectedGas: 140_000},
+		{name: "rounded up", simulatedGas: 100_001, expectedGas: 140_002},
 	}
 
-	if gasLimit != 400_000 {
-		t.Fatalf("unexpected gas limit: got %d want %d", gasLimit, 400_000)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &GrpcClient{txSim: &mockTxSimulator{gasUsed: tc.simulatedGas, gasWanted: tc.simulatedGas}}
+
+			_, gasLimit, err := client.estimateGasLimit(context.Background(), gasStrategySimulateBuffer, []byte("tx"))
+			if err != nil {
+				t.Fatalf("estimate gas limit returned error: %v", err)
+			}
+
+			if gasLimit != tc.expectedGas {
+				t.Fatalf("unexpected gas limit: got %d want %d", gasLimit, tc.expectedGas)
+			}
+		})
 	}
 }
 
@@ -66,8 +79,8 @@ func TestEstimateGasLimit_UsesMaxGasWantedAndGasUsed(t *testing.T) {
 		t.Fatalf("unexpected simulated gas: got %d want %d", simulatedGas, 55_001)
 	}
 
-	if gasLimit != 110_002 {
-		t.Fatalf("unexpected gas limit: got %d want %d", gasLimit, 110_002)
+	if gasLimit != 77_002 {
+		t.Fatalf("unexpected gas limit: got %d want %d", gasLimit, 77_002)
 	}
 }
 
@@ -79,8 +92,8 @@ func TestEstimateGasLimit_IgnoresInfiniteGasWanted(t *testing.T) {
 		t.Fatalf("estimate gas limit returned error: %v", err)
 	}
 
-	if gasLimit != 400_000 {
-		t.Fatalf("unexpected gas limit: got %d want %d", gasLimit, 400_000)
+	if gasLimit != 280_000 {
+		t.Fatalf("unexpected gas limit: got %d want %d", gasLimit, 280_000)
 	}
 }
 

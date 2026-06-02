@@ -40,8 +40,8 @@ const (
 	minGasPriceDen               = int64(1000)
 	MIN_GAS_BALANCE              = int64(5_000_000)
 	TOPUP_AMOUNT                 = int64(20_000_000)
-	simulateBufferMultiplierNum  = uint64(2)
-	simulateBufferMultiplierDen  = uint64(1)
+	simulateBufferMultiplierNum  = uint64(7)
+	simulateBufferMultiplierDen  = uint64(5)
 	simulateRetryMultiplier      = uint64(2)
 	gasStrategySimulateBufferRaw = "simulate-buffer"
 	gasStrategySimulateRetryRaw  = "simulate-retry"

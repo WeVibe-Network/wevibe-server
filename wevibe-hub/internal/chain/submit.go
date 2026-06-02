@@ -147,24 +147,23 @@ type DenialEntryInput struct {
 	MatchedKeywords []string
 }
 
-func (c *GrpcClient) SubmitServeBatch(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, epoch uint64, entries []ServeEntryInput) (string, error) {
+func buildServeEntries(entries []ServeEntryInput) ([]*servetypes.ServeEntry, error) {
 	if len(entries) == 0 {
-		return "", fmt.Errorf("at least one entry required")
-	}
-	for i, e := range entries {
-		if len(e.MemoryContentHash) != 32 {
-			return "", fmt.Errorf("entry %d: memory_content_hash must be 32 bytes, got %d", i, len(e.MemoryContentHash))
-		}
-		if len(e.Nullifier) != 32 {
-			return "", fmt.Errorf("entry %d: nullifier must be 32 bytes, got %d", i, len(e.Nullifier))
-		}
-		if len(e.MatchedKeywords) == 0 {
-			return "", fmt.Errorf("entry %d: matched_keywords cannot be empty", i)
-		}
+		return nil, fmt.Errorf("at least one entry required")
 	}
 
 	serves := make([]*servetypes.ServeEntry, len(entries))
 	for i, e := range entries {
+		if len(e.MemoryContentHash) != 32 {
+			return nil, fmt.Errorf("entry %d: memory_content_hash must be 32 bytes, got %d", i, len(e.MemoryContentHash))
+		}
+		if len(e.Nullifier) != 32 {
+			return nil, fmt.Errorf("entry %d: nullifier must be 32 bytes, got %d", i, len(e.Nullifier))
+		}
+		if len(e.MatchedKeywords) == 0 {
+			return nil, fmt.Errorf("entry %d: matched_keywords cannot be empty", i)
+		}
+
 		serves[i] = &servetypes.ServeEntry{
 			MemoryContentHash: e.MemoryContentHash,
 			ServeKey:          e.ServeKey,
@@ -177,11 +176,84 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, db *pgxpool.Pool, fau
 		}
 	}
 
-	msg := &servetypes.MsgSubmitServeBatch{
+	return serves, nil
+}
+
+func buildDenialEntries(entries []DenialEntryInput) ([]*servetypes.DenialEntry, error) {
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("at least one entry required")
+	}
+
+	denials := make([]*servetypes.DenialEntry, len(entries))
+	for i, e := range entries {
+		if len(e.MemoryHash) != 32 {
+			return nil, fmt.Errorf("entry %d: memory_hash must be 32 bytes, got %d", i, len(e.MemoryHash))
+		}
+		if len(e.Nullifier) != 32 {
+			return nil, fmt.Errorf("entry %d: nullifier must be 32 bytes, got %d", i, len(e.Nullifier))
+		}
+		if e.DenyKey == "" {
+			return nil, fmt.Errorf("entry %d: deny_key is required", i)
+		}
+		if e.Reason == "" {
+			return nil, fmt.Errorf("entry %d: reason is required", i)
+		}
+
+		denials[i] = &servetypes.DenialEntry{
+			MemoryHash: e.MemoryHash,
+			Nullifier:  e.Nullifier,
+			DenyKey:    e.DenyKey,
+			Reason:     e.Reason,
+		}
+	}
+
+	return denials, nil
+}
+
+func (c *GrpcClient) BuildServeBatchMsg(orgID string, epoch uint64, entries []ServeEntryInput) (*servetypes.MsgSubmitServeBatch, error) {
+	serves, err := buildServeEntries(entries)
+	if err != nil {
+		return nil, err
+	}
+
+	return &servetypes.MsgSubmitServeBatch{
 		Signer: "",
 		OrgId:  orgID,
 		Epoch:  epoch,
 		Serves: serves,
+	}, nil
+}
+
+func (c *GrpcClient) BuildDenialBatchMsg(orgID string, epoch uint64, entries []DenialEntryInput) (*servetypes.MsgSubmitDenialBatch, error) {
+	denials, err := buildDenialEntries(entries)
+	if err != nil {
+		return nil, err
+	}
+
+	return &servetypes.MsgSubmitDenialBatch{
+		Signer:  "",
+		OrgId:   orgID,
+		Epoch:   epoch,
+		Entries: denials,
+	}, nil
+}
+
+func (c *GrpcClient) SubmitRelayBatch(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, msgs []types.Msg) (string, error) {
+	txResponse, err := c.BroadcastMsgsForOrgServingCommit(ctx, db, faucetURL, orgID, msgs...)
+	if err != nil {
+		return "", fmt.Errorf("broadcast: %w", err)
+	}
+	if txResponse == nil {
+		return "", fmt.Errorf("broadcast: missing tx response")
+	}
+
+	return txResponse.TxHash, nil
+}
+
+func (c *GrpcClient) SubmitServeBatch(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, epoch uint64, entries []ServeEntryInput) (string, error) {
+	msg, err := c.BuildServeBatchMsg(orgID, epoch, entries)
+	if err != nil {
+		return "", err
 	}
 
 	// NOTE (CO-035): we intentionally do NOT bundle MsgIncrementServe here.
@@ -195,61 +267,16 @@ func (c *GrpcClient) SubmitServeBatch(ctx context.Context, db *pgxpool.Pool, fau
 	// on the chain. This was the secondary defect surfaced once the
 	// hub→chain pipeline started broadcasting in CO-035.
 
-	txResponse, err := c.BroadcastMsgsForOrgServingCommit(ctx, db, faucetURL, orgID, msg)
-	if err != nil {
-		return "", fmt.Errorf("broadcast: %w", err)
-	}
-	if txResponse == nil {
-		return "", fmt.Errorf("broadcast: missing tx response")
-	}
-
-	return txResponse.TxHash, nil
+	return c.SubmitRelayBatch(ctx, db, faucetURL, orgID, []types.Msg{msg})
 }
 
 func (c *GrpcClient) SubmitDenialBatch(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, epoch uint64, entries []DenialEntryInput) (string, error) {
-	if len(entries) == 0 {
-		return "", fmt.Errorf("at least one entry required")
-	}
-
-	denials := make([]*servetypes.DenialEntry, len(entries))
-	for i, e := range entries {
-		if len(e.MemoryHash) != 32 {
-			return "", fmt.Errorf("entry %d: memory_hash must be 32 bytes, got %d", i, len(e.MemoryHash))
-		}
-		if len(e.Nullifier) != 32 {
-			return "", fmt.Errorf("entry %d: nullifier must be 32 bytes, got %d", i, len(e.Nullifier))
-		}
-		if e.DenyKey == "" {
-			return "", fmt.Errorf("entry %d: deny_key is required", i)
-		}
-		if e.Reason == "" {
-			return "", fmt.Errorf("entry %d: reason is required", i)
-		}
-
-		denials[i] = &servetypes.DenialEntry{
-			MemoryHash: e.MemoryHash,
-			Nullifier:  e.Nullifier,
-			DenyKey:    e.DenyKey,
-			Reason:     e.Reason,
-		}
-	}
-
-	msg := &servetypes.MsgSubmitDenialBatch{
-		Signer:  "",
-		OrgId:   orgID,
-		Epoch:   epoch,
-		Entries: denials,
-	}
-
-	txResponse, err := c.BroadcastMsgsForOrgServingCommit(ctx, db, faucetURL, orgID, msg)
+	msg, err := c.BuildDenialBatchMsg(orgID, epoch, entries)
 	if err != nil {
-		return "", fmt.Errorf("broadcast: %w", err)
-	}
-	if txResponse == nil {
-		return "", fmt.Errorf("broadcast: missing tx response")
+		return "", err
 	}
 
-	return txResponse.TxHash, nil
+	return c.SubmitRelayBatch(ctx, db, faucetURL, orgID, []types.Msg{msg})
 }
 
 func (c *GrpcClient) RegisterOrgOnChain(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID, leader, domain, hubServingKey, leaderWallet string, storageQuota, retrievalBudget uint64) (string, error) {
