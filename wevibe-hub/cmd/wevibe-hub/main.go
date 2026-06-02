@@ -50,6 +50,8 @@ func main() {
 	retrieval.SetRetrievalRanker(retrievalRanker)
 	log.Printf("retrieval ranker configured: T=%.2f boost=%.2f window=%d",
 		retrievalRanker.Temperature, retrievalRanker.NewMemBoostMult, retrievalRanker.NewMemBoostWindow)
+	log.Printf("retrieval vector knobs configured: sigma=%.4f recall_depth=%d",
+		cfg.RetrievalVectorNoiseSigma, cfg.RetrievalRecallDepth)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -93,6 +95,7 @@ func main() {
 	if err != nil {
 		log.Printf("WARNING: qdrant unavailable: %v", err)
 	} else {
+		qdrantClient.SetRetrievalConfig(cfg.RetrievalVectorNoiseSigma, cfg.RetrievalRecallDepth)
 		qdrantClient.SetPendingDenialDB(pool)
 		defer qdrantClient.Close()
 		handlers.SetQdrantClient(qdrantClient)

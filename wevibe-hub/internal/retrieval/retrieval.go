@@ -199,7 +199,7 @@ func (r *ProbabilisticRanker) probabilisticRank(scored []scoredResult, limit int
 }
 
 const (
-	vectorRecallDepth = 30
+	vectorRecallDepth = 5000
 )
 
 func NewQdrantClient(addr string, apiKey string) (*QdrantClient, error) {
@@ -216,15 +216,27 @@ func NewQdrantClient(addr string, apiKey string) (*QdrantClient, error) {
 	}
 
 	return &QdrantClient{
-		restURL: fmt.Sprintf("http://%s:6333", host),
-		apiKey:  apiKey,
+		restURL:          fmt.Sprintf("http://%s:6333", host),
+		apiKey:           apiKey,
+		vectorNoiseSigma: 0.0,
+		recallDepth:      vectorRecallDepth,
 	}, nil
 }
 
 type QdrantClient struct {
-	restURL         string
-	apiKey          string
-	pendingDenialDB DBQueryer
+	restURL          string
+	apiKey           string
+	pendingDenialDB  DBQueryer
+	vectorNoiseSigma float64
+	recallDepth      uint64
+}
+
+func (c *QdrantClient) SetRetrievalConfig(vectorNoiseSigma float64, recallDepth uint64) {
+	if c == nil {
+		return
+	}
+	c.vectorNoiseSigma = vectorNoiseSigma
+	c.recallDepth = recallDepth
 }
 
 func (c *QdrantClient) SetPendingDenialDB(db DBQueryer) {
@@ -343,7 +355,7 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 		payloadMap["vector_dim"] = entry.VectorDim
 	}
 
-	noisyVector := injectGaussianNoise(entry.Vector, 0.1)
+	noisyVector := injectGaussianNoise(entry.Vector, c.vectorNoiseSigma)
 	upsertReq := map[string]any{
 		"points": []map[string]any{
 			{
@@ -421,7 +433,10 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	// confidence_bps was killed by D-4.1 and is no longer part of ranking.
 	const keywordBoostFactor = 0.1
 
-	searchLimit := uint64(vectorRecallDepth)
+	searchLimit := c.recallDepth
+	if searchLimit == 0 {
+		searchLimit = vectorRecallDepth
+	}
 	if limit > searchLimit {
 		searchLimit = limit
 	}

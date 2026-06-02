@@ -26,6 +26,8 @@ type Config struct {
 	RetrievalTemperature       float64
 	RetrievalNewMemBoostMult   float64
 	RetrievalNewMemBoostWindow uint64
+	RetrievalVectorNoiseSigma  float64
+	RetrievalRecallDepth       uint64
 }
 
 func Load() Config {
@@ -61,6 +63,8 @@ func Load() Config {
 		RetrievalTemperature:       getEnvOrDefaultFloat("RETRIEVAL_TEMPERATURE", 0.7),
 		RetrievalNewMemBoostMult:   getEnvOrDefaultFloat("RETRIEVAL_NEW_MEM_BOOST_MULT", 0.5),
 		RetrievalNewMemBoostWindow: getEnvOrDefaultUint64("RETRIEVAL_NEW_MEM_BOOST_WINDOW", 30),
+		RetrievalVectorNoiseSigma:  getEnvOrDefaultFloat("RETRIEVAL_VECTOR_NOISE_SIGMA", 0.0),
+		RetrievalRecallDepth:       getEnvOrDefaultUint64("RETRIEVAL_RECALL_DEPTH", 5000),
 	}
 
 	if cfg.RetrievalTemperature <= 0 {
