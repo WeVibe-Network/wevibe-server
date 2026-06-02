@@ -1,15 +1,30 @@
+import * as ed from '@noble/ed25519';
+import { sha256 } from '@noble/hashes/sha256';
+import { sha512 } from '@noble/hashes/sha512';
+
 const DB_NAME = 'wevibe-dashboard';
 const DB_VERSION = 1;
 const STORE_NAME = 'keys';
 const KEY_ID = 'dashboard-identity';
 
+const IDENTITY_CHALLENGE_VERSION = 'v1';
+const SEED_DOMAIN_TAG = 'wevibe-ed25519-v1';
+
+const textEncoder = new TextEncoder();
+
+ed.etc.sha512Sync = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages));
+
 interface StoredIdentity {
   id: string;
-  publicKey: CryptoKey;
-  privateKey: CryptoKey;
   pubkeyHex: string;
+  seedHex: string;
   createdAt: string;
   walletAddress?: string;
+  [key: string]: any;
+}
+
+function identityChallenge(address: string): string {
+  return `WeVibe Dashboard Identity ${IDENTITY_CHALLENGE_VERSION}\nDerive my Ed25519 hub authentication key.\nWallet: ${address}`;
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -26,44 +41,85 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-function bufToHex(buf: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buf))
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 }
 
-export async function getOrCreateIdentity(): Promise<{ pubkeyHex: string; isNew: boolean }> {
-  const db = await openDB();
+function bufToHex(buf: ArrayBuffer): string {
+  return bytesToHex(new Uint8Array(buf));
+}
 
-  const existing = await new Promise<StoredIdentity | undefined>((resolve, reject) => {
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) {
+    throw new Error('Invalid hex length');
+  }
+
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    const byte = Number.parseInt(hex.slice(i, i + 2), 16);
+    if (Number.isNaN(byte)) {
+      throw new Error('Invalid hex value');
+    }
+    bytes[i / 2] = byte;
+  }
+  return bytes;
+}
+
+function hexToBuf(hex: string): ArrayBuffer {
+  const bytes = hexToBytes(hex);
+  const buffer = new ArrayBuffer(bytes.length);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const normalized = base64.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return bytes;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function deriveSeedFromSignature(signatureBase64: string): Uint8Array {
+  const signatureBytes = base64ToBytes(signatureBase64);
+  return sha256(ed.etc.concatBytes(textEncoder.encode(SEED_DOMAIN_TAG), signatureBytes));
+}
+
+async function loadIdentityRecord(): Promise<StoredIdentity | null> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
     const req = store.get(KEY_ID);
-    req.onsuccess = () => resolve(req.result as StoredIdentity | undefined);
+    req.onsuccess = () => {
+      const result = req.result as Partial<StoredIdentity> | undefined;
+      if (!result || typeof result.pubkeyHex !== 'string' || typeof result.seedHex !== 'string') {
+        resolve(null);
+        return;
+      }
+      resolve(result as StoredIdentity);
+    };
     req.onerror = () => reject(req.error);
   });
+}
 
-  if (existing) {
-    return { pubkeyHex: existing.pubkeyHex, isNew: false };
-  }
-
-  const keyPair = await crypto.subtle.generateKey(
-    { name: 'Ed25519' },
-    true,
-    ['sign', 'verify'],
-  );
-
-  const rawPubkey = await crypto.subtle.exportKey('raw', keyPair.publicKey);
-  const pubkeyHex = bufToHex(rawPubkey);
-
-  const identity: StoredIdentity = {
-    id: KEY_ID,
-    publicKey: keyPair.publicKey,
-    privateKey: keyPair.privateKey,
-    pubkeyHex,
-    createdAt: new Date().toISOString(),
-  };
-
+async function saveIdentityRecord(identity: StoredIdentity): Promise<void> {
+  const db = await openDB();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
@@ -71,19 +127,48 @@ export async function getOrCreateIdentity(): Promise<{ pubkeyHex: string; isNew:
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
+}
 
-  return { pubkeyHex, isNew: true };
+export async function deriveIdentityFromWallet(
+  walletApi: {
+    signArbitrary(
+      chainId: string,
+      address: string,
+      message: string,
+    ): Promise<{ signature: string }>;
+  },
+  chainId: string,
+  address: string,
+): Promise<StoredIdentity> {
+  const challenge = identityChallenge(address);
+  const signed = await walletApi.signArbitrary(chainId, address, challenge);
+  const seed = deriveSeedFromSignature(signed.signature);
+  const pubkey = await ed.getPublicKeyAsync(seed);
+
+  const identity: StoredIdentity = {
+    id: KEY_ID,
+    pubkeyHex: bytesToHex(pubkey),
+    seedHex: bytesToHex(seed),
+    createdAt: new Date().toISOString(),
+    walletAddress: address,
+  };
+
+  await saveIdentityRecord(identity);
+  return identity;
+}
+
+export async function getOrCreateIdentity(): Promise<{ pubkeyHex: string; isNew: boolean }> {
+  const existing = await loadIdentityRecord();
+  if (existing) {
+    return { pubkeyHex: existing.pubkeyHex, isNew: false };
+  }
+
+  // Identity creation now happens via deriveIdentityFromWallet at login.
+  throw new Error('WALLET_REQUIRED');
 }
 
 export async function getIdentity(): Promise<StoredIdentity | null> {
-  const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.get(KEY_ID);
-    req.onsuccess = () => resolve((req.result as StoredIdentity) ?? null);
-    req.onerror = () => reject(req.error);
-  });
+  return loadIdentityRecord();
 }
 
 export async function signTimestamp(): Promise<{
@@ -96,11 +181,9 @@ export async function signTimestamp(): Promise<{
   if (!identity) return null;
 
   const timestamp = new Date().toISOString();
-  const encoder = new TextEncoder();
-  const data = encoder.encode(timestamp);
-
-  const signature = await crypto.subtle.sign('Ed25519', identity.privateKey, data);
-  const signatureHex = bufToHex(signature);
+  const data = textEncoder.encode(timestamp);
+  const signature = await ed.signAsync(data, hexToBytes(identity.seedHex));
+  const signatureHex = bytesToHex(signature);
 
   const authHeader = `WeVibe-Signed pubkey=${identity.pubkeyHex},timestamp=${timestamp},signature=${signatureHex}`;
 
@@ -130,46 +213,49 @@ export async function exportIdentity(): Promise<{
   const identity = await getIdentity();
   if (!identity) return null;
 
-  const publicKeyJwk = await crypto.subtle.exportKey('jwk', identity.publicKey);
-  const privateKeyJwk = await crypto.subtle.exportKey('jwk', identity.privateKey);
+  const pubkeyBytes = hexToBytes(identity.pubkeyHex);
+
+  const publicKeyJwk: JsonWebKey = {
+    kty: 'OKP',
+    crv: 'Ed25519',
+    x: bytesToBase64Url(pubkeyBytes),
+  };
+
+  const privateKeyJwk: JsonWebKey = {
+    kty: 'OKP',
+    crv: 'Ed25519',
+    x: bytesToBase64Url(pubkeyBytes),
+    d: identity.seedHex,
+  };
 
   return { publicKeyJwk, privateKeyJwk, pubkeyHex: identity.pubkeyHex };
 }
 
 export async function importIdentity(publicKeyJwk: JsonWebKey, privateKeyJwk: JsonWebKey): Promise<string> {
-  const publicKey = await crypto.subtle.importKey(
-    'jwk',
-    publicKeyJwk,
-    { name: 'Ed25519' },
-    true,
-    ['verify'],
-  );
-  const privateKey = await crypto.subtle.importKey(
-    'jwk',
-    privateKeyJwk,
-    { name: 'Ed25519' },
-    true,
-    ['sign'],
-  );
+  const seedHexCandidate =
+    typeof privateKeyJwk.d === 'string'
+      ? privateKeyJwk.d
+      : typeof privateKeyJwk.k === 'string'
+        ? privateKeyJwk.k
+        : null;
 
-  const rawPubkey = await crypto.subtle.exportKey('raw', publicKey);
-  const pubkeyHex = bufToHex(rawPubkey);
+  if (!seedHexCandidate || !/^[0-9a-fA-F]{64}$/.test(seedHexCandidate)) {
+    throw new Error('Invalid identity import. Expected 32-byte seed hex.');
+  }
 
-  const db = await openDB();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    store.put({
-      id: KEY_ID,
-      publicKey,
-      privateKey,
-      pubkeyHex,
-      createdAt: new Date().toISOString(),
-    });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+  const seedHex = seedHexCandidate.toLowerCase();
+  const seed = hexToBytes(seedHex);
+  const pubkey = await ed.getPublicKeyAsync(seed);
+  const pubkeyHex = bytesToHex(pubkey);
 
+  const identity: StoredIdentity = {
+    id: KEY_ID,
+    pubkeyHex,
+    seedHex,
+    createdAt: new Date().toISOString(),
+  };
+
+  await saveIdentityRecord(identity);
   return pubkeyHex;
 }
 
@@ -185,23 +271,10 @@ export async function clearIdentity(): Promise<void> {
 }
 
 export async function setWalletAddress(address: string): Promise<void> {
-  const db = await openDB();
-  const existing = await new Promise<StoredIdentity | undefined>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.get(KEY_ID);
-    req.onsuccess = () => resolve(req.result as StoredIdentity | undefined);
-    req.onerror = () => reject(req.error);
-  });
+  const existing = await loadIdentityRecord();
   if (!existing) return;
   existing.walletAddress = address;
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.put(existing);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
+  await saveIdentityRecord(existing);
 }
 
 export async function getWalletAddress(): Promise<string | null> {
