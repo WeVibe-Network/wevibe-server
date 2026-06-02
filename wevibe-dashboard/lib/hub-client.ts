@@ -1,6 +1,7 @@
 import { buildAuthHeaders, getIdentity } from './wevibe-auth';
 import { linkWalletCanonical, signCanonical, registerDelegateKeyCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
 import type { OrgRole } from './org-role';
+import type { MemberOrgEntry } from './org-context';
 
 let _hubUrl: string | null = null;
 function getHubUrl(): string {
@@ -28,6 +29,11 @@ async function hubFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function listMembers(orgId: string) {
   return hubFetch<MemberRecord[]>(`/v1/orgs/${orgId}/members`);
+}
+
+export async function getMemberOrgs(pubkey: string): Promise<MemberOrgEntry[]> {
+  const res = await hubFetch<{ orgs: MemberOrgEntry[] }>(`/v1/members/${pubkey}/orgs`);
+  return res.orgs;
 }
 
 export interface MemberRecord {

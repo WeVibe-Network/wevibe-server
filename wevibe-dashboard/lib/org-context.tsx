@@ -2,6 +2,8 @@
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { OrgRole } from './org-role';
+import { getMemberOrgs } from './hub-client';
+import { getIdentity } from './wevibe-auth';
 
 export interface MemberOrgEntry {
   org_id: string;
@@ -35,10 +37,32 @@ export function OrgProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     async function loadOrgs() {
+      setLoading(true);
       try {
-        setLoading(false);
+        const identity = await getIdentity();
+        if (!identity) {
+          setOrgs([]);
+          setActiveOrgState(null);
+          setError(null);
+          return;
+        }
+
+        const memberOrgs = await getMemberOrgs(identity.pubkeyHex);
+        setOrgs(memberOrgs);
+
+        const savedOrgId = typeof window !== 'undefined'
+          ? localStorage.getItem(STORAGE_KEY)
+          : null;
+
+        const nextActiveOrg = savedOrgId
+          ? (memberOrgs.find((org) => org.org_id === savedOrgId) ?? memberOrgs[0] ?? null)
+          : (memberOrgs[0] ?? null);
+
+        setActiveOrgState(nextActiveOrg);
+        setError(null);
       } catch (err) {
         setError((err as Error).message);
+      } finally {
         setLoading(false);
       }
     }
