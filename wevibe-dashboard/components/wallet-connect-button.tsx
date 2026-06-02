@@ -72,7 +72,7 @@ export function WalletConnectButton({ orgID }: WalletConnectButtonProps) {
         {availableWallets.map(provider => (
           <Button
             key={provider}
-            variant="outline"
+            variant="secondary"
             onClick={() => handleConnect(provider)}
             disabled={loading}
             className="text-xs"

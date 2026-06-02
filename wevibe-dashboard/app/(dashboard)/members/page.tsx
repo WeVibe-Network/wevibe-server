@@ -347,13 +347,13 @@ export default function MembersPage() {
             </p>
             <div className="flex gap-2">
               <Button
-                variant="destructive"
+                variant="primary"
                 onClick={() => handleRemove(removeTarget)}
                 disabled={removeLoading}
               >
                 {removeLoading ? 'Removing...' : 'Remove'}
               </Button>
-              <Button variant="outline" onClick={() => setRemoveTarget(null)}>
+              <Button variant="secondary" onClick={() => setRemoveTarget(null)}>
                 Cancel
               </Button>
             </div>
@@ -375,7 +375,7 @@ export default function MembersPage() {
               >
                 {transferLoading ? 'Transferring...' : 'Transfer'}
               </Button>
-              <Button variant="outline" onClick={() => setTransferTarget(null)}>
+              <Button variant="secondary" onClick={() => setTransferTarget(null)}>
                 Cancel
               </Button>
             </div>
@@ -390,7 +390,7 @@ export default function MembersPage() {
             Closing the organization is permanent and cannot be undone.
           </p>
           <Button
-            variant="destructive"
+            variant="primary"
             data-testid="close-org-button"
             onClick={() => setCloseDialogOpen(true)}
           >
@@ -406,14 +406,14 @@ export default function MembersPage() {
                 </p>
                 <div className="flex gap-2">
                   <Button
-                    variant="destructive"
+                    variant="primary"
                     data-testid="close-org-confirm-button"
                     onClick={handleCloseOrg}
                     disabled={closeLoading}
                   >
                     {closeLoading ? 'Closing...' : 'Close Organization'}
                   </Button>
-                  <Button variant="outline" onClick={() => setCloseDialogOpen(false)}>
+                  <Button variant="secondary" onClick={() => setCloseDialogOpen(false)}>
                     Cancel
                   </Button>
                 </div>

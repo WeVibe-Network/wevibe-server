@@ -1,22 +1,30 @@
 import { ButtonHTMLAttributes, forwardRef } from 'react';
 
+type ButtonVariant =
+  | 'primary'
+  | 'success'
+  | 'secondary'
+  | 'ghost';
+
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'default' | 'destructive' | 'outline';
+  variant?: ButtonVariant;
 }
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className = '', variant = 'default', ...props }, ref) => {
+  ({ className = '', variant = 'primary', ...props }, ref) => {
     const base =
-      'inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus:outline-none disabled:opacity-50 disabled:pointer-events-none';
-    const variants = {
-      default: 'bg-gray-900 text-white hover:bg-gray-800',
-      destructive: 'bg-red-600 text-white hover:bg-red-700',
-      outline: 'border border-gray-300 bg-white hover:bg-gray-50 text-gray-900',
-    };
+      'inline-flex items-center justify-center rounded-[11px] px-[22px] py-3 font-sans text-[15px] font-semibold transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(124,92,255,0.35)] disabled:pointer-events-none disabled:opacity-50';
+    const brandVariants = {
+      primary:
+        'bg-wv-grad-btn text-white shadow-[0_6px_20px_rgba(124,92,255,0.35)] hover:-translate-y-px hover:shadow-glow-v',
+      success: 'bg-wv-green text-[#07140e] hover:brightness-105',
+      secondary: 'border border-wv-line-2 bg-transparent text-wv-text hover:bg-wv-line',
+      ghost: 'bg-transparent text-wv-dim hover:text-wv-text',
+    } as const;
     return (
       <button
         ref={ref}
-        className={`${base} ${variants[variant]} ${className}`}
+        className={`${base} ${brandVariants[variant]} ${className}`}
         {...props}
       />
     );

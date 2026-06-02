@@ -84,7 +84,7 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
             Tx: {txHash}
           </p>
         </div>
-        <Button variant="destructive" onClick={handleRevoke}>
+        <Button variant="primary" onClick={handleRevoke}>
           Revoke Signing Key
         </Button>
       </div>
@@ -96,11 +96,11 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
       <div className="flex flex-col gap-3 p-4 border border-red-200 rounded-lg bg-red-50">
         <p className="text-xs text-red-700">{error}</p>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setCurrentStep('idle')}>
+          <Button variant="secondary" onClick={() => setCurrentStep('idle')}>
             Retry
           </Button>
           {delegateAddress && (
-            <Button variant="destructive" onClick={handleRevoke}>
+            <Button variant="primary" onClick={handleRevoke}>
               Revoke
             </Button>
           )}
