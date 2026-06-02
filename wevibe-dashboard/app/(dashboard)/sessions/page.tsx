@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Badge from '@/components/ui/badge';
 import type {
   SessionSummary,
@@ -8,11 +9,12 @@ import type {
   MemoryCandidate,
   ExtractionStatus,
 } from '@/lib/session-types';
-import { getIdentity, getOrCreateIdentity } from '@/lib/wevibe-auth';
+import { getIdentity } from '@/lib/wevibe-auth';
 import { buildSubmitMemoryPayload, submitMemoryBatchToHub } from '@/lib/wevibe-submit';
 import { useOrgContext, type MemberOrgEntry } from '@/lib/org-context';
 
 export default function SessionsPage() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -366,13 +368,10 @@ export default function SessionsPage() {
             <>
               <span className="font-medium text-amber-600">No identity:</span>
               <button
-                onClick={async () => {
-                  const result = await getOrCreateIdentity();
-                  setIdentity({ pubkeyHex: result.pubkeyHex });
-                }}
+                onClick={() => router.push('/login')}
                 className="text-indigo-600 underline hover:text-indigo-800"
               >
-                Generate Identity
+                Set Up Identity
               </button>
             </>
           )}

@@ -1,7 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { listMembers, transferLeadership, closeOrg, getOrg, type MemberRecord } from '@/lib/hub-client'
-import { getOrCreateIdentity, getIdentity } from '@/lib/wevibe-auth'
+import { getIdentity } from '@/lib/wevibe-auth'
 import { relayBroadcast } from '@/lib/relay-client'
 import { connectWallet } from '@/lib/wallet-connect'
 import type { EncodeObject } from '@/lib/chain-client'
@@ -20,6 +21,7 @@ const ROLE_COLORS: Record<string, string> = {
 type ViewerRole = OrgRole
 
 export default function MembersPage() {
+  const router = useRouter()
   const [members, setMembers] = useState<MemberRecord[]>([])
   const [viewerPubkey, setViewerPubkey] = useState<string>('')
   const [viewerRole, setViewerRole] = useState<ViewerRole>('member')
@@ -60,11 +62,20 @@ export default function MembersPage() {
 
   useEffect(() => {
     if (!ORG_ID) { setLoading(false); return }
-    getOrCreateIdentity().then(async ({ pubkeyHex }) => {
-      setViewerPubkey(pubkeyHex)
+    ;(async () => {
+      const id = await getIdentity()
+      if (!id) {
+        setLoading(false)
+        router.push('/login')
+        return
+      }
+      setViewerPubkey(id.pubkeyHex)
       await refreshMembers()
+    })().catch((err) => {
+      setError((err as Error).message)
+      setLoading(false)
     })
-  }, [])
+  }, [router])
 
   useEffect(() => {
     if (members.length > 0 && viewerPubkey) {

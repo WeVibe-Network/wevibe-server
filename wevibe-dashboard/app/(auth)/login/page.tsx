@@ -1,26 +1,78 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { getOrCreateIdentity, exportIdentity, importIdentity } from '@/lib/wevibe-auth';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  detectWallets,
+  connectWallet,
+  getChainConfig,
+  type WalletProvider,
+} from '@/lib/wallet-connect';
+import {
+  deriveIdentityFromWallet,
+  getIdentity,
+  setWalletAddress,
+  exportIdentity,
+  importIdentity,
+} from '@/lib/wevibe-auth';
 
 export default function LoginPage() {
+  const router = useRouter();
   const [pubkeyHex, setPubkeyHex] = useState<string | null>(null);
-  const [isNew, setIsNew] = useState(false);
+  const [availableWallets, setAvailableWallets] = useState<WalletProvider[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [checkingIdentity, setCheckingIdentity] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [importMode, setImportMode] = useState(false);
   const [importJson, setImportJson] = useState('');
 
   useEffect(() => {
+    let mounted = true;
     (async () => {
       try {
-        const result = await getOrCreateIdentity();
-        setPubkeyHex(result.pubkeyHex);
-        setIsNew(result.isNew);
+        const identity = await getIdentity();
+        if (!mounted) return;
+
+        if (identity) {
+          setPubkeyHex(identity.pubkeyHex);
+        } else {
+          setAvailableWallets(detectWallets());
+        }
       } catch (e) {
+        if (!mounted) return;
         setError(`Failed to initialize identity: ${(e as Error).message}`);
+      } finally {
+        if (mounted) {
+          setCheckingIdentity(false);
+        }
       }
     })();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
+
+  const handleConnect = async (provider: WalletProvider) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const conn = await connectWallet(provider);
+      const walletApi = provider === 'keplr' ? window.keplr : window.leap;
+      if (!walletApi) {
+        throw new Error(`${provider} wallet not available after connection`);
+      }
+
+      const chainId = getChainConfig().chainId;
+      const identity = await deriveIdentityFromWallet(walletApi, chainId, conn.address);
+      await setWalletAddress(conn.address);
+      setPubkeyHex(identity.pubkeyHex);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleExport = async () => {
     const exported = await exportIdentity();
@@ -46,24 +98,16 @@ export default function LoginPage() {
     }
   };
 
-  if (error) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="rounded-lg border border-red-300 bg-red-50 p-8 max-w-lg">
-          <h1 className="text-lg font-semibold text-red-800">Error</h1>
-          <p className="mt-2 text-red-700">{error}</p>
-          <p className="mt-4 text-sm text-red-600">
-            Ed25519 WebCrypto requires Chrome 137+, Firefox 130+, or Safari 17+.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex min-h-screen items-center justify-center">
       <div className="rounded-lg border p-8 max-w-lg w-full">
         <h1 className="text-xl font-semibold">WeVibe Dashboard Identity</h1>
+
+        {error && (
+          <div className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
 
         {pubkeyHex ? (
           <div className="mt-4 space-y-4">
@@ -73,16 +117,6 @@ export default function LoginPage() {
                 {pubkeyHex}
               </code>
             </div>
-
-            {isNew && (
-              <div className="rounded border-l-4 border-yellow-400 bg-yellow-50 p-4">
-                <p className="text-sm text-yellow-800">
-                  <strong>New key generated.</strong> Ask your org leader to register this public key
-                  using the <code className="text-xs">wevibe_register_dashboard_key</code> MCP tool, or provide
-                  it to them directly.
-                </p>
-              </div>
-            )}
 
             <div className="flex gap-2">
               <button
@@ -117,15 +151,40 @@ export default function LoginPage() {
               </div>
             )}
 
-            <a
-              href="/"
-              className="block mt-4 rounded bg-black px-4 py-2 text-center text-sm text-white hover:bg-gray-800"
+            <button
+              onClick={() => router.push('/')}
+              className="mt-4 block rounded bg-black px-4 py-2 text-center text-sm text-white hover:bg-gray-800"
             >
               Continue to Dashboard
-            </a>
+            </button>
           </div>
         ) : (
-          <p className="mt-4 text-gray-500">Generating identity...</p>
+          <div className="mt-4 space-y-4">
+            <p className="text-gray-600">Connect your wallet to derive your dashboard identity.</p>
+
+            {checkingIdentity ? (
+              <p className="text-gray-500">Checking existing identity...</p>
+            ) : availableWallets.length === 0 ? (
+              <p className="text-gray-500">Install Keplr or Leap wallet to continue</p>
+            ) : (
+              <div className="flex gap-2">
+                {availableWallets.map((provider) => (
+                  <button
+                    key={provider}
+                    onClick={() => handleConnect(provider)}
+                    disabled={loading}
+                    className="rounded bg-black px-4 py-2 text-sm text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {loading
+                      ? 'Connecting...'
+                      : provider === 'keplr'
+                        ? 'Connect Keplr'
+                        : 'Connect Leap'}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

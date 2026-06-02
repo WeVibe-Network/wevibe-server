@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getOrCreateIdentity } from '@/lib/wevibe-auth';
+import { useRouter } from 'next/navigation';
+import { getIdentity } from '@/lib/wevibe-auth';
 import {
   Report,
   ReportAction,
@@ -72,6 +73,7 @@ function statusTone(status: string): string {
 }
 
 export default function ReportsPage() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(false);
@@ -98,10 +100,15 @@ export default function ReportsPage() {
 
   useEffect(() => {
     if (!ORG_ID) return;
-    getOrCreateIdentity()
-      .then(() => setIdentityReady(true))
-      .catch((err) => setError((err as Error).message));
-  }, []);
+    (async () => {
+      const id = await getIdentity();
+      if (!id) {
+        router.push('/login');
+        return;
+      }
+      setIdentityReady(true);
+    })().catch((err) => setError((err as Error).message));
+  }, [router]);
 
   useEffect(() => {
     if (!identityReady) return;

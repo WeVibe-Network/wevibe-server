@@ -157,16 +157,6 @@ export async function deriveIdentityFromWallet(
   return identity;
 }
 
-export async function getOrCreateIdentity(): Promise<{ pubkeyHex: string; isNew: boolean }> {
-  const existing = await loadIdentityRecord();
-  if (existing) {
-    return { pubkeyHex: existing.pubkeyHex, isNew: false };
-  }
-
-  // Identity creation now happens via deriveIdentityFromWallet at login.
-  throw new Error('WALLET_REQUIRED');
-}
-
 export async function getIdentity(): Promise<StoredIdentity | null> {
   return loadIdentityRecord();
 }
