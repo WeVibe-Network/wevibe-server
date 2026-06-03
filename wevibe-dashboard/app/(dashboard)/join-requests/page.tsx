@@ -2,6 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { listJoinRequests, approveJoinRequest, denyJoinRequest, JoinRequest } from '@/lib/hub-client';
+import { relayBroadcast } from '@/lib/relay-client';
+import { connectWallet } from '@/lib/wallet-connect';
+import type { EncodeObject } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
 
 function truncatePubkey(pubkey: string): string {
@@ -47,9 +50,29 @@ export default function JoinRequestsPage() {
   const handleApprove = async (requestId: string) => {
     if (!orgId) return;
     setProcessing(requestId);
+    let hubApproved = false;
     try {
+      const request = requests.find(r => r.request_id === requestId);
+      if (!request) {
+        throw new Error('Join request not found in current list');
+      }
+
+      const walletConn = await connectWallet();
       const mode = approvalMode[requestId] ?? 'full';
       await approveJoinRequest(orgId, requestId, mode === 'trial');
+      hubApproved = true;
+
+      const msgAddMember = {
+        typeUrl: '/wevibe.org.v1.MsgAddMember',
+        value: Buffer.from(JSON.stringify({
+          signer: walletConn.address,
+          org_id: orgId,
+          pubkey: request.requester_pubkey,
+          role: 'member',
+        })),
+      } as unknown as EncodeObject;
+      await relayBroadcast(orgId, walletConn.address, [msgAddMember]);
+
       setRequests(prev => prev.filter(r => r.request_id !== requestId));
       setApprovalMode(prev => {
         const next = { ...prev };
@@ -58,7 +81,11 @@ export default function JoinRequestsPage() {
       });
     } catch (err) {
       console.error('Failed to approve:', err);
-      alert('Failed to approve request');
+      if (hubApproved) {
+        alert('Request was approved, but on-chain membership sync failed. Please retry the on-chain add member step.');
+      } else {
+        alert('Failed to approve request');
+      }
     } finally {
       setProcessing(null);
     }
