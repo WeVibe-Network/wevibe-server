@@ -8,6 +8,10 @@
 --   2. Wipe the database (pre-MVP, no user data to preserve)
 --   3. Restart the hub
 -- The hub reads this file directly at startup via RunSchema.sql.
+-- Startup is IDEMPOTENT: every statement is guarded (IF NOT EXISTS / ON CONFLICT)
+-- so re-applying this schema to an already-provisioned database is a safe no-op —
+-- the hub survives restarts against a persisted volume. IF NOT EXISTS intentionally
+-- does NOT alter existing tables to match edits; schema CHANGES still require a wipe.
 -- Any LLM working in this codebase: edit schema.sql ONLY.
 -- The db/migrations/ directory does not exist and must not
 -- be created. R-ONE-PATH, R-OVERHAUL.
@@ -20,7 +24,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- ── Organizations ──────────────────────────────────────────────────────────
 
-CREATE TABLE orgs (
+CREATE TABLE IF NOT EXISTS orgs (
     org_id                      TEXT        PRIMARY KEY,
     leader_pubkey               TEXT        NOT NULL,
     leader_wallet_address       TEXT        NOT NULL,
@@ -49,12 +53,12 @@ CREATE TABLE orgs (
     updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_orgs_leader ON orgs(leader_pubkey);
-CREATE INDEX idx_orgs_status  ON orgs(status);
+CREATE INDEX IF NOT EXISTS idx_orgs_leader ON orgs(leader_pubkey);
+CREATE INDEX IF NOT EXISTS idx_orgs_status  ON orgs(status);
 
 -- ── Members ────────────────────────────────────────────────────────────────
 
-CREATE TABLE members (
+CREATE TABLE IF NOT EXISTS members (
     org_id                      TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     pubkey                      TEXT        NOT NULL,
     x25519_pubkey               TEXT        NOT NULL,
@@ -81,14 +85,14 @@ CREATE TABLE members (
     UNIQUE (org_id, wallet_address)
 );
 
-CREATE INDEX idx_members_active ON members(org_id, active);
-CREATE INDEX idx_members_membership_active ON members(org_id, membership_active);
-CREATE INDEX idx_members_pubkey ON members(pubkey);
-CREATE INDEX idx_members_wallet ON members(wallet_address) WHERE wallet_address IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_members_active ON members(org_id, active);
+CREATE INDEX IF NOT EXISTS idx_members_membership_active ON members(org_id, membership_active);
+CREATE INDEX IF NOT EXISTS idx_members_pubkey ON members(pubkey);
+CREATE INDEX IF NOT EXISTS idx_members_wallet ON members(wallet_address) WHERE wallet_address IS NOT NULL;
 
 -- ── Epoch manifests ────────────────────────────────────────────────────────
 
-CREATE TABLE epoch_manifests (
+CREATE TABLE IF NOT EXISTS epoch_manifests (
     org_id                  TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     epoch_id                INTEGER     NOT NULL,
     pk_mod                  TEXT        NOT NULL,
@@ -106,7 +110,7 @@ CREATE TABLE epoch_manifests (
 -- Valid status values: 'pending', 'pending_keyword', 'pending_chain', 'committed', 'denied'
 -- Handler status writes MUST use protocol.SubmissionStatus* constants (protocol/types.go)
 
-CREATE TABLE pending_submissions (
+CREATE TABLE IF NOT EXISTS pending_submissions (
     submission_hash         TEXT        PRIMARY KEY,
     org_id                  TEXT        NOT NULL REFERENCES orgs(org_id),
     epoch_id                INTEGER     NOT NULL,
@@ -138,12 +142,12 @@ CREATE TABLE pending_submissions (
     resolved_at             TIMESTAMPTZ
 );
 
-CREATE INDEX idx_pending_org_status ON pending_submissions(org_id, status);
-CREATE INDEX idx_pending_contributor ON pending_submissions(contributor_pubkey);
+CREATE INDEX IF NOT EXISTS idx_pending_org_status ON pending_submissions(org_id, status);
+CREATE INDEX IF NOT EXISTS idx_pending_contributor ON pending_submissions(contributor_pubkey);
 
 -- ── Approval votes ─────────────────────────────────────────────────────────
 
-CREATE TABLE approval_votes (
+CREATE TABLE IF NOT EXISTS approval_votes (
     org_id           TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     submission_hash  TEXT        NOT NULL REFERENCES pending_submissions(submission_hash) ON DELETE CASCADE,
     moderator_pubkey TEXT        NOT NULL,
@@ -151,11 +155,11 @@ CREATE TABLE approval_votes (
     PRIMARY KEY (org_id, submission_hash, moderator_pubkey)
 );
 
-CREATE INDEX idx_votes_org_submission ON approval_votes(org_id, submission_hash);
+CREATE INDEX IF NOT EXISTS idx_votes_org_submission ON approval_votes(org_id, submission_hash);
 
 -- ── Reports ─────────────────────────────────────────────────────────────────
 
-CREATE TABLE reports (
+CREATE TABLE IF NOT EXISTS reports (
     id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id               TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     memory_cid           TEXT        NOT NULL,
@@ -175,14 +179,14 @@ CREATE TABLE reports (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_reports_org_status ON reports(org_id, status);
-CREATE INDEX idx_reports_memory ON reports(org_id, memory_cid);
-CREATE INDEX idx_reports_created ON reports(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_org_status ON reports(org_id, status);
+CREATE INDEX IF NOT EXISTS idx_reports_memory ON reports(org_id, memory_cid);
+CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at DESC);
 
 -- ── Report votes ───────────────────────────────────────────────────────────
 -- Tracks individual votes on reports by moderators/leaders.
 
-CREATE TABLE report_votes (
+CREATE TABLE IF NOT EXISTS report_votes (
     org_id       TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     report_id    UUID        NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
     voter_pubkey TEXT        NOT NULL,
@@ -191,14 +195,14 @@ CREATE TABLE report_votes (
     PRIMARY KEY (org_id, report_id, voter_pubkey)
 );
 
-CREATE INDEX idx_report_votes_report ON report_votes(org_id, report_id);
+CREATE INDEX IF NOT EXISTS idx_report_votes_report ON report_votes(org_id, report_id);
 
 -- ── Rotation buffer ────────────────────────────────────────────────────────
 -- Submissions received while org is in rotation_pending state.
 -- These are NOT assigned a final epoch and NOT admitted to moderation queue.
 -- After rotation completes, they are moved to pending_submissions under the new epoch.
 
-CREATE TABLE rotation_buffer (
+CREATE TABLE IF NOT EXISTS rotation_buffer (
     buffer_id           TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
     org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     epoch_id            INTEGER     NOT NULL,
@@ -217,11 +221,11 @@ CREATE TABLE rotation_buffer (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_rotation_buffer_org ON rotation_buffer(org_id);
+CREATE INDEX IF NOT EXISTS idx_rotation_buffer_org ON rotation_buffer(org_id);
 
 -- ── Usage receipts ─────────────────────────────────────────────────────────
 
-CREATE TABLE usage_receipts (
+CREATE TABLE IF NOT EXISTS usage_receipts (
     receipt_id          TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
     org_id              TEXT        NOT NULL REFERENCES orgs(org_id),
     billing_epoch       INTEGER     NOT NULL,
@@ -234,11 +238,11 @@ CREATE TABLE usage_receipts (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_receipts_org_epoch ON usage_receipts(org_id, billing_epoch);
+CREATE INDEX IF NOT EXISTS idx_receipts_org_epoch ON usage_receipts(org_id, billing_epoch);
 
 -- ── Audit log ──────────────────────────────────────────────────────────────
 
-CREATE TABLE audit_log (
+CREATE TABLE IF NOT EXISTS audit_log (
     id              BIGSERIAL   PRIMARY KEY,
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id),
     epoch_id        INTEGER     NOT NULL,
@@ -248,18 +252,18 @@ CREATE TABLE audit_log (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_audit_org_epoch ON audit_log(org_id, epoch_id);
+CREATE INDEX IF NOT EXISTS idx_audit_org_epoch ON audit_log(org_id, epoch_id);
 
 -- ── Credit ledger ───────────────────────────────────────────────────────────
 
-CREATE TABLE org_credits (
+CREATE TABLE IF NOT EXISTS org_credits (
     org_id          TEXT        PRIMARY KEY REFERENCES orgs(org_id) ON DELETE CASCADE,
     balance         BIGINT      NOT NULL DEFAULT 0 CHECK (balance >= 0),
     lifetime_used   BIGINT      NOT NULL DEFAULT 0,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE credit_transactions (
+CREATE TABLE IF NOT EXISTS credit_transactions (
     txn_id          BIGSERIAL   PRIMARY KEY,
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id),
     delta           BIGINT      NOT NULL,
@@ -269,11 +273,11 @@ CREATE TABLE credit_transactions (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_credit_txn_org ON credit_transactions(org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_txn_org ON credit_transactions(org_id, created_at DESC);
 
 -- ── Key envelopes ──────────────────────────────────────────────────────────
 
-CREATE TABLE key_envelopes (
+CREATE TABLE IF NOT EXISTS key_envelopes (
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     pubkey          TEXT        NOT NULL,
     epoch_id        INTEGER     NOT NULL,
@@ -284,14 +288,14 @@ CREATE TABLE key_envelopes (
     PRIMARY KEY (org_id, pubkey)
 );
 
-CREATE INDEX idx_envelopes_org ON key_envelopes(org_id);
+CREATE INDEX IF NOT EXISTS idx_envelopes_org ON key_envelopes(org_id);
 
 -- ── Recovery shares ─────────────────────────────────────────────────────────
 -- Sealed Shamir shares for threshold recovery of K_master.
 -- Hub stores opaque sealed blobs — cannot read share content.
 -- Each share is sealed to a designated holder's X25519 pubkey.
 
-CREATE TABLE recovery_shares (
+CREATE TABLE IF NOT EXISTS recovery_shares (
     org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     share_index         INTEGER     NOT NULL CHECK (share_index BETWEEN 1 AND 3),
     holder_pubkey       TEXT        NOT NULL,
@@ -300,14 +304,14 @@ CREATE TABLE recovery_shares (
     PRIMARY KEY (org_id, share_index)
 );
 
-CREATE INDEX idx_recovery_shares_holder ON recovery_shares(holder_pubkey);
+CREATE INDEX IF NOT EXISTS idx_recovery_shares_holder ON recovery_shares(holder_pubkey);
 
 -- ── Dashboard keys ─────────────────────────────────────────────────────────
 -- Authorized dashboard identities per org.
 -- A leader registers a dashboard's Ed25519 pubkey to grant it API access.
 -- The dashboard signs every request with this key using the same WeVibe-Signed scheme.
 
-CREATE TABLE dashboard_keys (
+CREATE TABLE IF NOT EXISTS dashboard_keys (
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     pubkey          TEXT        NOT NULL,
     label           TEXT        NOT NULL DEFAULT 'dashboard',
@@ -317,13 +321,13 @@ CREATE TABLE dashboard_keys (
     PRIMARY KEY (org_id, pubkey)
 );
 
-CREATE INDEX idx_dashboard_keys_pubkey ON dashboard_keys(pubkey);
+CREATE INDEX IF NOT EXISTS idx_dashboard_keys_pubkey ON dashboard_keys(pubkey);
 
 -- ── Serve events ───────────────────────────────────────────────────────────
 -- Individual memory serve events reported by the plugin.
 -- Accumulated here until batch-submitted to the chain via MsgSubmitServeBatch.
 
-CREATE TABLE serve_events (
+CREATE TABLE IF NOT EXISTS serve_events (
     id                  BIGSERIAL   PRIMARY KEY,
     org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     epoch_id            INTEGER     NOT NULL,
@@ -353,9 +357,9 @@ CREATE TABLE serve_events (
     UNIQUE (org_id, nullifier, event_type)
 );
 
-CREATE INDEX idx_serve_events_org_status ON serve_events(org_id, status);
-CREATE INDEX idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
-CREATE INDEX idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
+CREATE INDEX IF NOT EXISTS idx_serve_events_org_status ON serve_events(org_id, status);
+CREATE INDEX IF NOT EXISTS idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
+CREATE INDEX IF NOT EXISTS idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
 
 -- Monotonic index used to derive per-org chain accounts.
 -- Index 0 is permanently reserved for the legacy submitter key.
@@ -366,7 +370,7 @@ CREATE SEQUENCE IF NOT EXISTS org_account_index_seq START WITH 1;
 --   leader  → signs commit/approve/report/register (registered as LeaderWallet)
 -- Each key gets its own monotonic account_index for HD derivation
 -- (m/44'/118'/0'/0/{account_index}) and is independently faucet-funded.
-CREATE TABLE org_chain_accounts (
+CREATE TABLE IF NOT EXISTS org_chain_accounts (
     org_id        TEXT        NOT NULL REFERENCES orgs(org_id),
     key_role      TEXT        NOT NULL CHECK (key_role IN ('serving','leader')),
     account_index BIGINT      NOT NULL UNIQUE DEFAULT nextval('org_account_index_seq'),
@@ -380,21 +384,21 @@ CREATE TABLE org_chain_accounts (
 -- Restart-safe cursor for the hub ChainWatcher (watcher.go). The watcher reads
 -- last_seen_block_height on Start() and catches up from there; it UPDATEs this row
 -- at the end of every processBlock. One row, keyed by watcher_name.
-CREATE TABLE watcher_state (
+CREATE TABLE IF NOT EXISTS watcher_state (
     watcher_name           TEXT        PRIMARY KEY,
     last_seen_block_height BIGINT      NOT NULL DEFAULT 0,
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 INSERT INTO watcher_state (watcher_name, last_seen_block_height)
-VALUES ('chain_watcher', 0);
+VALUES ('chain_watcher', 0) ON CONFLICT DO NOTHING;
 
 -- ── Delegate keys ────────────────────────────────────────────────────────────
 -- Maps a delegate public key to a wallet address (global, not per-org).
 -- Enables a delegate (e.g., an AI agent) to act on behalf of the wallet owner.
 -- Per Decision H (CO-011a.4): PK is wallet_address, delegate_address is UNIQUE.
 
-CREATE TABLE delegate_keys (
+CREATE TABLE IF NOT EXISTS delegate_keys (
     wallet_address      TEXT PRIMARY KEY,
     delegate_address    TEXT UNIQUE NOT NULL,
     delegate_pubkey     TEXT NOT NULL,
@@ -404,12 +408,12 @@ CREATE TABLE delegate_keys (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_delegate_keys_delegate_address ON delegate_keys(delegate_address);
+CREATE INDEX IF NOT EXISTS idx_delegate_keys_delegate_address ON delegate_keys(delegate_address);
 
 -- ── Org keywords ────────────────────────────────────────────────────────────
 -- Approved vocabulary per org for memory categorization.
 
-CREATE TABLE org_keywords (
+CREATE TABLE IF NOT EXISTS org_keywords (
     id          SERIAL PRIMARY KEY,
     org_id      TEXT   NOT NULL REFERENCES orgs(org_id),
     keyword     TEXT   NOT NULL,
@@ -418,12 +422,12 @@ CREATE TABLE org_keywords (
     UNIQUE(org_id, keyword)
 );
 
-CREATE INDEX idx_org_keywords_org ON org_keywords(org_id) WHERE NOT deprecated;
+CREATE INDEX IF NOT EXISTS idx_org_keywords_org ON org_keywords(org_id) WHERE NOT deprecated;
 
 -- ── Memory keywords ─────────────────────────────────────────────────────────
 -- Keywords assigned to specific memories (joined from org_keywords).
 
-CREATE TABLE memory_keywords (
+CREATE TABLE IF NOT EXISTS memory_keywords (
     memory_cid  TEXT    NOT NULL,
     org_id      TEXT    NOT NULL,
     keyword     TEXT    NOT NULL,
@@ -432,12 +436,12 @@ CREATE TABLE memory_keywords (
     FOREIGN KEY (org_id, keyword) REFERENCES org_keywords(org_id, keyword)
 );
 
-CREATE INDEX idx_memory_keywords_keyword ON memory_keywords(org_id, keyword);
+CREATE INDEX IF NOT EXISTS idx_memory_keywords_keyword ON memory_keywords(org_id, keyword);
 
 -- ── notifications ───────────────────────────────────────────────────────────
 -- Activity feed for moderator and member notifications.
 
-CREATE TABLE notifications (
+CREATE TABLE IF NOT EXISTS notifications (
     id              BIGSERIAL   PRIMARY KEY,
     recipient_pubkey TEXT       NOT NULL,
     category        TEXT        NOT NULL,
@@ -449,12 +453,12 @@ CREATE TABLE notifications (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_notifications_recipient_unread ON notifications(recipient_pubkey, read, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_unread ON notifications(recipient_pubkey, read, created_at DESC);
 
 -- ── notification_preferences ────────────────────────────────────────────────
 -- Per-user delivery channel preferences for activity notifications.
 
-CREATE TABLE notification_preferences (
+CREATE TABLE IF NOT EXISTS notification_preferences (
     recipient_pubkey    TEXT        PRIMARY KEY,
     email_address       TEXT        NOT NULL DEFAULT '',
     email_enabled       BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -466,12 +470,12 @@ CREATE TABLE notification_preferences (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_notification_preferences_updated_at ON notification_preferences(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_preferences_updated_at ON notification_preferences(updated_at DESC);
 
 -- ── join_requests ────────────────────────────────────────────────────────────
 -- Zero-friction org join with denial cooldown.
 
-CREATE TABLE join_requests (
+CREATE TABLE IF NOT EXISTS join_requests (
     request_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     requester_pubkey TEXT       NOT NULL,
@@ -484,5 +488,5 @@ CREATE TABLE join_requests (
     cooldown_until  TIMESTAMPTZ
 );
 
-CREATE INDEX idx_join_requests_org_pending ON join_requests(org_id) WHERE status = 'pending';
-CREATE INDEX idx_join_requests_requester_org ON join_requests(requester_pubkey, org_id);
+CREATE INDEX IF NOT EXISTS idx_join_requests_org_pending ON join_requests(org_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_join_requests_requester_org ON join_requests(requester_pubkey, org_id);

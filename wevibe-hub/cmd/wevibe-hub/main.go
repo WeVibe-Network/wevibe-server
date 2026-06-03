@@ -55,8 +55,8 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := db.RunMigrations(cfg.DatabaseURL); err != nil {
-		log.Fatalf("FATAL: database migration failed: %v", err)
+	if err := db.ApplySchema(cfg.DatabaseURL); err != nil {
+		log.Fatalf("FATAL: schema apply failed: %v", err)
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)

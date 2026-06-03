@@ -3,16 +3,18 @@ module github.com/wevibe-network/wevibe-server/wevibe-hub
 go 1.25.9
 
 require (
+	cosmossdk.io/math v1.5.3
 	github.com/btcsuite/btcd/btcec/v2 v2.3.5
 	github.com/btcsuite/btcd/btcutil v1.1.6
 	github.com/cometbft/cometbft v0.38.20
 	github.com/cosmos/cosmos-sdk v0.53.5
+	github.com/cosmos/gogoproto v1.7.2
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/go-chi/cors v1.2.2
-	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.7.5
+	github.com/lib/pq v1.11.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wevibe-network/wevibe-chain v0.0.0
 	google.golang.org/grpc v1.81.1
@@ -26,7 +28,6 @@ require (
 	cosmossdk.io/depinject v1.2.1 // indirect
 	cosmossdk.io/errors v1.0.2 // indirect
 	cosmossdk.io/log v1.6.1 // indirect
-	cosmossdk.io/math v1.5.3 // indirect
 	cosmossdk.io/schema v1.1.0 // indirect
 	cosmossdk.io/store v1.1.2 // indirect
 	cosmossdk.io/x/feegrant v0.2.0 // indirect
@@ -56,7 +57,6 @@ require (
 	github.com/cosmos/cosmos-proto v1.0.0-beta.5 // indirect
 	github.com/cosmos/go-bip39 v1.0.0 // indirect
 	github.com/cosmos/gogogateway v1.2.0 // indirect
-	github.com/cosmos/gogoproto v1.7.2 // indirect
 	github.com/cosmos/iavl v1.2.8 // indirect
 	github.com/cosmos/ics23/go v0.11.0 // indirect
 	github.com/cosmos/ledger-cosmos-go v1.0.0 // indirect
@@ -111,7 +111,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/lib/pq v1.11.2 // indirect
 	github.com/linxGnu/grocksdb v1.10.7 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect

@@ -16,7 +16,10 @@ import (
 // The db/migrations/ directory does not exist and must not be created.
 // R-ONE-PATH, R-OVERHAUL.
 
-func RunMigrations(databaseURL string) error {
+// ApplySchema applies db/schema.sql. The schema is idempotent (every statement
+// guarded with IF NOT EXISTS / ON CONFLICT), so this is safe to run on every
+// startup, including against an already-provisioned database.
+func ApplySchema(databaseURL string) error {
 	if databaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is not set")
 	}
@@ -41,8 +44,20 @@ func RunMigrations(databaseURL string) error {
 		return fmt.Errorf("ping database: %w", err)
 	}
 
-	if _, err := db.Exec(string(sqlBytes)); err != nil {
-		return fmt.Errorf("apply schema.sql: %w", err)
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schema apply transaction: %w", err)
+	}
+
+	if _, err := tx.Exec(string(sqlBytes)); err != nil {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return fmt.Errorf("apply schema: %w (rollback failed: %v)", err, rollbackErr)
+		}
+		return fmt.Errorf("apply schema: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema apply transaction: %w", err)
 	}
 
 	log.Printf("database schema applied from %s", schemaPath)

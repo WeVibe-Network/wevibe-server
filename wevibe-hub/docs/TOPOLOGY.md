@@ -758,7 +758,7 @@ const (
 Hub persists the per-serve matched-keyword set — the intersection of the served memory's keywords and the query's keyword set — on every `serve_events` row. Sim source: `wevibe-sim/ranking-fix.js:184`. Chain side: `wevibe-chain/x/serve/types/msgs.go:32-34` rejects empty sets per D-4.2 Implementation Clarifications (DMO-007) since CO-031 Rev 2.
 
 **Schema (`serve_events`):**
-- `matched_keywords TEXT[] NOT NULL` (migration `000005_add_serve_events_matched_keywords.up.sql`). No default — every INSERT must supply the value explicitly. Pre-MVP wipe required per D-13.9 when applying against a non-empty table; dogfood resets state via `docker compose down -v` in `wevibe-meta/Makefile`.
+- `matched_keywords TEXT[] NOT NULL` (defined directly in `db/schema.sql`; this repo has no migration files). No default — every INSERT must supply the value explicitly. Pre-MVP wipe required per D-13.9 when applying against a non-empty table; dogfood resets state via `docker compose down -v` in `wevibe-meta/Makefile`.
 
 **Write path (`internal/serves/serves.go`):**
 - `RecordServe` (POST `/v1/orgs/{orgID}/serves`): client supplies `matched_keywords []string` (required). `normalizeMatchedKeywords` lowercases, trims, and dedupes; rejects empty / nil / whitespace-only input. The canonical slice is written into `serve_events.matched_keywords`. The handler at `internal/api/handlers/serves.go:81-86` catches the "matched_keywords" substring in validation errors and returns HTTP 400.
