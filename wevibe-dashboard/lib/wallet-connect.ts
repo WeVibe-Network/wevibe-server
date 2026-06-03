@@ -75,7 +75,7 @@ export function getChainConfig(): WeVibeChainConfig {
   return {
     chainId: process.env.NEXT_PUBLIC_WEVIBE_CHAIN_ID || 'wevibe-local-1',
     chainName: 'WeVibe Network',
-    rpc: process.env.NEXT_PUBLIC_WEVIBE_CHAIN_RPC || 'tcp://localhost:26657',
+    rpc: process.env.NEXT_PUBLIC_WEVIBE_CHAIN_RPC || 'http://localhost:26657',
     rest: process.env.NEXT_PUBLIC_WEVIBE_CHAIN_REST || 'http://localhost:1317',
     bech32Prefix: process.env.NEXT_PUBLIC_WEVIBE_BECH32_PREFIX || 'wevibe',
     coinDenom: process.env.NEXT_PUBLIC_WEVIBE_COIN_DENOM || 'VIBE',
