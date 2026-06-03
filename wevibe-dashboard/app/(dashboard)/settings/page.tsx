@@ -348,12 +348,23 @@ export default function SettingsPage() {
               type="url"
               value={url}
               onChange={event => setUrl(event.target.value)}
-              placeholder="http://localhost:4450"
+              placeholder="http://localhost:4451"
               className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
             />
             <p className="mt-2 text-xs text-wv-dim">
               This should point to the running `wevibe-mcp --dashboard` instance. Use a reachable URL from your browser.
             </p>
+            <div className="mt-3 rounded-lg border border-wv-line bg-wv-panel-2 px-3 py-3">
+              <p className="text-xs text-wv-dim">
+                Moderation runs from a server on YOUR machine (it holds your moderation key). Start it before connecting.
+              </p>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-wv-dim">
+                <li>
+                  Run <code className="rounded bg-wv-panel px-1.5 py-0.5 font-mono text-wv-text">{'cd wevibe-mcp && npm run dashboard'}</code> (it listens on http://localhost:4451 by default).
+                </li>
+                <li>Then enter http://localhost:4451 above and click Connect.</li>
+              </ul>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">

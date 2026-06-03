@@ -14,7 +14,7 @@ export const WEVIBE_CONFIG_GLOBAL = '__WEVIBE_CONFIG__';
 
 const DEFAULT_CONFIG: WevibeConfig = {
   hubUrl: 'http://localhost:4440',
-  mcpUrl: 'http://localhost:4450',
+  mcpUrl: 'http://localhost:4451',
   chainId: 'wevibe-local-1',
   chainRpc: 'http://localhost:26657',
   chainRest: 'http://localhost:1317',
