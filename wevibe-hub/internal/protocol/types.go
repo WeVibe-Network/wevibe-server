@@ -64,6 +64,9 @@ type CreateOrgRequest struct {
 	LeaderX25519Pubkey string   `json:"leader_x25519_pubkey"`
 	OrgName            string   `json:"org_name"`
 	Domain             string   `json:"domain"`
+	OrgID              string   `json:"org_id"`
+	TxHash             string   `json:"tx_hash"`
+	HubServingKey      string   `json:"hub_serving_key"`
 	FeeModel           FeeModel `json:"fee_model"`
 	PkMod              string   `json:"pk_mod"`
 	UmbralPK           []byte   `json:"-"`
@@ -465,24 +468,4 @@ type VoteOnReportResponse struct {
 type ReportListResponse struct {
 	Reports []ReportRecord `json:"reports"`
 	Total   int            `json:"total"`
-}
-
-type RegisterDelegateKeyRequest struct {
-	WalletAddress   string `json:"wallet_address"`
-	DelegateAddress string `json:"delegate_address"`
-	DelegatePubkey  string `json:"delegate_pubkey"`
-	GrantTxHash     string `json:"grant_tx_hash"`
-	GrantExpiration string `json:"grant_expiration,omitempty"`
-	SignedBy        string `json:"signed_by"`
-	Signature       string `json:"signature"`
-}
-
-type DelegateKeyRecord struct {
-	WalletAddress   string  `json:"wallet_address"`
-	DelegateAddress string  `json:"delegate_address"`
-	DelegatePubkey  string  `json:"delegate_pubkey"`
-	GrantTxHash     *string `json:"grant_tx_hash,omitempty"`
-	GrantExpiration *string `json:"grant_expiration,omitempty"`
-	Active          bool    `json:"active"`
-	CreatedAt       string  `json:"created_at"`
 }

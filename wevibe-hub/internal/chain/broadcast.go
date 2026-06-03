@@ -470,6 +470,7 @@ func (c *GrpcClient) estimateGasLimit(ctx context.Context, mode gasStrategy, sim
 
 func (c *GrpcClient) buildSignedTxBytes(
 	ctx context.Context,
+	orgID string,
 	msgs []types.Msg,
 	pubkey cryptotypes.PubKey,
 	signerAddress string,
@@ -491,6 +492,19 @@ func (c *GrpcClient) buildSignedTxBytes(
 
 	txBuilder.SetGasLimit(gasLimit)
 	txBuilder.SetFeeAmount(types.NewCoins(types.NewInt64Coin(DefaultFeeDenom, feeAmount)))
+
+	orgAccountAddress, err := c.GetOrgAccountFromChain(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("get org account: %w", err)
+	}
+	if strings.TrimSpace(orgAccountAddress) == "" {
+		return nil, fmt.Errorf("org account address is empty")
+	}
+	feeGranter, err := types.AccAddressFromBech32(orgAccountAddress)
+	if err != nil {
+		return nil, fmt.Errorf("parse org account address %s: %w", orgAccountAddress, err)
+	}
+	txBuilder.SetFeeGranter(feeGranter)
 
 	if err := txBuilder.SetSignatures(signing.SignatureV2{
 		PubKey: pubkey,
@@ -612,16 +626,12 @@ func (c *GrpcClient) BroadcastMsgsForOrgServingCommit(ctx context.Context, db *p
 	return c.broadcastMsgsForOrg(ctx, db, faucetURL, orgID, OrgKeyServing, txBroadcastModeCommit, msgs...)
 }
 
-func (c *GrpcClient) BroadcastMsgsForOrgLeader(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, msgs ...types.Msg) (*types.TxResponse, error) {
-	return c.broadcastMsgsForOrg(ctx, db, faucetURL, orgID, OrgKeyLeader, txBroadcastModeSync, msgs...)
-}
-
 func (c *GrpcClient) broadcastMsgsForOrg(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, role OrgKeyRole, mode txBroadcastMode, msgs ...types.Msg) (*types.TxResponse, error) {
 	if len(msgs) == 0 {
 		return nil, fmt.Errorf("no messages to broadcast")
 	}
 
-	signer, err := c.GetOrgSigner(ctx, db, orgID, role)
+	signer, err := c.GetOrgSigner(ctx, orgID, role)
 	if err != nil {
 		return nil, fmt.Errorf("resolve org signer: %w", err)
 	}
@@ -821,6 +831,7 @@ func (c *GrpcClient) broadcastSignedMsgsForOrg(ctx context.Context, signer *orgS
 
 	simulationTxBytes, err := c.buildSignedTxBytes(
 		ctx,
+		signer.orgID,
 		msgs,
 		pubkey,
 		signer.addressStr,
@@ -843,7 +854,7 @@ func (c *GrpcClient) broadcastSignedMsgsForOrg(ctx context.Context, signer *orgS
 
 	switch c.gasMode {
 	case gasStrategySimulateBuffer:
-		txBytes, err := c.buildSignedTxBytes(ctx, msgs, pubkey, signer.addressStr, signer.keyringUID, signer.accountNum, signer.nextSeq, gasLimit, signMode)
+		txBytes, err := c.buildSignedTxBytes(ctx, signer.orgID, msgs, pubkey, signer.addressStr, signer.keyringUID, signer.accountNum, signer.nextSeq, gasLimit, signMode)
 		if err != nil {
 			return nil, err
 		}
@@ -874,7 +885,7 @@ func (c *GrpcClient) broadcastSignedMsgsForOrg(ctx context.Context, signer *orgS
 			gasLimit,
 			maxOutOfGasRetries,
 			func(currentGasLimit uint64) (broadcastCommitResult, error) {
-				txBytes, buildErr := c.buildSignedTxBytes(ctx, msgs, pubkey, signer.addressStr, signer.keyringUID, signer.accountNum, signer.nextSeq, currentGasLimit, signMode)
+				txBytes, buildErr := c.buildSignedTxBytes(ctx, signer.orgID, msgs, pubkey, signer.addressStr, signer.keyringUID, signer.accountNum, signer.nextSeq, currentGasLimit, signMode)
 				if buildErr != nil {
 					return broadcastCommitResult{}, buildErr
 				}

@@ -100,6 +100,29 @@ func (c *GrpcClient) GetOrgConfigFromChain(ctx context.Context, orgID string) (*
 	}, nil
 }
 
+// GetOrgAccountFromChain queries the chain org account for feegrant usage.
+func (c *GrpcClient) GetOrgAccountFromChain(ctx context.Context, orgID string) (string, error) {
+	if c == nil {
+		return "", nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := c.orgQuery.GetOrgAccount(ctx, &orgtypes.QueryGetOrgAccountRequest{OrgId: orgID})
+	if err != nil {
+		if c.isNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if resp == nil {
+		return "", nil
+	}
+
+	return resp.AccountAddress, nil
+}
+
 // --- x/memory ---
 
 // GetEpochMerkleRoot queries the chain for a submitted merkle root.

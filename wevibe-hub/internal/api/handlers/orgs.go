@@ -19,19 +19,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	orgtypes "github.com/wevibe-network/wevibe-chain/x/org/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-)
-
-const (
-	defaultRegisterOrgStorageQuota    uint64 = 1000
-	defaultRegisterOrgRetrievalBudget uint64 = 500
 )
 
 func CreateOrg(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +49,13 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
 		return
 	}
+	req.OrgID = strings.TrimSpace(req.OrgID)
+	req.TxHash = strings.TrimSpace(req.TxHash)
+	req.HubServingKey = strings.TrimSpace(req.HubServingKey)
+	if req.OrgID == "" || req.TxHash == "" {
+		http.Error(w, `{"error":"org_id and tx_hash are required"}`, http.StatusBadRequest)
+		return
+	}
 	req.LeaderWallet = strings.TrimSpace(req.LeaderWallet)
 	if req.LeaderWallet == "" {
 		http.Error(w, `{"error":"leader_wallet is required"}`, http.StatusBadRequest)
@@ -71,7 +71,7 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid leader_wallet"}`, http.StatusBadRequest)
 		return
 	}
-	orgID := orgtypes.DeriveOrgID(leaderWalletAddr)
+	orgID := req.OrgID
 
 	if req.EncEnvelope == "" || req.SearchEnvelope == "" {
 		http.Error(w, `{"error":"enc_envelope and search_envelope are required"}`, http.StatusBadRequest)
@@ -129,60 +129,14 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if chainClient == nil {
+	if _, err := pool.Exec(r.Context(), `
+		UPDATE orgs
+		SET chain_registered = true,
+		    last_chain_submission_at = NOW(),
+		    updated_at = NOW()
+		WHERE org_id = $1
+	`, org.OrgID); err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	servingAddr, _, err := chainClient.EnsureOrgAccount(r.Context(), pool, org.OrgID, chain.OrgKeyServing)
-	if err != nil {
-		log.Printf("ERROR: failed to derive org serving key: org=%s err=%v", org.OrgID, err)
-		http.Error(w, `{"error":"failed to derive org serving key"}`, http.StatusInternalServerError)
-		return
-	}
-	leaderAddr, _, err := chainClient.EnsureOrgAccount(r.Context(), pool, org.OrgID, chain.OrgKeyLeader)
-	if err != nil {
-		log.Printf("ERROR: failed to derive org leader key: org=%s err=%v", org.OrgID, err)
-		http.Error(w, `{"error":"failed to derive org leader key"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if err := chainClient.FundAddressFromFaucet(r.Context(), faucetURL, servingAddr, chain.TOPUP_AMOUNT); err != nil {
-		log.Printf("ERROR: failed to fund org serving key: org=%s address=%s err=%v", org.OrgID, servingAddr, err)
-		http.Error(w, `{"error":"failed to fund org serving key"}`, http.StatusInternalServerError)
-		return
-	}
-	if err := chainClient.MarkOrgAccountFunded(r.Context(), pool, org.OrgID, chain.OrgKeyServing); err != nil {
-		log.Printf("ERROR: failed to mark org serving key funded: org=%s err=%v", org.OrgID, err)
-		http.Error(w, `{"error":"failed to record org serving key funding"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if err := chainClient.FundAddressFromFaucet(r.Context(), faucetURL, leaderAddr, chain.TOPUP_AMOUNT); err != nil {
-		log.Printf("ERROR: failed to fund org leader key: org=%s address=%s err=%v", org.OrgID, leaderAddr, err)
-		http.Error(w, `{"error":"failed to fund org leader key"}`, http.StatusInternalServerError)
-		return
-	}
-	if err := chainClient.MarkOrgAccountFunded(r.Context(), pool, org.OrgID, chain.OrgKeyLeader); err != nil {
-		log.Printf("ERROR: failed to mark org leader key funded: org=%s err=%v", org.OrgID, err)
-		http.Error(w, `{"error":"failed to record org leader key funding"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if _, err := chainClient.RegisterOrgOnChain(
-		r.Context(),
-		pool,
-		faucetURL,
-		org.OrgID,
-		org.LeaderPubkey,
-		org.Domain,
-		servingAddr,
-		leaderAddr,
-		defaultRegisterOrgStorageQuota,
-		defaultRegisterOrgRetrievalBudget,
-	); err != nil {
-		log.Printf("ERROR: failed to register org on-chain: org=%s err=%v", org.OrgID, err)
-		http.Error(w, `{"error":"failed to register org on-chain"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -202,8 +156,8 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		EpochPK              string `json:"epoch_pk,omitempty"`
 	}{
 		OrgInfo:              org,
-		HubServingKeyAddress: servingAddr,
-		LeaderWalletAddress:  leaderAddr,
+		HubServingKeyAddress: req.HubServingKey,
+		LeaderWalletAddress:  req.LeaderWallet,
 		EpochSK:              epochSK,
 		EpochPK:              epochPK,
 	}

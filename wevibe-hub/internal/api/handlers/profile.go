@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 )
 
 type ProfileResponse struct {
@@ -136,14 +136,14 @@ func resolvePubkeyToWallet(ctx context.Context, pool *pgxpool.Pool, pubkey strin
 }
 
 func resolveWalletToPubkey(ctx context.Context, pool *pgxpool.Pool, wallet string) (string, error) {
-	var delegatePubkey string
+	var pubkey string
 	err := pool.QueryRow(ctx, `
-		SELECT delegate_pubkey FROM delegate_keys
+		SELECT pubkey FROM members
 		WHERE wallet_address = $1 AND active = true
 		LIMIT 1
-	`, wallet).Scan(&delegatePubkey)
+	`, wallet).Scan(&pubkey)
 	if err != nil {
 		return "", err
 	}
-	return delegatePubkey, nil
+	return pubkey, nil
 }

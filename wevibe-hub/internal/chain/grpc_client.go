@@ -21,7 +21,6 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	authztypes "github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-	"github.com/jackc/pgx/v5/pgxpool"
 	attesttypes "github.com/wevibe-network/wevibe-chain/x/attestation/types"
 	bwtypes "github.com/wevibe-network/wevibe-chain/x/bandwidth/types"
 	emissionstypes "github.com/wevibe-network/wevibe-chain/x/emissions/types"
@@ -35,7 +34,6 @@ import (
 
 type orgSigner struct {
 	orgID      string
-	role       OrgKeyRole
 	keyringUID string
 	address    sdk.AccAddress
 	addressStr string
@@ -237,7 +235,8 @@ func (c *GrpcClient) BroadcastTxSync(ctx context.Context, txBytes []byte) (strin
 	return c.broadcastTxSync(ctx, txBytes)
 }
 
-func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID string, role OrgKeyRole) (*orgSigner, error) {
+func (c *GrpcClient) GetOrgSigner(ctx context.Context, orgID string, role OrgKeyRole) (*orgSigner, error) {
+	_ = ctx
 	trimmedOrgID := strings.TrimSpace(orgID)
 	if trimmedOrgID == "" {
 		return nil, fmt.Errorf("orgID is required")
@@ -245,11 +244,8 @@ func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID s
 	if !role.valid() {
 		return nil, fmt.Errorf("invalid org key role %q", role)
 	}
-	if db == nil {
-		return nil, fmt.Errorf("db is required")
-	}
 
-	cacheKey := trimmedOrgID + ":" + string(role)
+	cacheKey := "submitter"
 
 	c.orgSignersMu.RLock()
 	if signer, ok := c.orgSigners[cacheKey]; ok {
@@ -265,22 +261,21 @@ func (c *GrpcClient) GetOrgSigner(ctx context.Context, db *pgxpool.Pool, orgID s
 		return signer, nil
 	}
 
-	addressStr, keyringUID, err := c.EnsureOrgAccount(ctx, db, trimmedOrgID, role)
+	record, err := c.kr.Key(cacheKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get signer key %s: %w", cacheKey, err)
 	}
 
-	address, err := sdk.AccAddressFromBech32(addressStr)
+	address, err := record.GetAddress()
 	if err != nil {
-		return nil, fmt.Errorf("parse org signer address %s: %w", addressStr, err)
+		return nil, fmt.Errorf("resolve signer address %s: %w", cacheKey, err)
 	}
 
 	signer := &orgSigner{
 		orgID:      trimmedOrgID,
-		role:       role,
-		keyringUID: keyringUID,
+		keyringUID: cacheKey,
 		address:    address,
-		addressStr: addressStr,
+		addressStr: address.String(),
 	}
 	c.orgSigners[cacheKey] = signer
 

@@ -48,17 +48,3 @@ func (w *ChainWatcher) processReportBookkeeping(ctx context.Context, txHash stri
 
 	return nil
 }
-
-func (w *ChainWatcher) processRegisterOrgBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, leader string) error {
-	_, err := w.db.Exec(ctx, `
-		UPDATE orgs
-		SET chain_registered = true,
-		    updated_at = NOW()
-		WHERE org_id = $1
-	`, orgID)
-	if err != nil {
-		return fmt.Errorf("failed to update org chain_registered: %w", err)
-	}
-
-	return nil
-}

@@ -361,25 +361,6 @@ CREATE INDEX IF NOT EXISTS idx_serve_events_org_status ON serve_events(org_id, s
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
 
--- Monotonic index used to derive per-org chain accounts.
--- Index 0 is permanently reserved for the legacy submitter key.
-CREATE SEQUENCE IF NOT EXISTS org_account_index_seq START WITH 1;
-
--- Two hub-held chain keys per org, role-keyed (D-S32-CO044-KEY-SEPARATION):
---   serving → signs serves/denials (registered on-chain as HubServingAddress)
---   leader  → signs commit/approve/report/register (registered as LeaderWallet)
--- Each key gets its own monotonic account_index for HD derivation
--- (m/44'/118'/0'/0/{account_index}) and is independently faucet-funded.
-CREATE TABLE IF NOT EXISTS org_chain_accounts (
-    org_id        TEXT        NOT NULL REFERENCES orgs(org_id),
-    key_role      TEXT        NOT NULL CHECK (key_role IN ('serving','leader')),
-    account_index BIGINT      NOT NULL UNIQUE DEFAULT nextval('org_account_index_seq'),
-    chain_address TEXT        NOT NULL,
-    funded        BOOLEAN     NOT NULL DEFAULT FALSE,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, key_role)
-);
-
 -- ── Chain watcher state ───────────────────────────────────────────────────
 -- Restart-safe cursor for the hub ChainWatcher (watcher.go). The watcher reads
 -- last_seen_block_height on Start() and catches up from there; it UPDATEs this row
@@ -392,23 +373,6 @@ CREATE TABLE IF NOT EXISTS watcher_state (
 
 INSERT INTO watcher_state (watcher_name, last_seen_block_height)
 VALUES ('chain_watcher', 0) ON CONFLICT DO NOTHING;
-
--- ── Delegate keys ────────────────────────────────────────────────────────────
--- Maps a delegate public key to a wallet address (global, not per-org).
--- Enables a delegate (e.g., an AI agent) to act on behalf of the wallet owner.
--- Per Decision H (CO-011a.4): PK is wallet_address, delegate_address is UNIQUE.
-
-CREATE TABLE IF NOT EXISTS delegate_keys (
-    wallet_address      TEXT PRIMARY KEY,
-    delegate_address    TEXT UNIQUE NOT NULL,
-    delegate_pubkey     TEXT NOT NULL,
-    grant_tx_hash       TEXT,
-    grant_expiration    TIMESTAMPTZ,
-    active              BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_delegate_keys_delegate_address ON delegate_keys(delegate_address);
 
 -- ── Org keywords ────────────────────────────────────────────────────────────
 -- Approved vocabulary per org for memory categorization.

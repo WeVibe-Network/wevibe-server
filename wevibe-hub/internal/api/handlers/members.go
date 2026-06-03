@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
@@ -18,9 +21,6 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func InviteMember(w http.ResponseWriter, r *http.Request) {
@@ -575,90 +575,6 @@ func UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
 	updated, _ := members.GetMember(r.Context(), pool, orgID, pubkey)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
-}
-
-func RegisterDelegateKey(w http.ResponseWriter, r *http.Request) {
-	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	orgID := chi.URLParam(r, "orgID")
-	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
-		return
-	}
-
-	var req protocol.RegisterDelegateKeyRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.WalletAddress == "" || req.DelegateAddress == "" || req.DelegatePubkey == "" || req.SignedBy == "" || req.Signature == "" {
-		http.Error(w, `{"error":"wallet_address, delegate_address, delegate_pubkey, signed_by, and signature are required"}`, http.StatusBadRequest)
-		return
-	}
-
-	signed, err := auth.ParseWeVibeSigned(r)
-	if err != nil {
-		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
-		return
-	}
-
-	if signed.Pubkey != req.SignedBy {
-		http.Error(w, `{"error":"signed_by does not match Authorization header"}`, http.StatusForbidden)
-		return
-	}
-
-	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
-	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
-		return
-	}
-
-	now := time.Now()
-	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
-		return
-	}
-
-	canonical := fmt.Sprintf("register_delegate|%s|%s|%s|%s", orgID, req.WalletAddress, req.DelegateAddress, req.SignedBy)
-	if err := verify.RequestSignature(req.SignedBy, req.Signature, []byte(canonical)); err != nil {
-		http.Error(w, `{"error":"invalid signature"}`, http.StatusUnauthorized)
-		return
-	}
-
-	member, err := members.GetMember(r.Context(), pool, orgID, req.SignedBy)
-	if err != nil || !member.Active {
-		http.Error(w, `{"error":"not an active member of this org"}`, http.StatusForbidden)
-		return
-	}
-
-	if member.WalletAddress == nil || *member.WalletAddress != req.WalletAddress {
-		http.Error(w, `{"error":"caller does not own this wallet_address"}`, http.StatusForbidden)
-		return
-	}
-
-	if err := members.RegisterDelegateKey(r.Context(), pool, &req); err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			http.Error(w, `{"error":"delegate address already registered"}`, http.StatusConflict)
-			return
-		}
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"status": "registered"})
 }
 
 func RegisterPreKey(w http.ResponseWriter, r *http.Request) {

@@ -9,7 +9,6 @@ import (
 	"github.com/cosmos/cosmos-sdk/types"
 	"github.com/jackc/pgx/v5/pgxpool"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
-	orgtypes "github.com/wevibe-network/wevibe-chain/x/org/types"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
@@ -95,7 +94,7 @@ func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, db *pgxpool.Po
 		submissionHashes = append(submissionHashes, hex.EncodeToString(mem.ContentHash))
 	}
 
-	txResponse, err := c.BroadcastMsgsForOrgLeader(ctx, db, faucetURL, orgID, allMsgs...)
+	txResponse, err := c.BroadcastMsgsForOrgServing(ctx, db, faucetURL, orgID, allMsgs...)
 	if err != nil {
 		return "", nil, fmt.Errorf("broadcast: %w", err)
 	}
@@ -277,36 +276,4 @@ func (c *GrpcClient) SubmitDenialBatch(ctx context.Context, db *pgxpool.Pool, fa
 	}
 
 	return c.SubmitRelayBatch(ctx, db, faucetURL, orgID, []types.Msg{msg})
-}
-
-func (c *GrpcClient) RegisterOrgOnChain(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID, leader, domain, hubServingKey, leaderWallet string, storageQuota, retrievalBudget uint64) (string, error) {
-	trimmedHubServingKey := strings.TrimSpace(hubServingKey)
-	if trimmedHubServingKey == "" {
-		return "", fmt.Errorf("hub_serving_key is required")
-	}
-
-	trimmedLeaderWallet := strings.TrimSpace(leaderWallet)
-	if trimmedLeaderWallet == "" {
-		return "", fmt.Errorf("leader_wallet is required")
-	}
-
-	msg := &orgtypes.MsgRegisterOrg{
-		Signer:          "",
-		Leader:          leader,
-		StorageQuota:    storageQuota,
-		RetrievalBudget: retrievalBudget,
-		Domain:          domain,
-		HubServingKey:   trimmedHubServingKey,
-		LeaderWallet:    trimmedLeaderWallet,
-	}
-
-	txResponse, err := c.BroadcastMsgsForOrgLeader(ctx, db, faucetURL, orgID, msg)
-	if err != nil {
-		return "", fmt.Errorf("broadcast register org: %w", err)
-	}
-	if txResponse == nil {
-		return "", fmt.Errorf("broadcast register org: missing tx response")
-	}
-
-	return txResponse.TxHash, nil
 }

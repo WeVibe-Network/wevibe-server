@@ -20,7 +20,6 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/config"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/relay"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/social"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
@@ -166,9 +165,6 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	relay.SetDeps(pool, chainClient, slog.Default())
-	r.Post("/v1/relay/broadcast", relay.RelayBroadcast)
-
 	r.Get("/health", handlers.Health)
 
 	r.Get("/v1/members/{pubkey}/orgs", handlers.GetMemberOrgs)
@@ -182,6 +178,7 @@ func main() {
 	r.Get("/v1/notifications/ws", handlers.NotificationWebSocket)
 
 	r.Post("/v1/orgs", handlers.CreateOrg)
+	r.Get("/v1/hub/serving-address", handlers.GetServingAddress)
 	r.Get("/v1/balance/{address}", handlers.GetBalance)
 	r.Post("/v1/faucet/fund", handlers.FundFromFaucet)
 	r.Get("/v1/orgs/discover", handlers.DiscoverOrgs)
@@ -207,7 +204,6 @@ func main() {
 			r.Delete("/members/{pubkey}", handlers.RemoveMember)
 			r.Patch("/members/{pubkey}/role", handlers.UpdateMemberRole)
 			r.Post("/members/wallet", handlers.LinkWallet)
-			r.Post("/members/delegate-key", handlers.RegisterDelegateKey)
 			r.Get("/keys/envelope", handlers.GetKeyEnvelope)
 
 			r.Post("/dashboard/keys", handlers.RegisterDashboardKey)

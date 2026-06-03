@@ -235,63 +235,6 @@ func ListOrgsForMember(ctx context.Context, pool *pgxpool.Pool, pubkey string) (
 	return entries, nil
 }
 
-func RegisterDelegateKey(ctx context.Context, pool *pgxpool.Pool, req *protocol.RegisterDelegateKeyRequest) error {
-	var grantExp *time.Time
-	if req.GrantExpiration != "" {
-		t, err := time.Parse(time.RFC3339, req.GrantExpiration)
-		if err != nil {
-			return fmt.Errorf("invalid grant_expiration format: %w", err)
-		}
-		grantExp = &t
-	}
-
-	_, err := pool.Exec(ctx, `
-		INSERT INTO delegate_keys (wallet_address, delegate_address, delegate_pubkey, grant_tx_hash, grant_expiration)
-		VALUES ($1, $2, $3, $4, $5)
-	`, req.WalletAddress, req.DelegateAddress, req.DelegatePubkey, req.GrantTxHash, grantExp)
-	return err
-}
-
-func GetDelegateKey(ctx context.Context, pool *pgxpool.Pool, delegateAddress string) (*protocol.DelegateKeyRecord, error) {
-	var r protocol.DelegateKeyRecord
-	var grantExp *time.Time
-	err := pool.QueryRow(ctx, `
-		SELECT wallet_address, delegate_address, delegate_pubkey, grant_tx_hash, grant_expiration, active, created_at
-		FROM delegate_keys WHERE delegate_address = $1
-	`, delegateAddress).Scan(
-		&r.WalletAddress, &r.DelegateAddress, &r.DelegatePubkey,
-		&r.GrantTxHash, &grantExp, &r.Active, &r.CreatedAt,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if grantExp != nil {
-		t := grantExp.Format(time.RFC3339)
-		r.GrantExpiration = &t
-	}
-	return &r, nil
-}
-
-func ResolveDelegateToWallet(ctx context.Context, pool *pgxpool.Pool, delegateAddress string) (string, error) {
-	var walletAddress string
-	err := pool.QueryRow(ctx, `
-		SELECT wallet_address FROM delegate_keys
-		WHERE delegate_address = $1 AND active = true
-	`, delegateAddress).Scan(&walletAddress)
-	if err != nil {
-		return "", err
-	}
-	return walletAddress, nil
-}
-
-func RevokeDelegateKey(ctx context.Context, pool *pgxpool.Pool, walletAddress string) error {
-	_, err := pool.Exec(ctx, `
-		UPDATE delegate_keys SET active = false
-		WHERE wallet_address = $1 AND active = true
-	`, walletAddress)
-	return err
-}
-
 func UpdateMemberRole(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey, newRole string) error {
 	validRoles := map[string]bool{"moderator": true, "member": true, "contributor": true}
 	if !validRoles[newRole] {
