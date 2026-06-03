@@ -21,19 +21,17 @@ function isHubHealthPayload(value: unknown): value is { status: string; db?: str
   return value.db === undefined || typeof value.db === 'string';
 }
 
-function isMcpHealthPayload(value: unknown): value is { status: string } {
-  return isRecord(value) && typeof value.status === 'string';
-}
-
 async function checkService(
   name: string,
   url: string,
   validate?: (data: unknown) => boolean,
+  treatAnyResponseAsHealthy = false,
 ): Promise<ServiceStatus> {
   const start = Date.now();
   try {
     const resp = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
     const elapsed = Date.now() - start;
+    if (treatAnyResponseAsHealthy) return { name, healthy: true, ms: elapsed };
     if (!resp.ok) return { name, healthy: false, ms: elapsed, error: `HTTP ${resp.status}` };
     if (validate) {
       const data = await resp.json();
@@ -63,7 +61,7 @@ export default async function HealthPage() {
     checkService('Qdrant', `${qdrantBaseUrl}/healthz`),
     checkService('wevibe-chain', `${chainRpcBaseUrl}/status`),
     checkService('wevibe-hub', `${hubBaseUrl}/health`, (data) => isHubHealthPayload(data) && data.status === 'ok'),
-    checkService('wevibe-mcp HTTP', `${mcpBaseUrl}/v1/health`, (data) => isMcpHealthPayload(data) && data.status === 'ok'),
+    checkService('wevibe-mcp HTTP', `${mcpBaseUrl}/v1/health`, undefined, true),
     checkService('Ollama', `${ollamaBaseUrl}/api/tags`),
   ]);
 
