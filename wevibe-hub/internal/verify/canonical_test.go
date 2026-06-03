@@ -14,7 +14,6 @@ import (
 
 func TestCreateOrgMessage_Deterministic(t *testing.T) {
 	msg := CreateOrgMessage(
-		"org-test-1",
 		"aabbccdd",
 		"11223344",
 		"Test Org",
@@ -33,8 +32,8 @@ func TestCreateOrgMessage_Deterministic(t *testing.T) {
 	}
 
 	lines := splitLines(result)
-	if len(lines) != 11 {
-		t.Fatalf("expected 11 lines, got %d: %v", len(lines), lines)
+	if len(lines) != 10 {
+		t.Fatalf("expected 10 lines, got %d: %v", len(lines), lines)
 	}
 	if lines[0] != "wevibe.create_org.v1" {
 		t.Errorf("line 0: %q", lines[0])
@@ -58,23 +57,20 @@ func TestCreateOrgMessage_Deterministic(t *testing.T) {
 	if lines[6] != "mod_envelope:mod_env_base64_data" {
 		t.Errorf("line 6: %q", lines[6])
 	}
-	if lines[7] != "org_id:org-test-1" {
+	if lines[7] != "org_name:Test Org" {
 		t.Errorf("line 7: %q", lines[7])
 	}
-	if lines[8] != "org_name:Test Org" {
+	if lines[8] != "pk_mod:pk_mod_hex_value" {
 		t.Errorf("line 8: %q", lines[8])
 	}
-	if lines[9] != "pk_mod:pk_mod_hex_value" {
+	if lines[9] != "search_envelope:srch_env_base64_data" {
 		t.Errorf("line 9: %q", lines[9])
-	}
-	if lines[10] != "search_envelope:srch_env_base64_data" {
-		t.Errorf("line 10: %q", lines[10])
 	}
 }
 
 func TestCreateOrgMessage_WithFeeModel(t *testing.T) {
 	feeModel := protocol.FeeModel{Tier: "free", MonthlyCredits: 100}
-	msg := CreateOrgMessage("org-1", "pub1", "x1", "Org", "d.com", "enc", "srch", "mod", "pk_mod", feeModel)
+	msg := CreateOrgMessage("pub1", "x1", "Org", "d.com", "enc", "srch", "mod", "pk_mod", feeModel)
 
 	lines := splitLines(string(msg))
 	expectedJSON := `{"tier":"free","monthly_credits":100}`
@@ -85,8 +81,8 @@ func TestCreateOrgMessage_WithFeeModel(t *testing.T) {
 }
 
 func TestCreateOrgMessage_DeterministicRepeated(t *testing.T) {
-	msg1 := CreateOrgMessage("o", "p", "x", "n", "d", "e", "s", "m", "pk", protocol.FeeModel{})
-	msg2 := CreateOrgMessage("o", "p", "x", "n", "d", "e", "s", "m", "pk", protocol.FeeModel{})
+	msg1 := CreateOrgMessage("p", "x", "n", "d", "e", "s", "m", "pk", protocol.FeeModel{})
+	msg2 := CreateOrgMessage("p", "x", "n", "d", "e", "s", "m", "pk", protocol.FeeModel{})
 	if string(msg1) != string(msg2) {
 		t.Fatal("CreateOrgMessage is not deterministic")
 	}
@@ -346,35 +342,35 @@ func TestCanonicalBodyCrossLanguageConformance(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				got := SubmitMemoryMessage(
-					tt.orgID,
-					tt.epochID,
+		t.Run(tt.name, func(t *testing.T) {
+			got := SubmitMemoryMessage(
+				tt.orgID,
+				tt.epochID,
 				tt.submissionHash,
 				tt.contributorPubkey,
 				tt.memoryType,
 				tt.ciphertextHash,
 				tt.plaintextHash,
-					tt.salt,
-					tt.wrappedDekHash,
-				)
-				gotHex := hex.EncodeToString(got)
-				expectedHex := manualSubmitMemoryHex(
-					tt.orgID,
-					tt.epochID,
-					tt.submissionHash,
-					tt.contributorPubkey,
-					tt.memoryType,
-					tt.ciphertextHash,
-					tt.plaintextHash,
-					tt.salt,
-					tt.wrappedDekHash,
-				)
-				if gotHex != expectedHex {
-					t.Fatalf("canonical body mismatch:\n  got:  %s\n  want: %s", gotHex, expectedHex)
-				}
-			})
-		}
+				tt.salt,
+				tt.wrappedDekHash,
+			)
+			gotHex := hex.EncodeToString(got)
+			expectedHex := manualSubmitMemoryHex(
+				tt.orgID,
+				tt.epochID,
+				tt.submissionHash,
+				tt.contributorPubkey,
+				tt.memoryType,
+				tt.ciphertextHash,
+				tt.plaintextHash,
+				tt.salt,
+				tt.wrappedDekHash,
+			)
+			if gotHex != expectedHex {
+				t.Fatalf("canonical body mismatch:\n  got:  %s\n  want: %s", gotHex, expectedHex)
+			}
+		})
+	}
 }
 
 func TestApproveSubmissionMessage_Deterministic(t *testing.T) {

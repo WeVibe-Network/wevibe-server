@@ -16,6 +16,7 @@ import (
 	cmttypes "github.com/cometbft/cometbft/types"
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/bech32"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -381,9 +382,21 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 			}
 
 		case *orgtypes.MsgRegisterOrg:
+			_, leaderWalletAddrBytes, err := bech32.DecodeAndConvert(strings.TrimSpace(m.LeaderWallet))
+			if err != nil {
+				w.logger.Error("failed to decode leader_wallet for register-org bookkeeping", "err", err, "leader_wallet", m.LeaderWallet)
+				continue
+			}
+			leaderWalletAddr := sdk.AccAddress(leaderWalletAddrBytes)
+			if err := sdk.VerifyAddressFormat(leaderWalletAddr); err != nil {
+				w.logger.Error("invalid leader_wallet for register-org bookkeeping", "err", err, "leader_wallet", m.LeaderWallet)
+				continue
+			}
+			derivedOrgID := orgtypes.DeriveOrgID(leaderWalletAddr)
+
 			if err := w.processRegisterOrgBookkeeping(ctx, txHashHex, height, timestamp,
-				m.OrgId, m.Leader); err != nil {
-				w.logger.Error("processRegisterOrgBookkeeping failed", "err", err, "org_id", m.OrgId)
+				derivedOrgID, m.Leader); err != nil {
+				w.logger.Error("processRegisterOrgBookkeeping failed", "err", err, "org_id", derivedOrgID)
 			}
 
 		case *orgtypes.MsgAddMember:

@@ -47,8 +47,18 @@ type OrgInfo struct {
 	CreatedAt           time.Time `json:"created_at"`
 }
 
+type DiscoverOrg struct {
+	OrgID          string  `json:"org_id"`
+	OrgName        string  `json:"org_name"`
+	Domain         string  `json:"domain"`
+	LeaderPubkey   string  `json:"leader_pubkey"`
+	MemberCount    int     `json:"member_count"`
+	CreatedAt      string  `json:"created_at"`
+	CurrentEpoch   int     `json:"current_epoch"`
+	LastActivityAt *string `json:"last_activity_at"`
+}
+
 type CreateOrgRequest struct {
-	OrgID              string   `json:"org_id"`
 	LeaderPubkey       string   `json:"leader_pubkey"`
 	LeaderWallet       string   `json:"leader_wallet"`
 	LeaderX25519Pubkey string   `json:"leader_x25519_pubkey"`

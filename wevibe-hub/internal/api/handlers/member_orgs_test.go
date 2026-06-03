@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -43,7 +43,6 @@ func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey s
 	memberPubkey = strings.Repeat("b", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
 		OrgName:            "Test Org",
@@ -52,7 +51,7 @@ func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey s
 		Signature:          strings.Repeat("d", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -270,7 +269,6 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 
 	for i, data := range orgsData {
 		orgReq := protocol.CreateOrgRequest{
-			OrgID:              data.orgID,
 			LeaderPubkey:       data.leader,
 			LeaderX25519Pubkey: data.x25519,
 			OrgName:            fmt.Sprintf("Test Org %d", i),
@@ -279,7 +277,7 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 			Signature:          strings.Repeat("d", 128),
 			ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 		}
-		_, err := orgs.CreateOrg(ctx, pool, orgReq)
+		_, err := orgs.CreateOrg(ctx, pool, data.orgID, orgReq)
 		if err != nil {
 			t.Fatalf("CreateOrg failed: %v", err)
 		}

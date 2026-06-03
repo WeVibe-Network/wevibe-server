@@ -15,13 +15,18 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
-func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRequest) (*protocol.OrgInfo, error) {
+func CreateOrg(ctx context.Context, pool *pgxpool.Pool, orgID string, req protocol.CreateOrgRequest) (*protocol.OrgInfo, error) {
 	// FeeModel is a value-type struct; zero value is valid (all fields empty/zero → "{}")
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	orgID = strings.TrimSpace(orgID)
+	if orgID == "" {
+		return nil, fmt.Errorf("org_id is required")
+	}
 
 	leaderWallet := strings.TrimSpace(req.LeaderWallet)
 	if leaderWallet == "" {
@@ -31,7 +36,7 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 	_, err = tx.Exec(ctx, `
 		INSERT INTO orgs (org_id, leader_pubkey, leader_wallet_address, org_name, domain, fee_model)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, req.OrgID, req.LeaderPubkey, leaderWallet, req.OrgName, req.Domain, req.FeeModel)
+	`, orgID, req.LeaderPubkey, leaderWallet, req.OrgName, req.Domain, req.FeeModel)
 	if err != nil {
 		return nil, fmt.Errorf("insert org: %w", err)
 	}
@@ -39,7 +44,7 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 	_, err = tx.Exec(ctx, `
 		INSERT INTO epoch_manifests (org_id, epoch_id, pk_mod, umbral_pk, signed_by, signature)
 		VALUES ($1, 0, $2, $3, $4, $5)
-	`, req.OrgID, req.PkMod, req.UmbralPK, req.LeaderPubkey, req.Signature)
+	`, orgID, req.PkMod, req.UmbralPK, req.LeaderPubkey, req.Signature)
 	if err != nil {
 		return nil, fmt.Errorf("insert epoch manifest: %w", err)
 	}
@@ -47,7 +52,7 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 	_, err = tx.Exec(ctx, `
 		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, wallet_address, membership_active)
 		VALUES ($1, $2, $3, 'leader', 0, $4, TRUE)
-	`, req.OrgID, req.LeaderPubkey, req.LeaderX25519Pubkey, leaderWallet)
+	`, orgID, req.LeaderPubkey, req.LeaderX25519Pubkey, leaderWallet)
 	if err != nil {
 		return nil, fmt.Errorf("insert leader member: %w", err)
 	}
@@ -56,11 +61,11 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, req protocol.CreateOrgRe
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
-	if err := billing.ProvisionOrgLedger(ctx, pool, req.OrgID, req.FeeModel.MonthlyCredits, req.LeaderPubkey); err != nil {
+	if err := billing.ProvisionOrgLedger(ctx, pool, orgID, req.FeeModel.MonthlyCredits, req.LeaderPubkey); err != nil {
 		return nil, fmt.Errorf("provision billing ledger: %w", err)
 	}
 
-	return GetOrg(ctx, pool, req.OrgID)
+	return GetOrg(ctx, pool, orgID)
 }
 
 func GetOrg(ctx context.Context, pool *pgxpool.Pool, orgID string) (*protocol.OrgInfo, error) {

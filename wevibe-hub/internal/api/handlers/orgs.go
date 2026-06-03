@@ -14,10 +14,12 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/bech32"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	orgtypes "github.com/wevibe-network/wevibe-chain/x/org/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
@@ -50,7 +52,7 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.OrgID == "" || req.LeaderPubkey == "" || req.OrgName == "" || req.Domain == "" {
+	if req.LeaderPubkey == "" || req.OrgName == "" || req.Domain == "" {
 		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
 		return
 	}
@@ -59,11 +61,17 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"leader_wallet is required"}`, http.StatusBadRequest)
 		return
 	}
-	decodedWallet, err := sdk.GetFromBech32(req.LeaderWallet, "wevibe")
-	if err != nil || sdk.VerifyAddressFormat(decodedWallet) != nil {
-		http.Error(w, `{"error":"leader_wallet must be a valid bech32 address"}`, http.StatusBadRequest)
+	_, addrBytes, err := bech32.DecodeAndConvert(req.LeaderWallet)
+	if err != nil {
+		http.Error(w, `{"error":"invalid leader_wallet"}`, http.StatusBadRequest)
 		return
 	}
+	leaderWalletAddr := sdk.AccAddress(addrBytes)
+	if err := sdk.VerifyAddressFormat(leaderWalletAddr); err != nil {
+		http.Error(w, `{"error":"invalid leader_wallet"}`, http.StatusBadRequest)
+		return
+	}
+	orgID := orgtypes.DeriveOrgID(leaderWalletAddr)
 
 	if req.EncEnvelope == "" || req.SearchEnvelope == "" {
 		http.Error(w, `{"error":"enc_envelope and search_envelope are required"}`, http.StatusBadRequest)
@@ -80,7 +88,7 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canonical := verify.CreateOrgMessage(req.OrgID, req.LeaderPubkey, req.LeaderX25519Pubkey, req.OrgName, req.Domain, req.EncEnvelope, req.SearchEnvelope, req.ModEnvelope, req.PkMod, req.FeeModel)
+	canonical := verify.CreateOrgMessage(req.LeaderPubkey, req.LeaderX25519Pubkey, req.OrgName, req.Domain, req.EncEnvelope, req.SearchEnvelope, req.ModEnvelope, req.PkMod, req.FeeModel)
 	if err := verify.RequestSignature(req.LeaderPubkey, req.Signature, canonical); err != nil {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
@@ -106,11 +114,11 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 			req.UmbralPK = pk
 			epochSK = hex.EncodeToString(sk)
 			epochPK = hex.EncodeToString(pk)
-			log.Printf("generated epoch keypair for org=%s epoch=0", req.OrgID)
+			log.Printf("generated epoch keypair for org=%s epoch=0", orgID)
 		}
 	}
 
-	org, err := orgs.CreateOrg(r.Context(), pool, req)
+	org, err := orgs.CreateOrg(r.Context(), pool, orgID, req)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -179,7 +187,7 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modEnv := req.ModEnvelope
-	if err := envelopes.Store(r.Context(), pool, req.OrgID, req.LeaderPubkey, 0, req.EncEnvelope, req.SearchEnvelope, &modEnv); err != nil {
+	if err := envelopes.Store(r.Context(), pool, orgID, req.LeaderPubkey, 0, req.EncEnvelope, req.SearchEnvelope, &modEnv); err != nil {
 		http.Error(w, `{"error":"failed to store leader envelope"}`, http.StatusInternalServerError)
 		return
 	}

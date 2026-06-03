@@ -292,7 +292,6 @@ func (c *GrpcClient) RegisterOrgOnChain(ctx context.Context, db *pgxpool.Pool, f
 
 	msg := &orgtypes.MsgRegisterOrg{
 		Signer:          "",
-		OrgId:           orgID,
 		Leader:          leader,
 		StorageQuota:    storageQuota,
 		RetrievalBudget: retrievalBudget,

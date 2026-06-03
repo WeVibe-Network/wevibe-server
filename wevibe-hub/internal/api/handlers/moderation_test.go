@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func testPoolMod(t *testing.T) *pgxpool.Pool {
@@ -44,7 +44,6 @@ func setupOrgForModeration(t *testing.T, pool *pgxpool.Pool) (orgID, contributor
 	contributorPubkey = strings.Repeat("b", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
 		OrgName:            "Test Org",
@@ -53,7 +52,7 @@ func setupOrgForModeration(t *testing.T, pool *pgxpool.Pool) (orgID, contributor
 		Signature:          strings.Repeat("d", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}

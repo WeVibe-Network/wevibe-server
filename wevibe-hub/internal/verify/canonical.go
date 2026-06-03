@@ -11,7 +11,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
-func CreateOrgMessage(orgID, leaderPubkey, leaderX25519Pubkey, orgName, domain, encEnvelope, searchEnvelope, modEnvelope, pkMod string, feeModel protocol.FeeModel) []byte {
+func CreateOrgMessage(leaderPubkey, leaderX25519Pubkey, orgName, domain, encEnvelope, searchEnvelope, modEnvelope, pkMod string, feeModel protocol.FeeModel) []byte {
 	fmHash := feeModelHash(feeModel)
 	return []byte(strings.Join([]string{
 		"wevibe.create_org.v1",
@@ -21,7 +21,6 @@ func CreateOrgMessage(orgID, leaderPubkey, leaderX25519Pubkey, orgName, domain, 
 		fmt.Sprintf("leader_pubkey:%s", leaderPubkey),
 		fmt.Sprintf("leader_x25519_pubkey:%s", leaderX25519Pubkey),
 		fmt.Sprintf("mod_envelope:%s", modEnvelope),
-		fmt.Sprintf("org_id:%s", orgID),
 		fmt.Sprintf("org_name:%s", orgName),
 		fmt.Sprintf("pk_mod:%s", pkMod),
 		fmt.Sprintf("search_envelope:%s", searchEnvelope),

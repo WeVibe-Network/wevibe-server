@@ -15,14 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/reports"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type testActor struct {
@@ -259,8 +259,8 @@ func TestUpdateReport_Escalate(t *testing.T) {
 
 	rec, err := reports.Create(ctx, env.pool, env.orgID, protocol.CreateReportRequest{
 		MemoryCID: "cid-escalate",
-Reason:    "incorrect",
-		}, env.member.pubkeyHex, "member")
+		Reason:    "incorrect",
+	}, env.member.pubkeyHex, "member")
 	if err != nil {
 		t.Fatalf("create report: %v", err)
 	}
@@ -462,8 +462,7 @@ func setupReportTestEnv(t *testing.T) reportTestEnv {
 	orgID := fmt.Sprintf("test-org-%d", time.Now().UnixNano())
 	ctx := context.Background()
 
-	_, err := orgs.CreateOrg(ctx, pool, protocol.CreateOrgRequest{
-		OrgID:              orgID,
+	_, err := orgs.CreateOrg(ctx, pool, orgID, protocol.CreateOrgRequest{
 		LeaderPubkey:       leader.pubkeyHex,
 		LeaderX25519Pubkey: randomHex(32),
 		OrgName:            "Reports Test Org",

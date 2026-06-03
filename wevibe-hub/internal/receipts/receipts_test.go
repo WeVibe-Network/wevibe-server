@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -34,7 +34,6 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) string {
 	leaderPubkey := fmt.Sprintf("%064d", 1)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: fmt.Sprintf("%064d", 2),
 		OrgName:            "Test Org",
@@ -43,7 +42,7 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) string {
 		Signature:          fmt.Sprintf("%0128d", 1),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -33,7 +33,6 @@ func TestCreateOrg_GetOrg(t *testing.T) {
 	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 
 	req := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -43,7 +42,7 @@ func TestCreateOrg_GetOrg(t *testing.T) {
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
 
-	org, err := CreateOrg(ctx, pool, req)
+	org, err := CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -82,7 +81,6 @@ func TestOrgExists(t *testing.T) {
 	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 
 	req := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -100,7 +98,7 @@ func TestOrgExists(t *testing.T) {
 		t.Error("expected exists=false before creation")
 	}
 
-	_, err = CreateOrg(ctx, pool, req)
+	_, err = CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -127,7 +125,6 @@ func TestGetLeaderPubkey(t *testing.T) {
 	leaderPubkey := strings.Repeat("a", 64)
 
 	req := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -137,7 +134,7 @@ func TestGetLeaderPubkey(t *testing.T) {
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
 
-	_, err := CreateOrg(ctx, pool, req)
+	_, err := CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -163,7 +160,6 @@ func TestGetCurrentEpoch(t *testing.T) {
 	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 
 	req := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -173,7 +169,7 @@ func TestGetCurrentEpoch(t *testing.T) {
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
 
-	_, err := CreateOrg(ctx, pool, req)
+	_, err := CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -199,7 +195,6 @@ func TestFullOrgLifecycle(t *testing.T) {
 	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 
 	req := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -209,7 +204,7 @@ func TestFullOrgLifecycle(t *testing.T) {
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
 
-	org, err := CreateOrg(ctx, pool, req)
+	org, err := CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -264,7 +259,6 @@ func TestEpochExists_CurrentEpoch(t *testing.T) {
 	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 
 	req := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -274,7 +268,7 @@ func TestEpochExists_CurrentEpoch(t *testing.T) {
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
 
-	_, err := CreateOrg(ctx, pool, req)
+	_, err := CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -300,7 +294,6 @@ func TestEpochExists_NonexistentEpoch(t *testing.T) {
 	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 
 	req := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -310,7 +303,7 @@ func TestEpochExists_NonexistentEpoch(t *testing.T) {
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
 
-	_, err := CreateOrg(ctx, pool, req)
+	_, err := CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}

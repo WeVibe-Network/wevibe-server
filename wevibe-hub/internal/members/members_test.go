@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
@@ -40,7 +40,6 @@ func TestInviteMember_GetMember(t *testing.T) {
 	memberPubkey := strings.Repeat("b", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
 		OrgName:            "Test Org",
@@ -49,7 +48,7 @@ func TestInviteMember_GetMember(t *testing.T) {
 		Signature:          strings.Repeat("d", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -96,7 +95,6 @@ func TestGetMember_NotFound(t *testing.T) {
 	leaderPubkey := strings.Repeat("a", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -105,7 +103,7 @@ func TestGetMember_NotFound(t *testing.T) {
 		Signature:          strings.Repeat("c", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -130,7 +128,6 @@ func TestRemoveMember(t *testing.T) {
 	memberPubkey := strings.Repeat("b", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
 		OrgName:            "Test Org",
@@ -139,7 +136,7 @@ func TestRemoveMember(t *testing.T) {
 		Signature:          strings.Repeat("d", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -184,7 +181,6 @@ func TestListMembers(t *testing.T) {
 	leaderPubkey := strings.Repeat("a", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -193,7 +189,7 @@ func TestListMembers(t *testing.T) {
 		Signature:          strings.Repeat("c", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -241,7 +237,6 @@ func TestVerifyMemberAccess(t *testing.T) {
 	leaderPubkey := strings.Repeat("a", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -250,7 +245,7 @@ func TestVerifyMemberAccess(t *testing.T) {
 		Signature:          strings.Repeat("c", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -285,7 +280,6 @@ func TestIsLeader(t *testing.T) {
 	leaderPubkey := strings.Repeat("a", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
 		OrgName:            "Test Org",
@@ -294,7 +288,7 @@ func TestIsLeader(t *testing.T) {
 		Signature:          strings.Repeat("c", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -330,7 +324,6 @@ func TestFullMemberLifecycle(t *testing.T) {
 	memberPubkey := strings.Repeat("b", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
 		OrgName:            "Test Org",
@@ -339,7 +332,7 @@ func TestFullMemberLifecycle(t *testing.T) {
 		Signature:          strings.Repeat("d", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -396,7 +389,6 @@ func TestListOrgsForMember(t *testing.T) {
 	memberPubkey := testPubkey(t, "m")
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: testPubkey(t, "lx"),
 		OrgName:            "Test Org",
@@ -405,7 +397,7 @@ func TestListOrgsForMember(t *testing.T) {
 		Signature:          testPubkey(t, "s"),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -476,7 +468,6 @@ func TestListOrgsForMember_InactiveExcluded(t *testing.T) {
 	memberPubkey := strings.Repeat("b", 64)
 
 	orgReq := protocol.CreateOrgRequest{
-		OrgID:              orgID,
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
 		OrgName:            "Test Org",
@@ -485,7 +476,7 @@ func TestListOrgsForMember_InactiveExcluded(t *testing.T) {
 		Signature:          strings.Repeat("d", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgReq)
+	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}

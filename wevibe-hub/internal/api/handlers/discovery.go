@@ -6,22 +6,14 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
-type DiscoverOrg struct {
-	OrgID          string `json:"org_id"`
-	OrgName        string `json:"org_name"`
-	LeaderPubkey   string `json:"leader_pubkey"`
-	MemberCount    int    `json:"member_count"`
-	CreatedAt      string `json:"created_at"`
-	CurrentEpoch   int    `json:"current_epoch"`
-	LastActivityAt *string `json:"last_activity_at"`
-}
-
 type DiscoverResponse struct {
-	Orgs    []DiscoverOrg `json:"orgs"`
-	Total   int           `json:"total"`
-	HasMore bool          `json:"has_more"`
+	Orgs    []protocol.DiscoverOrg `json:"orgs"`
+	Total   int                    `json:"total"`
+	HasMore bool                   `json:"has_more"`
 }
 
 func DiscoverOrgs(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +43,7 @@ func DiscoverOrgs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	query := `
-		SELECT o.org_id, o.org_name, o.leader_pubkey, o.current_epoch, o.created_at,
+		SELECT o.org_id, o.org_name, o.domain, o.leader_pubkey, o.current_epoch, o.created_at,
 			   COUNT(m.pubkey) FILTER (WHERE m.active = true) as member_count,
 			   o.last_chain_submission_at
 		FROM orgs o
@@ -80,12 +72,12 @@ func DiscoverOrgs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var orgs []DiscoverOrg
+	var orgs []protocol.DiscoverOrg
 	for rows.Next() {
-		var org DiscoverOrg
+		var org protocol.DiscoverOrg
 		var createdAt time.Time
 		var lastActivity *time.Time
-		if err := rows.Scan(&org.OrgID, &org.OrgName, &org.LeaderPubkey, &org.CurrentEpoch, &createdAt, &org.MemberCount, &lastActivity); err != nil {
+		if err := rows.Scan(&org.OrgID, &org.OrgName, &org.Domain, &org.LeaderPubkey, &org.CurrentEpoch, &createdAt, &org.MemberCount, &lastActivity); err != nil {
 			log.Printf("WARNING: discovery row scan failed, skipping row: %v", err)
 			continue
 		}
