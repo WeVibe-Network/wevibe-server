@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
 import { ErrorBanner, GuardCard, LoadingState } from '@/components/ui/states';
+import InfoTooltip from '@/components/ui/tooltip';
 import { classifyError } from '@/lib/errors';
 import { createOrg } from '@/lib/hub-client';
 import { useDashboardState } from '@/lib/use-dashboard-state';
@@ -59,6 +60,7 @@ export default function CreateOrgPage() {
     [orgs],
   );
   const isConnectedState = state !== 'INITIALIZING' && state !== 'NO_WALLET';
+  const showJoinCreateChooser = state === 'CONNECTED_NO_ORG' && !success && !leaderOrg;
 
   const handleConnectWallet = useCallback(async () => {
     setConnecting(true);
@@ -243,7 +245,49 @@ export default function CreateOrgPage() {
         </Card>
       )}
 
-      {isConnectedState && !success && !leaderOrg && (
+      {showJoinCreateChooser && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <Link href="/discover" className="group">
+            <Card className="h-full border-wv-line transition group-hover:border-[rgba(52,220,240,0.45)] group-hover:shadow-wv-md">
+              <div className="flex h-full flex-col gap-4 p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="text-xl font-semibold text-wv-text">Join Org</h2>
+                  <InfoTooltip label="Who should join an organization">
+                    Join an existing organization, collaborate with leaders and moderators, and contribute memories to
+                    an established domain.
+                  </InfoTooltip>
+                </div>
+                <p className="text-sm font-medium text-wv-cyan">For contributors.</p>
+                <p className="text-sm text-wv-dim">
+                  Browse existing organizations, pick your domain, and request to join.
+                </p>
+                <span className="mt-auto text-sm font-medium text-wv-violet">Go to Discover →</span>
+              </div>
+            </Card>
+          </Link>
+
+          <Link href="/buy-org" className="group">
+            <Card className="h-full border-[rgba(255,178,85,0.32)] transition group-hover:border-[rgba(255,178,85,0.55)] group-hover:shadow-wv-md">
+              <div className="flex h-full flex-col gap-4 p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="text-xl font-semibold text-wv-text">Create Org</h2>
+                  <InfoTooltip label="Who should create an organization">
+                    Buy a scarce organization slot, become the accountable leader, and build a curated knowledge org
+                    for your domain.
+                  </InfoTooltip>
+                </div>
+                <p className="text-sm font-medium text-wv-amber">For domain experts — become a leader.</p>
+                <p className="text-sm text-wv-dim">
+                  Purchase an org slot, set your domain focus, and start leading contributors.
+                </p>
+                <span className="mt-auto text-sm font-medium text-wv-amber">Go to Buy An Org →</span>
+              </div>
+            </Card>
+          </Link>
+        </div>
+      )}
+
+      {isConnectedState && state !== 'CONNECTED_NO_ORG' && !success && !leaderOrg && (
         <form onSubmit={handleSubmit} data-testid="create-org-form" className="flex flex-col gap-5">
           <Card className="p-6">
             <div className="flex flex-col gap-4">
