@@ -2,10 +2,10 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectionState, WeVibeMcpClient, getMcpClient, resetMcpClient } from '@/lib/mcp-client';
-import { getOrg, getOrgChainConfig, updateOrgConfig, type RepTier } from '@/lib/hub-client';
-import { loadSettings, saveSettings, type DashboardSettings } from '@/lib/settings';
+import { getOrg, getOrgChainConfig } from '@/lib/hub-client';
+import { type DashboardSettings } from '@/lib/settings';
 import { WalletConnectButton } from '@/components/wallet-connect-button';
-import { getChainConfig, connectWallet } from '@/lib/wallet-connect';
+import { connectWallet } from '@/lib/wallet-connect';
 import { directBroadcast, type EncodeObject } from '@/lib/chain-client';
 import { relayBroadcast } from '@/lib/relay-client';
 import { getConfig } from '@/lib/config';
@@ -57,7 +57,6 @@ export default function SettingsPage() {
   const [chainConfigSuccess, setChainConfigSuccess] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);
   const [serveAttestationRequired, setServeAttestationRequired] = useState(false);
-  const [repTiers, setRepTiers] = useState<RepTier[]>([]);
 
   const attachListener = useCallback((client: WeVibeMcpClient) => {
     listenerRef.current?.();
@@ -197,7 +196,6 @@ export default function SettingsPage() {
       .then(config => {
         if (cancelled) return;
         setServeAttestationRequired(config.serve_attestation_required);
-        setRepTiers(config.rep_tiers ?? []);
       })
       .catch(err => {
         if (cancelled) return;
@@ -213,36 +211,6 @@ export default function SettingsPage() {
       cancelled = true;
     };
   }, [orgLoaded, orgInfo]);
-
-  const updateTier = useCallback((index: number, field: keyof RepTier, value: string) => {
-    setRepTiers(prev => prev.map((tier, i) => {
-      if (i !== index) return tier;
-      if (field === 'payout_per_memory') {
-        return { ...tier, payout_per_memory: value };
-      }
-      const asNumber = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
-      if (field === 'min_reputation') {
-        return { ...tier, min_reputation: asNumber };
-      }
-      if (field === 'max_reputation') {
-        return { ...tier, max_reputation: asNumber };
-      }
-      return { ...tier, max_contributions_per_epoch: asNumber };
-    }));
-  }, []);
-
-  const addTier = useCallback(() => {
-    setRepTiers(prev => [...prev, {
-      min_reputation: 0,
-      max_reputation: 0,
-      max_contributions_per_epoch: 1,
-      payout_per_memory: '1',
-    }]);
-  }, []);
-
-  const removeTier = useCallback((index: number) => {
-    setRepTiers(prev => prev.filter((_, i) => i !== index));
-  }, []);
 
   const handleConfigSave = useCallback(async () => {
     if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
@@ -286,17 +254,6 @@ export default function SettingsPage() {
     if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
       return;
     }
-    if (repTiers.length === 0) {
-      setChainConfigError('At least one rep tier is required');
-      return;
-    }
-
-    for (const tier of repTiers) {
-      if (!tier.payout_per_memory.trim()) {
-        setChainConfigError('Each rep tier requires payout per memory');
-        return;
-      }
-    }
 
     setSavingChainConfig(true);
     setChainConfigError(null);
@@ -323,7 +280,7 @@ export default function SettingsPage() {
     } finally {
       setSavingChainConfig(false);
     }
-  }, [orgLoaded, orgInfo, repTiers, serveAttestationRequired]);
+  }, [orgLoaded, orgInfo, serveAttestationRequired]);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
@@ -575,85 +532,6 @@ export default function SettingsPage() {
             />
             Require serve attestations
           </label>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-wv-text">Reputation Tiers</h3>
-            <button
-              type="button"
-              onClick={addTier}
-              disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
-              className="inline-flex items-center rounded-lg border border-wv-line-2 px-3 py-1.5 text-xs font-medium text-wv-text hover:bg-wv-line disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Add Tier
-            </button>
-          </div>
-
-          {repTiers.map((tier, idx) => (
-            <div key={idx} className="rounded-lg border border-wv-line bg-wv-panel-2 p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="text-xs font-medium text-wv-dim">Tier {idx + 1}</span>
-                <button
-                  type="button"
-                  onClick={() => removeTier(idx)}
-                  disabled={repTiers.length === 1 || chainConfigLoading || savingChainConfig || !orgLoaded}
-                  className="text-xs text-wv-red hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Remove
-                </button>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <label className="text-xs text-wv-dim">
-                  Min Reputation
-                  <input
-                    type="number"
-                    min={0}
-                    value={tier.min_reputation}
-                    onChange={event => updateTier(idx, 'min_reputation', event.target.value)}
-                    disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
-                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-2 py-1.5 text-sm text-wv-text focus:border-wv-violet focus:outline-none"
-                  />
-                </label>
-                <label className="text-xs text-wv-dim">
-                  Max Reputation
-                  <input
-                    type="number"
-                    min={0}
-                    value={tier.max_reputation}
-                    onChange={event => updateTier(idx, 'max_reputation', event.target.value)}
-                    disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
-                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-2 py-1.5 text-sm text-wv-text focus:border-wv-violet focus:outline-none"
-                  />
-                </label>
-                <label className="text-xs text-wv-dim">
-                  Max Contributions / Epoch
-                  <input
-                    type="number"
-                    min={0}
-                    value={tier.max_contributions_per_epoch}
-                    onChange={event => updateTier(idx, 'max_contributions_per_epoch', event.target.value)}
-                    disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
-                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-2 py-1.5 text-sm text-wv-text focus:border-wv-violet focus:outline-none"
-                  />
-                </label>
-                <label className="text-xs text-wv-dim">
-                  Payout / Memory
-                  <input
-                    type="text"
-                    value={tier.payout_per_memory}
-                    onChange={event => updateTier(idx, 'payout_per_memory', event.target.value)}
-                    disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
-                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-2 py-1.5 text-sm text-wv-text focus:border-wv-violet focus:outline-none"
-                  />
-                </label>
-              </div>
-            </div>
-          ))}
-
-          {repTiers.length === 0 && (
-            <p className="text-xs text-wv-dim">No rep tiers returned from chain.</p>
-          )}
         </div>
 
         <div className="mt-4 flex items-center gap-3">

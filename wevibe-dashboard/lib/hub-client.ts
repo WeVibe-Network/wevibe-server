@@ -119,19 +119,11 @@ export async function getOrgFinances(orgId: string): Promise<OrgFinances> {
   return hubFetch<OrgFinances>(`/v1/orgs/${orgId}/finances`);
 }
 
-export interface RepTier {
-  min_reputation: number;
-  max_reputation: number;
-  max_contributions_per_epoch: number;
-  payout_per_memory: string;
-}
-
 export interface OrgChainConfig {
   org_id: string;
   serve_attestation_required: boolean;
   min_contributions_per_epoch: number;
   contest_stake_uvibe: number;
-  rep_tiers: RepTier[];
 }
 
 export async function getOrgChainConfig(orgId: string): Promise<OrgChainConfig> {
@@ -139,9 +131,8 @@ export async function getOrgChainConfig(orgId: string): Promise<OrgChainConfig> 
 }
 
 // updateOrgChainConfig was removed in CO-011a.4. Category B chain config
-// (serve_attestation_required, min_contributions_per_epoch, contest_stake_vibe,
-// rep_tiers) is now broadcast directly via the relay using MsgSetOrgConfig /
-// MsgSetRepTiers. See lib/relay-client.ts.
+// (serve_attestation_required, min_contributions_per_epoch, contest_stake_vibe)
+// is now broadcast directly via the relay using MsgSetOrgConfig.
 
 export interface OrgSummary {
   org_id: string;
