@@ -231,7 +231,7 @@ The dashboard uses a React context to manage multi-org state. This is the founda
 interface MemberOrgEntry {
   org_id: string;
   org_name: string;
-  role: 'leader' | 'moderator' | 'member';
+  role: 'leader' | 'moderator' | 'member' | 'contributor';
   current_epoch: number;
   history_access_from_epoch: number;
   egress_mode: string;

@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS members (
     x25519_pubkey               TEXT        NOT NULL,
     pre_pubkey                  BYTEA,
     role                        TEXT        NOT NULL
-                                            CHECK (role IN ('leader', 'moderator', 'member')),
+                                            CHECK (role IN ('leader', 'moderator', 'member', 'contributor')),
     join_epoch                  INTEGER     NOT NULL,
     history_access_from_epoch   INTEGER     NOT NULL DEFAULT 0,
     authorized_until_epoch      INTEGER,
@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS reports (
     reporter_pubkey      TEXT        NOT NULL,
     reporter_wallet      TEXT,
     reporter_role        TEXT        NOT NULL DEFAULT 'member'
-                                     CHECK (reporter_role IN ('leader', 'moderator', 'member')),
+                                     CHECK (reporter_role IN ('leader', 'moderator', 'member', 'contributor')),
     reason               TEXT        NOT NULL CHECK (reason IN ('incorrect', 'outdated', 'security_risk', 'malicious')),
     note                 TEXT,
     status               TEXT        NOT NULL DEFAULT 'pending'

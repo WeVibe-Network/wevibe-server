@@ -16,6 +16,7 @@ const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? ''
 const ROLE_COLORS: Record<string, string> = {
   leader:    'bg-[rgba(124,92,255,0.14)] text-wv-violet',
   moderator: 'bg-[rgba(52,220,240,0.12)] text-wv-cyan',
+  contributor: 'bg-[rgba(255,178,85,0.14)] text-wv-amber',
   member:    'bg-wv-panel-2 text-wv-dim',
 }
 
@@ -31,7 +32,7 @@ export default function MembersPage() {
 
   const [invitePubkey, setInvitePubkey] = useState('')
   const [inviteX25519Pubkey, setInviteX25519Pubkey] = useState('')
-  const [inviteRole, setInviteRole] = useState<'moderator' | 'member'>('member')
+  const [inviteRole, setInviteRole] = useState<'moderator' | 'member' | 'contributor'>('member')
   const [inviteLoading, setInviteLoading] = useState(false)
   const [inviteError, setInviteError] = useState('')
   const [inviteSuccess, setInviteSuccess] = useState('')
@@ -235,11 +236,12 @@ export default function MembersPage() {
                 <select
                   data-testid="invite-role-select"
                   value={inviteRole}
-                  onChange={e => setInviteRole(e.target.value as 'moderator' | 'member')}
+                  onChange={e => setInviteRole(e.target.value as 'moderator' | 'member' | 'contributor')}
                   className="w-full bg-wv-panel-2 border border-wv-line-2 text-wv-text rounded-[11px] px-3 py-2 text-sm focus:outline-none focus:border-wv-violet"
                 >
                   <option value="member">Member</option>
                   <option value="moderator">Moderator</option>
+                  <option value="contributor">Contributor</option>
                 </select>
               </div>
             </div>
@@ -286,6 +288,7 @@ export default function MembersPage() {
                         className="rounded bg-wv-panel-2 border border-wv-line-2 text-wv-text px-2 py-1 text-xs focus:outline-none focus:border-wv-violet"
                       >
                         <option value="moderator">Moderator</option>
+                        <option value="contributor">Contributor</option>
                         <option value="member">Member</option>
                       </select>
                     ) : (

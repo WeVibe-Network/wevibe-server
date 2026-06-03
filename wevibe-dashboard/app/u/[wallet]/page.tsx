@@ -28,6 +28,8 @@ export default async function PublicProfilePage({ params }: PageProps) {
         return 'border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.14)] text-wv-violet';
       case 'moderator':
         return 'border border-wv-cyan bg-[rgba(52,220,240,0.12)] text-wv-cyan';
+      case 'contributor':
+        return 'border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.14)] text-wv-amber';
       default:
         return 'border border-wv-line bg-wv-panel-2 text-wv-dim';
     }

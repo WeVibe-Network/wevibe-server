@@ -49,6 +49,19 @@ export const TEST_MEMBERS = [
     joined_at: '2026-01-03T00:00:00Z',
     wallet_address: 'wevibe1member00000000000000000000',
   },
+  {
+    org_id: 'test-org-1',
+    pubkey: 'contrib-pubkey-mnop3456',
+    x25519_pubkey: 'x25519-contrib-key',
+    display_name: 'Contributor Test User',
+    role: 'contributor',
+    join_epoch: 1,
+    history_access_from_epoch: 1,
+    authorized_until_epoch: null,
+    active: true,
+    joined_at: '2026-01-04T00:00:00Z',
+    wallet_address: 'wevibe1contrib0000000000000000000',
+  },
 ];
 
 export const TEST_KEYWORDS = [
