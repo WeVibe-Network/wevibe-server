@@ -160,6 +160,7 @@ services:
     environment:
       SOCIAL_GRAPH_DB_PATH: /data/social-graph.db
       SOCIAL_GRAPH_PORT: "4470"
+      CHAIN_REST_URL: "http://wevibe-chain:1317"
     ports:
       - "4470:4470"
     volumes:
