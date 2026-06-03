@@ -4,6 +4,7 @@ export interface WevibeConfig {
   chainId: string;
   chainRpc: string;
   chainRest: string;
+  socialGraphUrl: string;
   bech32Prefix: string;
   coinDenom: string;
   coinMinDenom: string;
@@ -17,6 +18,7 @@ const DEFAULT_CONFIG: WevibeConfig = {
   chainId: 'wevibe-local-1',
   chainRpc: 'http://localhost:26657',
   chainRest: 'http://localhost:1317',
+  socialGraphUrl: 'http://localhost:4470',
   bech32Prefix: 'wevibe',
   coinDenom: 'VIBE',
   coinMinDenom: 'uvibe',
@@ -29,6 +31,7 @@ export function readConfigFromEnv(): WevibeConfig {
     chainId: process.env.WEVIBE_CHAIN_ID ?? DEFAULT_CONFIG.chainId,
     chainRpc: process.env.WEVIBE_CHAIN_RPC ?? DEFAULT_CONFIG.chainRpc,
     chainRest: process.env.WEVIBE_CHAIN_REST ?? DEFAULT_CONFIG.chainRest,
+    socialGraphUrl: process.env.WEVIBE_SOCIAL_GRAPH_URL ?? DEFAULT_CONFIG.socialGraphUrl,
     bech32Prefix: process.env.WEVIBE_BECH32_PREFIX ?? DEFAULT_CONFIG.bech32Prefix,
     coinDenom: process.env.WEVIBE_COIN_DENOM ?? DEFAULT_CONFIG.coinDenom,
     coinMinDenom: process.env.WEVIBE_COIN_MIN_DENOM ?? DEFAULT_CONFIG.coinMinDenom,

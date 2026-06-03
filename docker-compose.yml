@@ -208,6 +208,7 @@ services:
       WEVIBE_MCP_URL: http://localhost:4450
       WEVIBE_CHAIN_RPC: http://localhost:26657
       WEVIBE_CHAIN_REST: http://localhost:1317
+      WEVIBE_SOCIAL_GRAPH_URL: http://localhost:4470
       WEVIBE_CHAIN_ID: wevibe-local-1
       WEVIBE_BECH32_PREFIX: wevibe
       WEVIBE_COIN_DENOM: VIBE
