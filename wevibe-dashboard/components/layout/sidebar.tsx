@@ -1,7 +1,6 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
 import { useOrgContext } from '@/lib/org-context';
 import type { OrgRole } from '@/lib/org-role';
 
@@ -32,12 +31,8 @@ const orgNav: { href: string; label: string; roles: OrgRole[] }[] = [
 
 export default function Sidebar() {
   const path = usePathname();
-  const { activeOrg } = useOrgContext();
-  const [showCreateOrg, setShowCreateOrg] = useState(false);
-
-  useEffect(() => {
-    setShowCreateOrg(!process.env.NEXT_PUBLIC_ORG_ID);
-  }, []);
+  const { activeOrg, orgs, loading } = useOrgContext();
+  const showCreateOrg = !loading && orgs.length === 0;
 
   const userRole: OrgRole = activeOrg?.role || 'member';
   const hasOrg = !!activeOrg;

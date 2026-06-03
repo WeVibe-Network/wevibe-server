@@ -1,9 +1,8 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { getOrg, getEpochManifest, rotateEpoch, type OrgSummary } from '@/lib/hub-client';
+import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
-
-const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
 interface EpochHistoryEntry {
   epoch_id: number;
@@ -13,6 +12,9 @@ interface EpochHistoryEntry {
 }
 
 export default function EpochPage() {
+  const { activeOrg } = useOrgContext();
+  const orgId = activeOrg?.org_id ?? '';
+
   const [org, setOrg] = useState<OrgSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -24,10 +26,14 @@ export default function EpochPage() {
   const [manifest, setManifest] = useState<{ pk_mod: string; signed_by: string; created_at: string } | null>(null);
 
   async function loadOrg() {
+    if (!orgId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const data = await getOrg(ORG_ID);
+      const data = await getOrg(orgId);
       setOrg(data);
     } catch (e) {
       setError((e as Error).message);
@@ -37,30 +43,31 @@ export default function EpochPage() {
   }
 
   async function loadCurrentManifest() {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     try {
-      const m = await getEpochManifest(ORG_ID, 'current');
+      const m = await getEpochManifest(orgId, 'current');
       setManifest(m);
     } catch {
     }
   }
 
   useEffect(() => {
-    if (!ORG_ID) {
+    if (!orgId) {
       setLoading(false);
       return;
     }
     void loadOrg().then(() => {
       void loadCurrentManifest();
     });
-  }, []);
+  }, [orgId]);
 
   const handleRotate = useCallback(async () => {
+    if (!orgId) return;
     setRotateLoading(true);
     setRotateError('');
     setRotateSuccess('');
     try {
-      await rotateEpoch(ORG_ID);
+      await rotateEpoch(orgId);
       setRotateSuccess('Epoch rotation initiated successfully');
       await loadOrg();
     } catch (err) {
@@ -68,7 +75,7 @@ export default function EpochPage() {
     } finally {
       setRotateLoading(false);
     }
-  }, []);
+  }, [orgId]);
 
   if (loading) {
     return (
@@ -88,6 +95,19 @@ export default function EpochPage() {
           <h1 className="text-3xl font-semibold tracking-tight">Epochs</h1>
         </header>
         <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">{error}</div>
+      </div>
+    );
+  }
+
+  if (!orgId) {
+    return (
+      <div className="mx-auto flex max-w-4xl flex-col gap-8">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight">Epochs</h1>
+        </header>
+        <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+          No organization selected. Please select an organization first.
+        </div>
       </div>
     );
   }

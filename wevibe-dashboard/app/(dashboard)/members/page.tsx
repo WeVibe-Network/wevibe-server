@@ -7,11 +7,10 @@ import { relayBroadcast } from '@/lib/relay-client'
 import { connectWallet } from '@/lib/wallet-connect'
 import type { EncodeObject } from '@/lib/chain-client'
 import type { OrgRole } from '@/lib/org-role'
+import { useOrgContext } from '@/lib/org-context'
 import Button from '@/components/ui/button'
 import Card from '@/components/ui/card'
 import ClientTime from '@/components/ui/client-time'
-
-const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? ''
 
 const ROLE_COLORS: Record<string, string> = {
   leader:    'bg-[rgba(124,92,255,0.14)] text-wv-violet',
@@ -24,6 +23,8 @@ type ViewerRole = OrgRole
 
 export default function MembersPage() {
   const router = useRouter()
+  const { activeOrg } = useOrgContext()
+  const orgId = activeOrg?.org_id ?? ''
   const [members, setMembers] = useState<MemberRecord[]>([])
   const [viewerPubkey, setViewerPubkey] = useState<string>('')
   const [viewerRole, setViewerRole] = useState<ViewerRole>('member')
@@ -53,7 +54,7 @@ export default function MembersPage() {
     setLoading(true)
     setError('')
     try {
-      const data = await listMembers(ORG_ID)
+      const data = await listMembers(orgId)
       setMembers(data ?? [])
     } catch (e) {
       setError((e as Error).message)
@@ -63,7 +64,7 @@ export default function MembersPage() {
   }
 
   useEffect(() => {
-    if (!ORG_ID) { setLoading(false); return }
+    if (!orgId) { setLoading(false); return }
     ;(async () => {
       const id = await getIdentity()
       if (!id) {
@@ -77,7 +78,7 @@ export default function MembersPage() {
       setError((err as Error).message)
       setLoading(false)
     })
-  }, [router])
+  }, [orgId, router])
 
   useEffect(() => {
     if (members.length > 0 && viewerPubkey) {
@@ -99,12 +100,12 @@ export default function MembersPage() {
         typeUrl: '/wevibe.org.v1.MsgAddMember',
         value: Buffer.from(JSON.stringify({
           signer: walletConn.address,
-          org_id: ORG_ID,
+          org_id: orgId,
           pubkey: invitePubkey,
           role: inviteRole,
         })),
       } as unknown as EncodeObject;
-      await relayBroadcast(ORG_ID, walletConn.address, [msgAddMember])
+      await relayBroadcast(orgId, walletConn.address, [msgAddMember])
       setInviteSuccess(`Invited ${invitePubkey.slice(0, 12)}... as ${inviteRole}`)
       setInvitePubkey('')
       setInviteX25519Pubkey('')
@@ -125,12 +126,12 @@ export default function MembersPage() {
         typeUrl: '/wevibe.org.v1.MsgUpdateMemberRole',
         value: Buffer.from(JSON.stringify({
           signer: walletConn.address,
-          org_id: ORG_ID,
+          org_id: orgId,
           pubkey,
           new_role: newRole,
         })),
       } as unknown as EncodeObject;
-      await relayBroadcast(ORG_ID, walletConn.address, [msgUpdateMemberRole])
+      await relayBroadcast(orgId, walletConn.address, [msgUpdateMemberRole])
       setRoleChangeTarget(null)
       await refreshMembers()
     } catch (err) {
@@ -148,11 +149,11 @@ export default function MembersPage() {
         typeUrl: '/wevibe.org.v1.MsgRemoveMember',
         value: Buffer.from(JSON.stringify({
           signer: walletConn.address,
-          org_id: ORG_ID,
+          org_id: orgId,
           pubkey,
         })),
       } as unknown as EncodeObject;
-      await relayBroadcast(ORG_ID, walletConn.address, [msgRemoveMember])
+      await relayBroadcast(orgId, walletConn.address, [msgRemoveMember])
       setRemoveTarget(null)
       await refreshMembers()
     } catch (err) {
@@ -165,7 +166,7 @@ export default function MembersPage() {
   async function handleTransfer(pubkey: string) {
     setTransferLoading(true)
     try {
-      await transferLeadership(ORG_ID, pubkey)
+      await transferLeadership(orgId, pubkey)
       setTransferTarget(null)
       await refreshMembers()
     } catch (err) {
@@ -178,7 +179,7 @@ export default function MembersPage() {
   async function handleCloseOrg() {
     setCloseLoading(true)
     try {
-      await closeOrg(ORG_ID)
+      await closeOrg(orgId)
       setCloseDialogOpen(false)
       await refreshMembers()
     } catch (err) {
@@ -188,11 +189,11 @@ export default function MembersPage() {
     }
   }
 
-  if (!ORG_ID) return (
+  if (!orgId) return (
     <div>
       <h1 className="text-2xl font-semibold mb-4">Members</h1>
       <p className="text-sm text-wv-amber bg-[rgba(255,178,85,0.12)] border border-[rgba(255,178,85,0.4)] rounded-lg p-4">
-        Set <code>NEXT_PUBLIC_ORG_ID</code> in <code>.env.local</code>.
+        No organization selected. Please select an organization first.
       </p>
     </div>
   )

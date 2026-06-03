@@ -8,11 +8,13 @@ import {
   deprecateKeyword,
   type KeywordRecord,
 } from '@/lib/hub-client';
+import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
 
-const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
-
 export default function KeywordsPage() {
+  const { activeOrg } = useOrgContext();
+  const orgId = activeOrg?.org_id ?? '';
+
   const [keywords, setKeywords] = useState<KeywordRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -37,10 +39,14 @@ export default function KeywordsPage() {
   const [deprecateLoading, setDeprecateLoading] = useState(false);
 
   async function refreshKeywords() {
+    if (!orgId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const data = await listKeywords(ORG_ID);
+      const data = await listKeywords(orgId);
       setKeywords(data ?? []);
     } catch (e) {
       setError((e as Error).message);
@@ -50,12 +56,12 @@ export default function KeywordsPage() {
   }
 
   useEffect(() => {
-    if (!ORG_ID) {
+    if (!orgId) {
       setLoading(false);
       return;
     }
-    refreshKeywords();
-  }, []);
+    void refreshKeywords();
+  }, [orgId]);
 
   const handleAdd = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,7 +70,7 @@ export default function KeywordsPage() {
     setAddError('');
     setAddSuccess('');
     try {
-      await addKeyword(ORG_ID, newKeyword.trim());
+      await addKeyword(orgId, newKeyword.trim());
       setAddSuccess(`Keyword "${newKeyword.trim()}" added`);
       setNewKeyword('');
       await refreshKeywords();
@@ -73,7 +79,7 @@ export default function KeywordsPage() {
     } finally {
       setAddLoading(false);
     }
-  }, [newKeyword]);
+  }, [newKeyword, orgId]);
 
   const handleMerge = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,7 +88,7 @@ export default function KeywordsPage() {
     setMergeError('');
     setMergeSuccess('');
     try {
-      await mergeKeywords(ORG_ID, mergeSource.trim(), mergeTarget.trim());
+      await mergeKeywords(orgId, mergeSource.trim(), mergeTarget.trim());
       setMergeSuccess(`Merged "${mergeSource.trim()}" into "${mergeTarget.trim()}"`);
       setMergeSource('');
       setMergeTarget('');
@@ -92,7 +98,7 @@ export default function KeywordsPage() {
     } finally {
       setMergeLoading(false);
     }
-  }, [mergeSource, mergeTarget]);
+  }, [mergeSource, mergeTarget, orgId]);
 
   const handleRename = useCallback(async (oldName: string) => {
     if (!renameValue.trim() || renameValue.trim() === oldName) {
@@ -102,7 +108,7 @@ export default function KeywordsPage() {
     setRenameLoading(true);
     setRenameError('');
     try {
-      await renameKeyword(ORG_ID, oldName, renameValue.trim());
+      await renameKeyword(orgId, oldName, renameValue.trim());
       setRenameTarget(null);
       setRenameValue('');
       await refreshKeywords();
@@ -111,12 +117,12 @@ export default function KeywordsPage() {
     } finally {
       setRenameLoading(false);
     }
-  }, [renameValue]);
+  }, [renameValue, orgId]);
 
   const handleDeprecate = useCallback(async (keyword: string) => {
     setDeprecateLoading(true);
     try {
-      await deprecateKeyword(ORG_ID, keyword);
+      await deprecateKeyword(orgId, keyword);
       setDeprecateTarget(null);
       await refreshKeywords();
     } catch (err) {
@@ -124,7 +130,23 @@ export default function KeywordsPage() {
     } finally {
       setDeprecateLoading(false);
     }
-  }, []);
+  }, [orgId]);
+
+  if (!orgId) {
+    return (
+      <div className="mx-auto flex max-w-4xl flex-col gap-8">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight">Keywords</h1>
+          <p className="text-sm text-wv-dim">
+            Manage your org&apos;s keyword vocabulary for memory classification and retrieval.
+          </p>
+        </header>
+        <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+          No organization selected. Please select an organization first.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-8">

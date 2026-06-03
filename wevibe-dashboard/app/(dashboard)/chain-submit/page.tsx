@@ -24,8 +24,7 @@ import {
 } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
 import { getConfig } from '@/lib/config';
-
-const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
+import { useOrgContext } from '@/lib/org-context';
 
 type MemoryKeywordResult = {
   submission_hash: string;
@@ -41,6 +40,9 @@ function hexToBytes(hex: string): Uint8Array {
 }
 
 export default function ChainSubmitPage() {
+  const { activeOrg } = useOrgContext();
+  const orgId = activeOrg?.org_id ?? '';
+
   const [orgHealth, setOrgHealth] = useState<OrgHealth | null>(null);
   const [pendingKeyword, setPendingKeyword] = useState<Submission[]>([]);
   const [reviewKeywords, setReviewKeywords] = useState<Submission[]>([]);
@@ -59,24 +61,24 @@ export default function ChainSubmitPage() {
   const clientRef = { current: getMcpClient() };
 
   const loadAll = useCallback(async () => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     setLoading(true);
     setError(null);
     try {
       const HUB_URL = getConfig().hubUrl;
       const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
       const [health, pk, rk, pc] = await Promise.all([
-        getOrgHealth(ORG_ID),
-        getSubmissionsByStatus(ORG_ID, 'pending_keyword'),
-        getSubmissionsByStatus(ORG_ID, 'pending_keyword'),
-        getSubmissionsByStatus(ORG_ID, 'pending_chain'),
+        getOrgHealth(orgId),
+        getSubmissionsByStatus(orgId, 'pending_keyword'),
+        getSubmissionsByStatus(orgId, 'pending_keyword'),
+        getSubmissionsByStatus(orgId, 'pending_chain'),
       ]);
       setOrgHealth(health);
       const reviewable = rk.filter(s => s.extraction_result && s.extraction_result.length > 0);
       setPendingKeyword(pk.filter(s => !s.extraction_result || s.extraction_result.length === 0));
       setReviewKeywords(reviewable);
       setPendingChain(pc);
-      const denialCountRes = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}/denials/pending-count`, { headers: authHeaders });
+      const denialCountRes = await fetch(`${HUB_URL}/v1/orgs/${orgId}/denials/pending-count`, { headers: authHeaders });
       if (denialCountRes.ok) {
         const data = await denialCountRes.json();
         setPendingDenialCount(data.pending_count ?? 0);
@@ -86,7 +88,7 @@ export default function ChainSubmitPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [orgId]);
 
   useEffect(() => {
     setClientState(getMcpClient().state);
@@ -94,13 +96,14 @@ export default function ChainSubmitPage() {
   }, []);
 
   useEffect(() => {
+    if (!orgId) return;
     if (clientState === 'connected') {
       void loadAll();
     }
-  }, [clientState, loadAll]);
+  }, [clientState, loadAll, orgId]);
 
   const runKeywordExtraction = useCallback(async () => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     const client = getMcpClient();
     if (client.state !== 'connected') {
       setError('Connect to the MCP server to run keyword extraction.');
@@ -126,7 +129,7 @@ export default function ChainSubmitPage() {
           submission_hash: s.submission_hash,
           classified: result.results[i]?.classified ?? [],
         }));
-        await submitKeywordResults(ORG_ID, mapped);
+        await submitKeywordResults(orgId, mapped);
         setNotice(`Keyword extraction complete for ${mapped.length} memories.`);
       } else {
         setNotice('No keywords extracted.');
@@ -138,10 +141,10 @@ export default function ChainSubmitPage() {
     } finally {
       setBusy(null);
     }
-  }, [pendingKeyword, reviewKeywords, loadAll]);
+  }, [pendingKeyword, reviewKeywords, loadAll, orgId]);
 
   const handleVerifyAll = useCallback(async () => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     if (reviewKeywords.length === 0) return;
 
     setBusy('verify');
@@ -150,7 +153,7 @@ export default function ChainSubmitPage() {
 
     try {
       const hashes = reviewKeywords.map(s => s.submission_hash);
-      const results = await verifyKeywords(ORG_ID, hashes);
+      const results = await verifyKeywords(orgId, hashes);
       setVerifyResults(results);
       const allPassed = results.every(r => r.passed);
       if (allPassed) {
@@ -164,10 +167,10 @@ export default function ChainSubmitPage() {
     } finally {
       setBusy(null);
     }
-  }, [reviewKeywords, loadAll]);
+  }, [reviewKeywords, loadAll, orgId]);
 
   const handleRerun = useCallback(async (hash: string) => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     const feedback = window.prompt('Provide feedback for rerun:');
     if (!feedback) return;
 
@@ -175,7 +178,7 @@ export default function ChainSubmitPage() {
     setError(null);
 
     try {
-      await rerunKeywords(ORG_ID, hash, feedback);
+      await rerunKeywords(orgId, hash, feedback);
       setNotice(`Rerun requested for ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
@@ -183,32 +186,32 @@ export default function ChainSubmitPage() {
     } finally {
       setBusy(null);
     }
-  }, [loadAll]);
+  }, [loadAll, orgId]);
 
   const handleUpdateKeywords = useCallback(async (hash: string, current: KeywordWeight[]) => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     const input = window.prompt('Enter keywords as JSON array [{"keyword":"term","weight":0.9}]:', JSON.stringify(current));
     if (!input) return;
 
     try {
       const parsed = JSON.parse(input) as KeywordWeight[];
-      await updateKeywords(ORG_ID, hash, parsed);
+      await updateKeywords(orgId, hash, parsed);
       setNotice(`Keywords updated for ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
       setError((err as Error).message);
     }
-  }, [loadAll]);
+  }, [loadAll, orgId]);
 
   const handleRemove = useCallback(async (hash: string) => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     if (!window.confirm(`Remove submission ${hash.slice(0, 12)}…? This cannot be undone.`)) return;
 
     setBusy(hash);
     setError(null);
 
     try {
-      await removeSubmission(ORG_ID, hash);
+      await removeSubmission(orgId, hash);
       setNotice(`Removed ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
@@ -216,10 +219,10 @@ export default function ChainSubmitPage() {
     } finally {
       setBusy(null);
     }
-  }, [loadAll]);
+  }, [loadAll, orgId]);
 
   const handleSubmitBatch = useCallback(async () => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     if (pendingChain.length === 0) return;
 
     const { connectWallet } = await import('@/lib/wallet-connect');
@@ -236,7 +239,7 @@ export default function ChainSubmitPage() {
     setNotice(null);
 
     try {
-      const prepared = await prepareBatchSubmit(ORG_ID);
+      const prepared = await prepareBatchSubmit(orgId);
       if (!prepared.batch || prepared.batch.length === 0) {
         setNotice('No pending serves to submit');
         setBusy(null);
@@ -247,7 +250,7 @@ export default function ChainSubmitPage() {
         const contentHash = hexToBytes(entry.submission_hash);
         const commitment = buildSubmitCommitmentMsg(
           walletAddress,
-          ORG_ID,
+          orgId,
           contentHash,
           entry.keywords.map((keyword) => ({ keyword, weight: '1.0' })),
           entry.contributor_pubkey,
@@ -256,7 +259,7 @@ export default function ChainSubmitPage() {
         );
         const approval = buildApproveMemoryMsg(
           walletAddress,
-          ORG_ID,
+          orgId,
           contentHash,
           hexToBytes(entry.encrypted_blob),
           entry.committing_leader,
@@ -270,7 +273,7 @@ export default function ChainSubmitPage() {
         return [commitment, approval];
       });
 
-      const txHash = await relayOrgDecision(ORG_ID, msgs);
+      const txHash = await relayOrgDecision(orgId, msgs);
 
       if (txHash) {
         setTxResult({ tx_hash: txHash, committed_count: prepared.batch.length });
@@ -283,9 +286,10 @@ export default function ChainSubmitPage() {
     } finally {
       setBusy(null);
     }
-  }, [ORG_ID, pendingChain]);
+  }, [orgId, pendingChain]);
 
   const handleDenialBatchSubmit = useCallback(async () => {
+    if (!orgId) return;
     const HUB_URL = getConfig().hubUrl;
     const { connectWallet } = await import('@/lib/wallet-connect');
     const walletConnection = await connectWallet().catch(() => null);
@@ -298,20 +302,20 @@ export default function ChainSubmitPage() {
     setDenialResult(null);
     try {
       const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
-      const listRes = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}/denials/pending`, { headers: authHeaders });
+      const listRes = await fetch(`${HUB_URL}/v1/orgs/${orgId}/denials/pending`, { headers: authHeaders });
       if (!listRes.ok) throw new Error(`Failed to fetch pending denials: ${listRes.status}`);
       const listData = await listRes.json();
       if (!listData.denials || listData.denials.length === 0) {
         setDenialResult({ error: 'No pending denials to submit' });
         return;
       }
-      const epochResp = await fetch(`${HUB_URL}/v1/orgs/${ORG_ID}`, { headers: authHeaders });
+      const epochResp = await fetch(`${HUB_URL}/v1/orgs/${orgId}`, { headers: authHeaders });
       const epochData = await epochResp.json() as { current_epoch?: number };
       const epoch = epochData.current_epoch ?? 0;
       const { directBroadcast } = await import('@/lib/chain-client');
       const msg = buildDenialBatchMsg(
         walletAddress,
-        ORG_ID,
+        orgId,
         epoch,
         listData.denials.map((d: { nullifier: string; memory_hash: string; deny_key?: string; reason?: string }) => ({
           nullifier: d.nullifier,
@@ -332,7 +336,23 @@ export default function ChainSubmitPage() {
     } finally {
       setDenialSubmitting(false);
     }
-  }, []);
+  }, [orgId]);
+
+  if (!orgId) {
+    return (
+      <div className="mx-auto flex max-w-5xl flex-col gap-6">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight">Batch Pipeline</h1>
+          <p className="text-sm text-wv-dim">
+            Keyword extraction → Review → Chain submission
+          </p>
+        </header>
+        <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
+          No organization selected. Please select an organization first.
+        </div>
+      </div>
+    );
+  }
 
   if (clientState !== 'connected') {
     return (

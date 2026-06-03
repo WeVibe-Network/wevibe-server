@@ -11,9 +11,8 @@ import {
 } from '@/lib/hub-client';
 import { buildReportMemoryMsg, relayOrgDecision } from '@/lib/chain-client';
 import { connectWallet } from '@/lib/wallet-connect';
+import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
-
-const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
 type TabValue = 'all' | 'pending' | 'upheld_pending_tx' | 'upheld' | 'dismissed';
 
@@ -66,6 +65,8 @@ function statusTone(status: string): string {
 
 export default function ReportsPage() {
   const router = useRouter();
+  const { activeOrg } = useOrgContext();
+  const orgId = activeOrg?.org_id ?? '';
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(false);
@@ -77,21 +78,21 @@ export default function ReportsPage() {
   const statusFilter = useMemo(() => (activeTab === 'all' ? undefined : activeTab), [activeTab]);
 
   const refreshReports = useCallback(async () => {
-    if (!ORG_ID || !identityReady) return;
+    if (!orgId || !identityReady) return;
     setLoading(true);
     setError(null);
     try {
-      const response = await listReports(ORG_ID, statusFilter, 100, 0);
+      const response = await listReports(orgId, statusFilter, 100, 0);
       setReports(response.reports ?? []);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [identityReady, statusFilter]);
+  }, [identityReady, orgId, statusFilter]);
 
   useEffect(() => {
-    if (!ORG_ID) return;
+    if (!orgId) return;
     (async () => {
       const id = await getIdentity();
       if (!id) {
@@ -100,12 +101,16 @@ export default function ReportsPage() {
       }
       setIdentityReady(true);
     })().catch((err) => setError((err as Error).message));
-  }, [router]);
+  }, [orgId, router]);
 
   useEffect(() => {
+    if (!orgId) {
+      setLoading(false);
+      return;
+    }
     if (!identityReady) return;
     void refreshReports();
-  }, [identityReady, refreshReports]);
+  }, [orgId, identityReady, refreshReports]);
 
   const handleCopy = useCallback(async (cid: string) => {
     try {
@@ -119,7 +124,7 @@ export default function ReportsPage() {
 
 const handleAction = useCallback(
     async (report: Report, action: ReportAction) => {
-      if (!ORG_ID) return;
+      if (!orgId) return;
       const confirmMessage = ACTION_CONFIRMATION[action];
       if (confirmMessage && !window.confirm(confirmMessage)) {
         return;
@@ -129,7 +134,7 @@ const handleAction = useCallback(
       setError(null);
       setNotice(null);
       try {
-        await updateReport(ORG_ID, report.id, action);
+        await updateReport(orgId, report.id, action);
         const successCopy = SUCCESS_MESSAGES[action] ?? 'Report updated';
         setNotice(`${successCopy} ${shortCid(report.memory_cid)}.`);
         await refreshReports();
@@ -139,12 +144,12 @@ const handleAction = useCallback(
         setBusy(null);
       }
     },
-    [refreshReports],
+    [orgId, refreshReports],
   );
 
   const handleCommitReport = useCallback(
     async (report: Report, reason: string) => {
-      if (!ORG_ID) return;
+      if (!orgId) return;
       if (reason.length > 500) {
         setError('Reason must be 500 characters or fewer');
         return;
@@ -164,7 +169,7 @@ const handleAction = useCallback(
         const contentHash = Uint8Array.from(Buffer.from(report.memory_cid, 'hex'));
         const msgReportMemory = buildReportMemoryMsg({
           signer: walletConn.address,
-          orgId: ORG_ID,
+          orgId,
           contentHash,
           contributorPubkey: report.reporter_pubkey,
           approvingModerators: [],
@@ -173,7 +178,7 @@ const handleAction = useCallback(
           reason,
         });
 
-        const txHash = await relayOrgDecision(ORG_ID, [msgReportMemory]);
+        const txHash = await relayOrgDecision(orgId, [msgReportMemory]);
         setNotice(`Report committed to chain. TX: ${txHash.slice(0, 12)}...`);
         await refreshReports();
       } catch (err) {
@@ -182,16 +187,16 @@ const handleAction = useCallback(
         setBusy(null);
       }
     },
-    [refreshReports],
+    [orgId, refreshReports],
   );
 
-  if (!ORG_ID) {
+  if (!orgId) {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-4">
         <header className="space-y-2">
           <h1 className="text-3xl font-semibold tracking-tight">Memory Reports</h1>
           <p className="text-sm text-wv-amber">
-            Set <code>NEXT_PUBLIC_ORG_ID</code> in <code>.env.local</code> to query the hub report queue.
+            No organization selected. Please select an organization first.
           </p>
         </header>
       </div>

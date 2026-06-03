@@ -5,6 +5,7 @@ import { listJoinRequests, approveJoinRequest, denyJoinRequest, JoinRequest } fr
 import { relayBroadcast } from '@/lib/relay-client';
 import { connectWallet } from '@/lib/wallet-connect';
 import type { EncodeObject } from '@/lib/chain-client';
+import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
 
 function truncatePubkey(pubkey: string): string {
@@ -14,6 +15,8 @@ function truncatePubkey(pubkey: string): string {
 }
 
 export default function JoinRequestsPage() {
+  const { activeOrg } = useOrgContext();
+  const orgId = activeOrg?.org_id ?? '';
   const [requests, setRequests] = useState<JoinRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'pending' | 'approved' | 'denied' | 'all'>('pending');
@@ -21,8 +24,6 @@ export default function JoinRequestsPage() {
   const [denyingId, setDenyingId] = useState<string | null>(null);
   const [denialReason, setDenialReason] = useState('');
   const [approvalMode, setApprovalMode] = useState<Record<string, 'full' | 'trial'>>({});
-
-  const orgId = typeof window !== 'undefined' ? (window as unknown as { __NEXT_PUBLIC_ORG_ID?: string }).__NEXT_PUBLIC_ORG_ID : '';
 
   useEffect(() => {
     if (!orgId) {

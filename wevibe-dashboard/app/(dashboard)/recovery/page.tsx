@@ -1,13 +1,15 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { getRecoveryShare, storeRecoveryShares, type RecoveryShareEntry } from '@/lib/hub-client';
+import { useOrgContext } from '@/lib/org-context';
 import { getIdentity } from '@/lib/wevibe-auth';
-
-const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
 const MAX_SHARES = 3;
 
 export default function RecoveryPage() {
+  const { activeOrg } = useOrgContext();
+  const orgId = activeOrg?.org_id ?? '';
+
   const [shares, setShares] = useState<RecoveryShareEntry[]>([]);
   const [storedCount, setStoredCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -25,6 +27,10 @@ export default function RecoveryPage() {
   const [retrievedShare, setRetrievedShare] = useState<{ share_index: number; sealed_share: string; holder_pubkey: string } | null>(null);
 
   async function loadShares() {
+    if (!orgId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -33,7 +39,7 @@ export default function RecoveryPage() {
         setError('No identity found');
         return;
       }
-      const share = await getRecoveryShare(ORG_ID);
+      const share = await getRecoveryShare(orgId);
       if (share) {
         setRetrievedShare({
           share_index: share.share_index,
@@ -63,12 +69,12 @@ export default function RecoveryPage() {
   }
 
   useEffect(() => {
-    if (!ORG_ID) {
+    if (!orgId) {
       setLoading(false);
       return;
     }
     void loadShares();
-  }, []);
+  }, [orgId]);
 
   const handleSave = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,7 +102,7 @@ export default function RecoveryPage() {
         setSaveError('At least one share is required');
         return;
       }
-      await storeRecoveryShares(ORG_ID, shareEntries);
+      await storeRecoveryShares(orgId, shareEntries);
       setSaveSuccess(`Stored ${shareEntries.length} share(s)`);
       setSlot0('');
       setSlot1('');
@@ -107,7 +113,7 @@ export default function RecoveryPage() {
     } finally {
       setSaveLoading(false);
     }
-  }, [slot0, slot1, slot2]);
+  }, [slot0, slot1, slot2, orgId]);
 
   const handleRetrieve = useCallback(async () => {
     setRetrieveLoading(true);
@@ -119,7 +125,7 @@ export default function RecoveryPage() {
         setRetrieveError('No identity found');
         return;
       }
-      const share = await getRecoveryShare(ORG_ID);
+      const share = await getRecoveryShare(orgId);
       if (share) {
         setRetrievedShare({
           share_index: share.share_index,
@@ -134,7 +140,23 @@ export default function RecoveryPage() {
     } finally {
       setRetrieveLoading(false);
     }
-  }, []);
+  }, [orgId]);
+
+  if (!orgId) {
+    return (
+      <div className="mx-auto flex max-w-3xl flex-col gap-8">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight">Recovery Shares</h1>
+          <p className="text-sm text-wv-dim">
+            Shamir secret sharing for org key recovery. Store up to {MAX_SHARES} shares with trusted holders.
+          </p>
+        </header>
+        <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+          No organization selected. Please select an organization first.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
