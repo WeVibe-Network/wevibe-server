@@ -87,6 +87,11 @@ export default function OrgDetailPage({ params }: PageProps) {
           </div>
 
           <div>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Domain of Expertise</h3>
+            <p className="text-wv-text text-sm">{org.domain}</p>
+          </div>
+
+          <div>
             <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Leader</h3>
             <p className="text-wv-text font-mono text-sm">{truncatePubkey(org.leader_pubkey)}</p>
           </div>

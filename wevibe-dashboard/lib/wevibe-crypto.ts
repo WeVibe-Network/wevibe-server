@@ -24,7 +24,6 @@ export interface IdentityBundle {
 }
 
 export interface BuildOrgSetupArgs {
-  orgId: string;
   orgName: string;
   domain: string;
   leaderEd25519PubHex: string;
@@ -33,7 +32,6 @@ export interface BuildOrgSetupArgs {
 }
 
 export interface BuildOrgSetupPayload {
-  org_id: string;
   leader_pubkey: string;
   leader_x25519_pubkey: string;
   leader_wallet: string;
@@ -189,7 +187,6 @@ export async function buildOrgSetup(args: BuildOrgSetupArgs): Promise<BuildOrgSe
     const leaderX25519Pubkey = bytesToHex(x25519Keys.pub);
 
     const canonical = await createOrgCanonical(
-      args.orgId,
       leaderPubkey,
       leaderX25519Pubkey,
       args.orgName,
@@ -206,7 +203,6 @@ export async function buildOrgSetup(args: BuildOrgSetupArgs): Promise<BuildOrgSe
 
     return {
       payload: {
-        org_id: args.orgId,
         leader_pubkey: leaderPubkey,
         leader_x25519_pubkey: leaderX25519Pubkey,
         leader_wallet: args.leaderWallet,

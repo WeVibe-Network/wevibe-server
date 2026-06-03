@@ -10,7 +10,6 @@ import { useOrgContext } from '@/lib/org-context';
 import { getIdentity, getWalletAddress } from '@/lib/wevibe-auth';
 import { buildOrgSetup } from '@/lib/wevibe-crypto';
 
-const ORG_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ONE_ORG_GATE_COPY = 'Only one organization per account is allowed.';
 const ONE_ORG_GATE_ERROR = 'You already own an organization. Only one organization per account is allowed.';
 
@@ -39,7 +38,6 @@ function isLeaderOwnershipConflict(err: unknown): boolean {
 export default function CreateOrgPage() {
   const router = useRouter();
   const { orgs, loading: orgsLoading } = useOrgContext();
-  const [orgId, setOrgId] = useState('');
   const [orgName, setOrgName] = useState('');
   const [domain, setDomain] = useState('');
   const [identityLoaded, setIdentityLoaded] = useState(false);
@@ -94,24 +92,15 @@ export default function CreateOrgPage() {
       return;
     }
 
-    const orgIdValue = orgId.trim();
     const orgNameValue = orgName.trim();
     const domainValue = domain.trim();
 
-    if (!orgIdValue) {
-      setError('Org ID is required');
-      return;
-    }
-    if (!ORG_ID_PATTERN.test(orgIdValue)) {
-      setError('Org ID must use lowercase letters, numbers, and hyphens only.');
-      return;
-    }
     if (!orgNameValue) {
       setError('Org Name is required');
       return;
     }
     if (!domainValue) {
-      setError('Domain is required');
+      setError('Domain of Expertise is required');
       return;
     }
 
@@ -119,7 +108,6 @@ export default function CreateOrgPage() {
 
     try {
       const setup = await buildOrgSetup({
-        orgId: orgIdValue,
         orgName: orgNameValue,
         domain: domainValue,
         leaderEd25519PubHex: identity.pubkeyHex,
@@ -129,7 +117,7 @@ export default function CreateOrgPage() {
       const created = await createOrg(setup.payload);
 
       setSuccess({
-        orgId: created.org_id || orgIdValue,
+        orgId: created.org_id,
         orgName: orgNameValue,
         recoveryPhrase: setup.recoveryPhrase,
       });
@@ -147,7 +135,7 @@ export default function CreateOrgPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [domain, identity, leaderOrg, orgId, orgName, walletAddr]);
+  }, [domain, identity, leaderOrg, orgName, walletAddr]);
 
   const handleCopyPhrase = useCallback(async () => {
     if (!success?.recoveryPhrase) {
@@ -271,24 +259,6 @@ export default function CreateOrgPage() {
           <Card className="p-6">
             <div className="flex flex-col gap-4">
               <div>
-                <label htmlFor="org-id" className="block text-sm font-medium text-wv-text">
-                  Org ID
-                </label>
-                <input
-                  id="org-id"
-                  data-testid="org-id-input"
-                  type="text"
-                  value={orgId}
-                  onChange={(e) => setOrgId(e.target.value)}
-                  placeholder="my-org"
-                  className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm font-mono text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
-                />
-                <p className="mt-1 text-xs text-wv-dim">
-                  Use lowercase letters, numbers, and hyphens only.
-                </p>
-              </div>
-
-              <div>
                 <label htmlFor="org-name" className="block text-sm font-medium text-wv-text">
                   Org Name
                 </label>
@@ -305,7 +275,7 @@ export default function CreateOrgPage() {
 
               <div>
                 <label htmlFor="domain" className="block text-sm font-medium text-wv-text">
-                  Domain
+                  Domain of Expertise
                 </label>
                 <input
                   id="domain"
@@ -313,9 +283,13 @@ export default function CreateOrgPage() {
                   type="text"
                   value={domain}
                   onChange={(e) => setDomain(e.target.value)}
-                  placeholder="example.com"
-                  className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm font-mono text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
+                  placeholder="e.g. React, Next.js, TypeScript"
+                  className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
                 />
+                <p className="mt-1 text-xs text-wv-dim">
+                  What your org specializes in — this is how contributors discover and decide to join you. Be
+                  specific about your stack or field.
+                </p>
               </div>
             </div>
           </Card>

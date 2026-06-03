@@ -27,7 +27,6 @@ async function feeModelHash(feeModel: Record<string, unknown> | null): Promise<s
 }
 
 export async function createOrgCanonical(
-  orgId: string,
   leaderPubkey: string,
   leaderX25519Pubkey: string,
   orgName: string,
@@ -47,7 +46,6 @@ export async function createOrgCanonical(
     `leader_pubkey:${leaderPubkey}`,
     `leader_x25519_pubkey:${leaderX25519Pubkey}`,
     `mod_envelope:${modEnvelope}`,
-    `org_id:${orgId}`,
     `org_name:${orgName}`,
     `pk_mod:${pkMod}`,
     `search_envelope:${searchEnvelope}`,

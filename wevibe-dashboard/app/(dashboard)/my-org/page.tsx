@@ -139,23 +139,23 @@ export default function MyOrgPage() {
       setVibeBalance('—');
     }
 
-    if (activeOrg.role === 'leader') {
-      setOrgSummaryLoading(true);
-      setOrgSummary(null);
-      void getOrg(activeOrg.org_id)
-        .then(result => {
-          if (!active) return;
-          setOrgSummary(result as OrgSummaryWithMemberCount);
-        })
-        .catch(() => {
-          if (!active) return;
-          setOrgSummary(null);
-        })
-        .finally(() => {
-          if (!active) return;
-          setOrgSummaryLoading(false);
-        });
+    setOrgSummaryLoading(true);
+    setOrgSummary(null);
+    void getOrg(activeOrg.org_id)
+      .then(result => {
+        if (!active) return;
+        setOrgSummary(result as OrgSummaryWithMemberCount);
+      })
+      .catch(() => {
+        if (!active) return;
+        setOrgSummary(null);
+      })
+      .finally(() => {
+        if (!active) return;
+        setOrgSummaryLoading(false);
+      });
 
+    if (activeOrg.role === 'leader') {
       setOrgFinancesLoading(true);
       setOrgFinances(null);
       void getOrgFinances(activeOrg.org_id)
@@ -172,8 +172,6 @@ export default function MyOrgPage() {
           setOrgFinancesLoading(false);
         });
     } else {
-      setOrgSummaryLoading(false);
-      setOrgSummary(null);
       setOrgFinancesLoading(false);
       setOrgFinances(null);
     }
@@ -266,6 +264,7 @@ export default function MyOrgPage() {
   const orgStatus = orgSummary?.status ?? '—';
   const hubCredits = orgFinances?.hub_credits ?? 0;
   const chainTreasury = orgFinances?.chain_treasury ?? 0;
+  const orgDomain = orgSummary?.domain ?? '—';
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 pb-6">
@@ -282,6 +281,27 @@ export default function MyOrgPage() {
           </span>
         </div>
       </header>
+
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-5">
+        <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-wv-faint">ORG IDENTITY</p>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <div className="rounded-lg border border-[rgba(124,92,255,0.32)] bg-[rgba(124,92,255,0.1)] p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-wv-violet">ORG ID (canonical)</p>
+            <p className="mt-2 break-all font-mono text-base text-wv-text">{activeOrg.org_id}</p>
+            <p className="mt-2 text-xs text-wv-dim">
+              Source-of-truth identifier for this organization (anti-impersonation check).
+            </p>
+          </div>
+          <div className="rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-wv-dim">Domain of Expertise</p>
+            {orgSummaryLoading ? (
+              <div className="mt-2 h-6 w-40 animate-pulse rounded bg-wv-panel" />
+            ) : (
+              <p className="mt-2 text-sm text-wv-text">{orgDomain}</p>
+            )}
+          </div>
+        </div>
+      </section>
 
       <section className="rounded-2xl border border-[rgba(124,92,255,0.28)] bg-wv-panel-2 p-6 shadow-[0_0_40px_rgba(124,92,255,0.16)]">
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">

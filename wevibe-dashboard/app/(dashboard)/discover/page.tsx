@@ -113,6 +113,7 @@ export default function DiscoverPage() {
                     )}
                   </div>
                   <div className="space-y-1 text-sm text-wv-dim font-mono">
+                    <p>Domain: {org.domain}</p>
                     <p>Leader: {truncatePubkey(org.leader_pubkey)}</p>
                     <p>Members: {org.member_count}</p>
                     <p>Epoch: {org.current_epoch}</p>

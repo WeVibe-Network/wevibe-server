@@ -146,6 +146,7 @@ export async function getOrgChainConfig(orgId: string): Promise<OrgChainConfig> 
 export interface OrgSummary {
   org_id: string;
   org_name: string;
+  domain: string;
   leader_pubkey: string;
   current_epoch: number;
   egress_mode: string;
@@ -304,7 +305,6 @@ export async function registerDelegateKey(
 // === CO-215 Task B additions ===
 
 export interface CreateOrgRequest {
-  org_id: string;
   leader_pubkey: string;
   leader_x25519_pubkey: string;
   leader_wallet: string;
@@ -742,6 +742,7 @@ export async function updateNotificationPreferences(
 export interface DiscoverOrg {
   org_id: string;
   org_name: string;
+  domain: string;
   leader_pubkey: string;
   member_count: number;
   created_at: string;
