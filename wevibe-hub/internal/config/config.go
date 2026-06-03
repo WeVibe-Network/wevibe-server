@@ -16,6 +16,7 @@ type Config struct {
 	S3Bucket        string
 	NodePrivkey     string
 	ChainGRPCURL    string
+	FaucetURL       string
 	// Optional in Phase 1; required for Sprint 23 WebSocket subscription.
 	ChainRPCURL                string
 	ChainID                    string
@@ -54,6 +55,7 @@ func Load() Config {
 		S3Bucket:                   getEnvOrDefault("WEVIBE_S3_BUCKET", "wevibe-memories"),
 		NodePrivkey:                os.Getenv("HUB_NODE_PRIVKEY"),
 		ChainGRPCURL:               os.Getenv("WEVIBE_CHAIN_GRPC_URL"),
+		FaucetURL:                  getEnvOrDefault("FAUCET_URL", "http://wevibe-faucet:4470"),
 		ChainRPCURL:                os.Getenv("WEVIBE_CHAIN_RPC_URL"),
 		ChainID:                    os.Getenv("WEVIBE_CHAIN_ID"),
 		ChainSubmitterMnemonic:     os.Getenv("WEVIBE_CHAIN_SUBMITTER_MNEMONIC"),

@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -86,6 +86,16 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existingOrgID, err := orgs.GetOrgIDByLeader(r.Context(), pool, req.LeaderPubkey)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	if existingOrgID != "" {
+		http.Error(w, fmt.Sprintf(`{"error":"leader already owns an org","org_id":%q}`, existingOrgID), http.StatusConflict)
+		return
+	}
+
 	var epochSK string
 	var epochPK string
 	if umbralService != nil {
@@ -115,7 +125,6 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
-	faucetURL := os.Getenv("FAUCET_URL")
 
 	servingAddr, _, err := chainClient.EnsureOrgAccount(r.Context(), pool, org.OrgID, chain.OrgKeyServing)
 	if err != nil {

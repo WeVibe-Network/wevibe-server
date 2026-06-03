@@ -81,6 +81,23 @@ func GetOrg(ctx context.Context, pool *pgxpool.Pool, orgID string) (*protocol.Or
 	return &org, nil
 }
 
+func GetOrgIDByLeader(ctx context.Context, pool *pgxpool.Pool, leaderPubkey string) (string, error) {
+	var orgID string
+	err := pool.QueryRow(ctx, `
+		SELECT org_id
+		FROM orgs
+		WHERE leader_pubkey = $1 AND status = 'active'
+		LIMIT 1
+	`, leaderPubkey).Scan(&orgID)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return orgID, nil
+}
+
 func SetChainRegistered(ctx context.Context, pool *pgxpool.Pool, orgID string, registered bool) error {
 	_, err := pool.Exec(ctx, `
 		UPDATE orgs

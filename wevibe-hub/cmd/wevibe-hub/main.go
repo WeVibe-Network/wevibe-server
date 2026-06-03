@@ -81,6 +81,7 @@ func main() {
 	log.Printf("chain client initialized for chain %s, submitter %s", cfg.ChainID, chainClient.SubmitterAddress())
 
 	handlers.SetChainClient(chainClient)
+	handlers.SetFaucetURL(cfg.FaucetURL)
 	handlers.SetSocialClient(social.NewClient(cfg.SocialGraphURL))
 
 	umbralClient, err := umbral.NewClient(cfg.UmbralSidecarAddr)
@@ -181,6 +182,7 @@ func main() {
 	r.Get("/v1/notifications/ws", handlers.NotificationWebSocket)
 
 	r.Post("/v1/orgs", handlers.CreateOrg)
+	r.Post("/v1/faucet/fund", handlers.FundFromFaucet)
 	r.Get("/v1/orgs/discover", handlers.DiscoverOrgs)
 	r.Get("/v1/orgs/{orgID}", handlers.GetOrg)
 	r.Post("/v1/orgs/{orgID}/join", handlers.SubmitJoinRequest)
