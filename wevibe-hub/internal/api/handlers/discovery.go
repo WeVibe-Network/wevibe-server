@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -82,10 +83,13 @@ func DiscoverOrgs(w http.ResponseWriter, r *http.Request) {
 	var orgs []DiscoverOrg
 	for rows.Next() {
 		var org DiscoverOrg
+		var createdAt time.Time
 		var lastActivity *time.Time
-		if err := rows.Scan(&org.OrgID, &org.OrgName, &org.LeaderPubkey, &org.CurrentEpoch, &org.CreatedAt, &org.MemberCount, &lastActivity); err != nil {
+		if err := rows.Scan(&org.OrgID, &org.OrgName, &org.LeaderPubkey, &org.CurrentEpoch, &createdAt, &org.MemberCount, &lastActivity); err != nil {
+			log.Printf("WARNING: discovery row scan failed, skipping row: %v", err)
 			continue
 		}
+		org.CreatedAt = createdAt.Format(time.RFC3339)
 		if lastActivity != nil {
 			la := lastActivity.Format(time.RFC3339)
 			org.LastActivityAt = &la
