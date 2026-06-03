@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { discoverOrgs, DiscoverOrg } from '@/lib/hub-client';
+import { getIdentity } from '@/lib/wevibe-auth';
 import ClientTime from '@/components/ui/client-time';
 
 function truncatePubkey(pubkey: string): string {
@@ -18,6 +19,7 @@ export default function DiscoverPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [myPubkey, setMyPubkey] = useState<string | null>(null);
   const limit = 20;
 
   const loadOrgs = useCallback(async (searchTerm: string, offsetVal: number) => {
@@ -37,6 +39,16 @@ export default function DiscoverPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    getIdentity()
+      .then(id => {
+        setMyPubkey(id?.pubkeyHex ?? null);
+      })
+      .catch(() => {
+        // Ignore identity load failures; owned highlighting is optional.
+      });
   }, []);
 
   useEffect(() => {
@@ -83,24 +95,35 @@ export default function DiscoverPage() {
       ) : (
         <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {orgs.map((org) => (
-              <Link
-                key={org.org_id}
-                href={`/discover/${org.org_id}`}
-                className="block p-4 bg-wv-panel border border-wv-line rounded-lg shadow-wv-sm hover:border-[rgba(124,92,255,0.4)] hover:shadow-wv-md transition"
-              >
-                <h3 className="text-lg font-medium text-wv-text mb-2">{org.org_name}</h3>
-                <div className="space-y-1 text-sm text-wv-dim font-mono">
-                  <p>Leader: {truncatePubkey(org.leader_pubkey)}</p>
-                  <p>Members: {org.member_count}</p>
-                  <p>Epoch: {org.current_epoch}</p>
-                  <p>Last active: <ClientTime value={org.last_activity_at} mode="relative" fallback="Never" /></p>
-                </div>
-                <div className="mt-3">
-                  <span className="text-wv-violet text-sm font-medium">View details →</span>
-                </div>
-              </Link>
-            ))}
+            {orgs.map((org) => {
+              const owned = myPubkey != null && org.leader_pubkey === myPubkey;
+
+              return (
+                <Link
+                  key={org.org_id}
+                  href={`/discover/${org.org_id}`}
+                  className={`block p-4 bg-wv-panel border rounded-lg hover:border-[rgba(124,92,255,0.4)] hover:shadow-wv-md transition ${owned ? 'border-wv-violet shadow-wv-md' : 'border-wv-line shadow-wv-sm'}`}
+                >
+                  <div className="mb-2 flex items-center gap-2">
+                    <h3 className="text-lg font-medium text-wv-text">{org.org_name}</h3>
+                    {owned && (
+                      <span className="inline-flex items-center rounded-full border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.14)] px-2 py-0.5 text-xs font-medium text-wv-violet">
+                        Your org
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-1 text-sm text-wv-dim font-mono">
+                    <p>Leader: {truncatePubkey(org.leader_pubkey)}</p>
+                    <p>Members: {org.member_count}</p>
+                    <p>Epoch: {org.current_epoch}</p>
+                    <p>Last active: <ClientTime value={org.last_activity_at} mode="relative" fallback="Never" /></p>
+                  </div>
+                  <div className="mt-3">
+                    <span className="text-wv-violet text-sm font-medium">View details →</span>
+                  </div>
+                </Link>
+              );
+            })}
           </div>
 
           {hasMore && (

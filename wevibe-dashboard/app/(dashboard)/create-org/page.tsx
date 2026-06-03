@@ -126,10 +126,10 @@ export default function CreateOrgPage() {
         leaderSeedHex: identity.seedHex,
         leaderWallet: walletAddr,
       });
-      await createOrg(setup.payload);
+      const created = await createOrg(setup.payload);
 
       setSuccess({
-        orgId: orgIdValue,
+        orgId: created.org_id || orgIdValue,
         orgName: orgNameValue,
         recoveryPhrase: setup.recoveryPhrase,
       });
