@@ -182,6 +182,7 @@ func main() {
 	r.Get("/v1/notifications/ws", handlers.NotificationWebSocket)
 
 	r.Post("/v1/orgs", handlers.CreateOrg)
+	r.Get("/v1/balance/{address}", handlers.GetBalance)
 	r.Post("/v1/faucet/fund", handlers.FundFromFaucet)
 	r.Get("/v1/orgs/discover", handlers.DiscoverOrgs)
 	r.Get("/v1/orgs/{orgID}", handlers.GetOrg)

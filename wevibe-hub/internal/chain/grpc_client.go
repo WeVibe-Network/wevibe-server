@@ -19,6 +19,7 @@ import (
 	txtypes "github.com/cosmos/cosmos-sdk/types/tx"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	authztypes "github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/jackc/pgx/v5/pgxpool"
 	attesttypes "github.com/wevibe-network/wevibe-chain/x/attestation/types"
@@ -97,6 +98,8 @@ func NewGrpcClient(grpcURL, chainID, mnemonic string) (*GrpcClient, error) {
 	registry := codectypes.NewInterfaceRegistry()
 	cryptocodec.RegisterInterfaces(registry)
 	authtypes.RegisterInterfaces(registry)
+	banktypes.RegisterInterfaces(registry)
+	authztypes.RegisterInterfaces(registry)
 	orgtypes.RegisterInterfaces(registry)
 	memorytypes.RegisterInterfaces(registry)
 	servetypes.RegisterInterfaces(registry)
