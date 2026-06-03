@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { getBalance } from '@/lib/hub-client';
 import { ConnectionState, getMcpClient } from '@/lib/mcp-client';
+import { formatVibe } from '@/lib/format';
 import { getWalletAddress } from '@/lib/wevibe-auth';
 import OrgSwitcher from './org-switcher';
 import NotificationBell from './notification-bell';
@@ -29,6 +31,7 @@ function truncateAddress(addr: string): string {
 export default function Topbar() {
   const [state, setState] = useState<ConnectionState>('disconnected');
   const [walletAddr, setWalletAddr] = useState<string | null>(null);
+  const [balance, setBalance] = useState<string | null>(null);
 
   useEffect(() => {
     const client = getMcpClient();
@@ -42,6 +45,37 @@ export default function Topbar() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!walletAddr) {
+      setBalance(null);
+      return;
+    }
+
+    let active = true;
+    setBalance(null);
+
+    const refreshBalance = async () => {
+      try {
+        const res = await getBalance(walletAddr);
+        if (!active) return;
+        setBalance(formatVibe(res.amount));
+      } catch {
+        if (!active) return;
+        setBalance(null);
+      }
+    };
+
+    void refreshBalance();
+    const intervalId = window.setInterval(() => {
+      void refreshBalance();
+    }, 20_000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [walletAddr]);
+
   return (
     <header className="flex h-14 items-center justify-between border-b border-wv-line bg-wv-panel px-6">
       <OrgSwitcher />
@@ -51,6 +85,15 @@ export default function Topbar() {
         {walletAddr ? (
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-wv-green" />
+            {balance !== null ? (
+              <>
+                <span className="flex items-center gap-1 font-mono text-xs">
+                  <span className="text-wv-violet">{balance}</span>
+                  <span className="text-wv-dim">VIBE</span>
+                </span>
+                <span className="text-xs text-wv-dim">·</span>
+              </>
+            ) : null}
             <span className="font-mono text-xs text-wv-dim">{truncateAddress(walletAddr)}</span>
           </div>
         ) : (

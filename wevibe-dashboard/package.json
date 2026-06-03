@@ -27,6 +27,7 @@
     "next": "14.2.3",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "sonner": "2.0.7",
     "wevibe-sdk-wasm": "file:./vendor/wevibe-sdk-wasm"
   },
   "devDependencies": {

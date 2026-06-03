@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import { readConfigFromEnv } from '@/lib/config';
+import { Toaster } from 'sonner';
 import './globals.css';
 
 const wvSans = Space_Grotesk({
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{ __html: `window.__WEVIBE_CONFIG__=${JSON.stringify(cfg)}` }}
         />
         {children}
+        <Toaster richColors position="bottom-right" theme="dark" expand />
       </body>
     </html>
   );

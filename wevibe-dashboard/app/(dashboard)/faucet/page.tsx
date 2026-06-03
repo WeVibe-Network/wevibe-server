@@ -4,10 +4,18 @@ import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
 import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
-import { fundFromFaucet, type FaucetFundResponse } from '@/lib/hub-client';
+import { fundFromFaucet, getBalance, type FaucetFundResponse } from '@/lib/hub-client';
+import { formatVibeWithDenom } from '@/lib/format';
+import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { getWalletAddress } from '@/lib/wevibe-auth';
 
-const DEFAULT_AMOUNT = 1_000_000;
+const FAUCET_AMOUNT_VIBE = 100;
+const FAUCET_AMOUNT_UVIBE = 100_000_000;
+const CONFIRMATION_POLL_INTERVAL_MS = 2_000;
+const CONFIRMATION_POLL_ATTEMPTS = 15;
+
+type FaucetPhase = 'idle' | 'submitting' | 'confirming' | 'done' | 'error';
+type FaucetOutcome = 'confirmed' | 'pending_confirmation' | null;
 
 function truncateAddress(address: string): string {
   if (address.length <= 16) {
@@ -16,13 +24,20 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 10)}...${address.slice(-6)}`;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export default function FaucetPage() {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [walletLoaded, setWalletLoaded] = useState(false);
-  const [amountInput, setAmountInput] = useState(String(DEFAULT_AMOUNT));
-  const [requesting, setRequesting] = useState(false);
+  const [phase, setPhase] = useState<FaucetPhase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<FaucetFundResponse | null>(null);
+  const [outcome, setOutcome] = useState<FaucetOutcome>(null);
+  const [confirmedDeltaUvibe, setConfirmedDeltaUvibe] = useState<string | null>(null);
+
+  const requesting = phase === 'submitting' || phase === 'confirming';
 
   useEffect(() => {
     let cancelled = false;
@@ -56,25 +71,68 @@ export default function FaucetPage() {
       return;
     }
 
-    const amount = Number(amountInput);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setSuccess(null);
-      setError('Amount (uvibe) must be a positive number.');
+    setPhase('submitting');
+    setError(null);
+    setSuccess(null);
+    setOutcome(null);
+    setConfirmedDeltaUvibe(null);
+
+    let beforeBalance = BigInt(0);
+    try {
+      const before = await getBalance(walletAddress);
+      beforeBalance = BigInt(before.amount);
+    } catch {
+      beforeBalance = BigInt(0);
+    }
+
+    const toastId = txToast('Faucet');
+
+    let response: FaucetFundResponse;
+
+    try {
+      response = await fundFromFaucet(walletAddress, FAUCET_AMOUNT_UVIBE);
+    } catch (err) {
+      txError(toastId, 'Faucet request failed');
+      setPhase('error');
+      setError(err instanceof Error ? err.message : String(err));
       return;
     }
 
-    setRequesting(true);
-    setError(null);
-    setSuccess(null);
+    setPhase('confirming');
+    txConfirming(toastId, 'Faucet');
 
-    try {
-      const response = await fundFromFaucet(walletAddress, amount);
-      setSuccess(response);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRequesting(false);
+    let confirmedBalance: bigint | null = null;
+    for (let attempt = 0; attempt < CONFIRMATION_POLL_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await sleep(CONFIRMATION_POLL_INTERVAL_MS);
+      }
+
+      try {
+        const current = await getBalance(walletAddress);
+        const currentBalance = BigInt(current.amount);
+        if (currentBalance > beforeBalance) {
+          confirmedBalance = currentBalance;
+          break;
+        }
+      } catch {
+        // Continue polling; submission succeeded and confirmation may still arrive.
+      }
     }
+
+    setSuccess(response);
+    setPhase('done');
+
+    if (confirmedBalance != null) {
+      const confirmedDelta = confirmedBalance - beforeBalance;
+      const confirmedDeltaString = confirmedDelta.toString();
+      setOutcome('confirmed');
+      setConfirmedDeltaUvibe(confirmedDeltaString);
+      txSuccess(toastId, `Funded ${formatVibeWithDenom(confirmedDeltaString)} — confirmed`);
+      return;
+    }
+
+    setOutcome('pending_confirmation');
+    txError(toastId, 'Submitted, but confirmation is taking longer than expected — check your balance shortly.');
   }
 
   return (
@@ -114,32 +172,39 @@ export default function FaucetPage() {
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="faucet-amount" className="block text-sm font-medium text-wv-text">
-                  Amount (uvibe)
-                </label>
-                <input
-                  id="faucet-amount"
-                  type="number"
-                  min={1}
-                  step={1}
-                  inputMode="numeric"
-                  value={amountInput}
-                  onChange={event => setAmountInput(event.target.value)}
-                  className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 font-mono text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
-                />
+              <div className="rounded-md border border-wv-line bg-wv-panel-2 p-4">
+                <p className="text-xs font-mono uppercase tracking-[0.08em] text-wv-dim">You will receive</p>
+                <p className="mt-1 font-mono text-lg text-wv-text">{FAUCET_AMOUNT_VIBE} VIBE</p>
               </div>
 
               <div className="flex items-center gap-3">
                 <Button type="submit" disabled={requesting}>
-                  {requesting ? 'Requesting…' : 'Request Funds'}
+                  {phase === 'submitting' ? 'Submitting…' : phase === 'confirming' ? 'Confirming…' : `Request ${FAUCET_AMOUNT_VIBE} VIBE`}
                 </Button>
               </div>
 
-              {success && (
+              {(phase === 'submitting' || phase === 'confirming') && (
+                <div className="flex items-center gap-2 text-sm text-wv-dim">
+                  <span
+                    aria-hidden="true"
+                    className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-wv-line border-t-wv-violet"
+                  />
+                  <span>{phase === 'submitting' ? 'Submitting…' : 'Confirming on chain…'}</span>
+                </div>
+              )}
+
+              {success && outcome === 'confirmed' && (
                 <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green">
-                  Funded <span className="font-mono">{success.amount.toLocaleString()}</span> uvibe to{' '}
-                  <span className="font-mono">{truncateAddress(success.address)}</span> ({success.status}).
+                  Funded <span className="font-mono">{formatVibeWithDenom(confirmedDeltaUvibe ?? String(success.amount))}</span>{' '}
+                  to <span className="font-mono">{truncateAddress(success.address)}</span>
+                </div>
+              )}
+
+              {success && outcome === 'pending_confirmation' && (
+                <div className="rounded-lg border border-[rgba(251,191,36,0.45)] bg-[rgba(251,191,36,0.12)] px-3 py-2 text-sm text-[rgba(251,191,36,0.95)]">
+                  Submitted faucet request for <span className="font-mono">{formatVibeWithDenom(String(FAUCET_AMOUNT_UVIBE))}</span> to{' '}
+                  <span className="font-mono">{truncateAddress(success.address)}</span>, but confirmation is taking longer than
+                  expected. Check your balance shortly.
                 </div>
               )}
 

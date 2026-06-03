@@ -27,11 +27,26 @@ export interface FaucetFundResponse {
   status: string;
 }
 
+export interface BalanceResponse {
+  address: string;
+  denom: string;
+  amount: string;
+}
+
 export async function fundFromFaucet(address: string, amount?: number): Promise<FaucetFundResponse> {
   return hubFetch<FaucetFundResponse>('/v1/faucet/fund', {
     method: 'POST',
     body: JSON.stringify(amount != null ? { address, amount } : { address }),
   });
+}
+
+export async function getBalance(address: string): Promise<BalanceResponse> {
+  const resp = await fetch(`${getHubUrl()}/v1/balance/${encodeURIComponent(address)}`);
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: resp.statusText }));
+    throw new Error(err.error ?? `Hub error ${resp.status}`);
+  }
+  return resp.json();
 }
 
 export async function listMembers(orgId: string) {
