@@ -20,7 +20,6 @@ interface StoredIdentity {
   seedHex: string;
   createdAt: string;
   walletAddress?: string;
-  [key: string]: any;
 }
 
 function identityChallenge(address: string): string {
@@ -161,6 +160,11 @@ export async function getIdentity(): Promise<StoredIdentity | null> {
   return loadIdentityRecord();
 }
 
+export async function signEd25519WithSeed(seedHex: string, data: Uint8Array): Promise<string> {
+  const sig = await ed.signAsync(data, hexToBytes(seedHex));
+  return bytesToHex(sig);
+}
+
 export async function signTimestamp(): Promise<{
   pubkeyHex: string;
   timestamp: string;
@@ -172,8 +176,7 @@ export async function signTimestamp(): Promise<{
 
   const timestamp = new Date().toISOString();
   const data = textEncoder.encode(timestamp);
-  const signature = await ed.signAsync(data, hexToBytes(identity.seedHex));
-  const signatureHex = bytesToHex(signature);
+  const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
 
   const authHeader = `WeVibe-Signed pubkey=${identity.pubkeyHex},timestamp=${timestamp},signature=${signatureHex}`;
 

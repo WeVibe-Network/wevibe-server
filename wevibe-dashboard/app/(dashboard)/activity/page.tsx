@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getIdentity } from '@/lib/wevibe-auth';
+import { getIdentity, signEd25519WithSeed } from '@/lib/wevibe-auth';
 import {
   Notification,
   listNotifications,
@@ -48,10 +48,7 @@ export default function ActivityPage() {
     const timestamp = new Date().toISOString();
     const encoder = new TextEncoder();
     const data = encoder.encode(timestamp);
-    const signature = await crypto.subtle.sign('Ed25519', identity.privateKey, data);
-    const signatureHex = Array.from(new Uint8Array(signature))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
 
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;

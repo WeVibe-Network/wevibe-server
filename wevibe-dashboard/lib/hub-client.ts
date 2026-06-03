@@ -1,5 +1,5 @@
-import { buildAuthHeaders, getIdentity } from './wevibe-auth';
-import { linkWalletCanonical, signCanonical, registerDelegateKeyCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
+import { buildAuthHeaders, getIdentity, signEd25519WithSeed } from './wevibe-auth';
+import { linkWalletCanonical, registerDelegateKeyCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
 import type { OrgRole } from './org-role';
 import type { MemberOrgEntry } from './org-context';
 
@@ -239,7 +239,7 @@ export async function linkWallet(orgId: string, walletAddress: string): Promise<
   }
 
   const canonical = await linkWalletCanonical(orgId, walletAddress, identity.pubkeyHex);
-  const signature = await signCanonical(identity.privateKey, canonical);
+  const signature = await signEd25519WithSeed(identity.seedHex, canonical);
 
   return hubFetch<LinkWalletResponse>(`/v1/orgs/${orgId}/members/wallet`, {
     method: 'POST',
@@ -263,7 +263,7 @@ export async function registerDelegateKey(
   }
 
   const canonical = await registerDelegateKeyCanonical(orgId, walletAddress, delegateAddress, identity.pubkeyHex);
-  const signature = await signCanonical(identity.privateKey, canonical);
+  const signature = await signEd25519WithSeed(identity.seedHex, canonical);
 
   return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/members/delegate-key`, {
     method: 'POST',
@@ -322,7 +322,7 @@ export async function transferLeadership(orgId: string, newLeaderPubkey: string)
   }
 
   const canonical = await transferLeadershipCanonical(orgId, newLeaderPubkey, identity.pubkeyHex);
-  const signature = await signCanonical(identity.privateKey, canonical);
+  const signature = await signEd25519WithSeed(identity.seedHex, canonical);
 
   await hubFetch<{ status: string }>(`/v1/orgs/${orgId}/transfer-leadership`, {
     method: 'POST',
@@ -341,7 +341,7 @@ export async function closeOrg(orgId: string): Promise<void> {
   }
 
   const canonical = await closeOrgCanonical(orgId, identity.pubkeyHex);
-  const signature = await signCanonical(identity.privateKey, canonical);
+  const signature = await signEd25519WithSeed(identity.seedHex, canonical);
 
   await hubFetch<{ status: string }>(`/v1/orgs/${orgId}/close`, {
     method: 'POST',

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getUnreadCount } from '@/lib/hub-client';
-import { getIdentity } from '@/lib/wevibe-auth';
+import { getIdentity, signEd25519WithSeed } from '@/lib/wevibe-auth';
 
 export default function NotificationBell() {
   const [count, setCount] = useState(0);
@@ -28,10 +28,7 @@ export default function NotificationBell() {
       const timestamp = new Date().toISOString();
       const encoder = new TextEncoder();
       const data = encoder.encode(timestamp);
-      const signature = await crypto.subtle.sign('Ed25519', identity.privateKey, data);
-      const signatureHex = Array.from(new Uint8Array(signature))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
+      const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
 
       ws = new WebSocket('ws://localhost:4440/v1/notifications/ws');
 

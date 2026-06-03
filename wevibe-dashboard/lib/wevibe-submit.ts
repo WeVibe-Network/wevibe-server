@@ -1,6 +1,5 @@
-import { getIdentity } from './wevibe-auth';
+import { getIdentity, signEd25519WithSeed } from './wevibe-auth';
 import {
-  signCanonical,
   submitMemoryCanonical,
   type MemoryType,
 } from './wevibe-signing';
@@ -226,10 +225,7 @@ export async function buildSubmitMemoryPayload(
 		saltHex,
 		wrappedDekHashHex,
 	);
-  const signatureHex = await signCanonical(
-    identity.privateKey,
-    canonical,
-  );
+  const signatureHex = await signEd25519WithSeed(identity.seedHex, canonical);
 
   return {
     status: 'ok',
