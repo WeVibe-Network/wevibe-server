@@ -1,13 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
+import { ErrorBanner, GuardCard, LoadingState } from '@/components/ui/states';
+import { classifyError } from '@/lib/errors';
 import { createOrg } from '@/lib/hub-client';
+import { useDashboardState } from '@/lib/use-dashboard-state';
 import { useOrgContext } from '@/lib/org-context';
-import { getIdentity, getWalletAddress } from '@/lib/wevibe-auth';
+import { connectWallet, getChainConfig } from '@/lib/wallet-connect';
+import { deriveIdentityFromWallet, setWalletAddress } from '@/lib/wevibe-auth';
 import { buildOrgSetup } from '@/lib/wevibe-crypto';
 
 const ONE_ORG_GATE_COPY = 'Only one organization per account is allowed.';
@@ -37,14 +41,16 @@ function isLeaderOwnershipConflict(err: unknown): boolean {
 
 export default function CreateOrgPage() {
   const router = useRouter();
-  const { orgs, loading: orgsLoading } = useOrgContext();
+  const { state, walletAddress, identity, refresh } = useDashboardState();
+  const { orgs } = useOrgContext();
   const [orgName, setOrgName] = useState('');
   const [domain, setDomain] = useState('');
-  const [identityLoaded, setIdentityLoaded] = useState(false);
-  const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>>>(null);
-  const [walletAddr, setWalletAddr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitConflictMessage, setSubmitConflictMessage] = useState<string | null>(null);
+  const [showFaucetPrompt, setShowFaucetPrompt] = useState(false);
   const [success, setSuccess] = useState<CreateOrgSuccessState | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
 
@@ -52,43 +58,39 @@ export default function CreateOrgPage() {
     () => orgs.find((org) => org.role === 'leader') ?? null,
     [orgs],
   );
+  const isConnectedState = state !== 'INITIALIZING' && state !== 'NO_WALLET';
 
-  useEffect(() => {
-    let cancelled = false;
+  const handleConnectWallet = useCallback(async () => {
+    setConnecting(true);
+    setConnectError(null);
 
-    void Promise.all([getIdentity(), getWalletAddress()])
-      .then(([nextIdentity, nextWallet]) => {
-        if (cancelled) {
-          return;
-        }
-        setIdentity(nextIdentity);
-        setWalletAddr(nextWallet);
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        setIdentity(null);
-        setWalletAddr(null);
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIdentityLoaded(true);
-        }
-      });
+    try {
+      const conn = await connectWallet('keplr');
+      const walletApi = window.keplr;
+      if (!walletApi) {
+        throw new Error('keplr wallet not available after connection');
+      }
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      const chainId = getChainConfig().chainId;
+      await deriveIdentityFromWallet(walletApi, chainId, conn.address);
+      await setWalletAddress(conn.address);
+      refresh();
+    } catch (err) {
+      setConnectError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setConnecting(false);
+    }
+  }, [refresh]);
 
   const handleSubmit = useCallback(async (event: FormEvent) => {
     event.preventDefault();
-    setError(null);
+    setSubmitError(null);
+    setSubmitConflictMessage(null);
+    setShowFaucetPrompt(false);
     setSuccess(null);
 
-    if (!identity || !walletAddr) {
-      setError('No dashboard identity/wallet found. Log in again before creating an organization.');
+    if (!identity || !walletAddress) {
+      setSubmitError('No dashboard identity/wallet found. Log in again before creating an organization.');
       return;
     }
 
@@ -96,11 +98,11 @@ export default function CreateOrgPage() {
     const domainValue = domain.trim();
 
     if (!orgNameValue) {
-      setError('Org Name is required');
+      setSubmitError('Org Name is required');
       return;
     }
     if (!domainValue) {
-      setError('Domain of Expertise is required');
+      setSubmitError('Domain of Expertise is required');
       return;
     }
 
@@ -112,7 +114,7 @@ export default function CreateOrgPage() {
         domain: domainValue,
         leaderEd25519PubHex: identity.pubkeyHex,
         leaderSeedHex: identity.seedHex,
-        leaderWallet: walletAddr,
+        leaderWallet: walletAddress,
       });
       const created = await createOrg(setup.payload);
 
@@ -123,19 +125,23 @@ export default function CreateOrgPage() {
       });
       setCopyStatus('idle');
     } catch (err) {
-      if (isLeaderOwnershipConflict(err)) {
-        setError(
+      const errorKind = classifyError(err);
+
+      if (errorKind === 'needs_gas') {
+        setShowFaucetPrompt(true);
+      } else if (errorKind === 'conflict' || isLeaderOwnershipConflict(err)) {
+        setSubmitConflictMessage(
           leaderOrg
             ? `You already own an organization: ${leaderOrg.org_name}. ${ONE_ORG_GATE_COPY}`
             : ONE_ORG_GATE_ERROR,
         );
       } else {
-        setError(err instanceof Error ? err.message : String(err));
+        setSubmitError(err instanceof Error ? err.message : String(err));
       }
     } finally {
       setSubmitting(false);
     }
-  }, [domain, identity, leaderOrg, orgName, walletAddr]);
+  }, [domain, identity, leaderOrg, orgName, walletAddress]);
 
   const handleCopyPhrase = useCallback(async () => {
     if (!success?.recoveryPhrase) {
@@ -150,8 +156,6 @@ export default function CreateOrgPage() {
     }
   }, [success]);
 
-  const loading = !identityLoaded || orgsLoading;
-
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6">
       <header className="flex flex-col gap-2">
@@ -161,39 +165,27 @@ export default function CreateOrgPage() {
         </p>
       </header>
 
-      <div className="rounded-lg border border-[rgba(52,220,240,0.4)] bg-[rgba(52,220,240,0.12)] p-4 text-sm text-wv-cyan">
-        <p className="font-medium">Real organization setup</p>
-        <p className="mt-1 text-wv-cyan">
-          This flow creates a real organization with real encryption envelopes, and registers you as leader.
-          If your wallet needs gas first, fund it in the{' '}
-          <Link href="/faucet" className="font-medium text-wv-violet hover:opacity-90">
-            Faucet
-          </Link>{' '}
-          tab before submitting.
-        </p>
-      </div>
+      {state === 'INITIALIZING' && (
+        <LoadingState label="Loading…" />
+      )}
 
-      {loading && (
+      {state === 'NO_WALLET' && (
         <Card className="p-6">
-          <p className="text-sm text-wv-dim">Loading identity and organization status…</p>
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-wv-dim">
+              Connect your wallet to derive your dashboard identity before creating an organization.
+            </p>
+            {connectError && <ErrorBanner>{connectError}</ErrorBanner>}
+            <div className="flex items-center gap-3">
+              <Button type="button" onClick={handleConnectWallet} disabled={connecting}>
+                {connecting ? 'Connecting…' : 'Connect Wallet'}
+              </Button>
+            </div>
+          </div>
         </Card>
       )}
 
-      {!loading && (!identity || !walletAddr) && (
-        <Card className="p-6">
-          <p className="text-sm text-wv-dim">
-            No dashboard identity and wallet are available for organization setup.
-          </p>
-          <p className="mt-2 text-sm text-wv-dim">
-            Log in first so WeVibe can bind the organization leader role to your account.
-          </p>
-          <Link href="/login" className="mt-4 inline-flex text-sm font-medium text-wv-violet hover:opacity-90">
-            Go to login
-          </Link>
-        </Card>
-      )}
-
-      {!loading && identity && walletAddr && success && (
+      {isConnectedState && success && (
         <Card className="p-6">
           <div className="flex flex-col gap-5">
             <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-4">
@@ -237,12 +229,9 @@ export default function CreateOrgPage() {
         </Card>
       )}
 
-      {!loading && identity && walletAddr && !success && leaderOrg && (
+      {isConnectedState && !success && leaderOrg && (
         <Card className="p-6">
-          <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-4">
-            <p className="text-sm font-semibold text-wv-amber">
-              You already own an organization: {leaderOrg.org_name}
-            </p>
+          <GuardCard title={`You already own an organization: ${leaderOrg.org_name}`}>
             <p className="mt-2 text-sm text-wv-text">{ONE_ORG_GATE_COPY}</p>
             <Link
               href={`/discover/${leaderOrg.org_id}`}
@@ -250,11 +239,11 @@ export default function CreateOrgPage() {
             >
               View organization details
             </Link>
-          </div>
+          </GuardCard>
         </Card>
       )}
 
-      {!loading && identity && walletAddr && !success && !leaderOrg && (
+      {isConnectedState && !success && !leaderOrg && (
         <form onSubmit={handleSubmit} data-testid="create-org-form" className="flex flex-col gap-5">
           <Card className="p-6">
             <div className="flex flex-col gap-4">
@@ -294,12 +283,23 @@ export default function CreateOrgPage() {
             </div>
           </Card>
 
-          {error && (
-            <div
-              data-testid="error-display"
-              className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red"
-            >
-              {error}
+          {submitConflictMessage && (
+            <GuardCard title={submitConflictMessage} />
+          )}
+
+          {showFaucetPrompt && (
+            <div className="rounded-lg border border-[rgba(52,220,240,0.4)] bg-[rgba(52,220,240,0.12)] px-3 py-2 text-sm text-wv-cyan">
+              Wallet gas is required to create an organization.{' '}
+              <Link href="/faucet" className="font-medium text-wv-violet hover:opacity-90">
+                Top up in Faucet
+              </Link>
+              .
+            </div>
+          )}
+
+          {submitError && (
+            <div data-testid="error-display">
+              <ErrorBanner>{submitError}</ErrorBanner>
             </div>
           )}
 
