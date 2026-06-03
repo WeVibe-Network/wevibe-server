@@ -8,10 +8,10 @@ import OrgSwitcher from './org-switcher';
 import NotificationBell from './notification-bell';
 
 const connectionColor: Record<ConnectionState, string> = {
-  disconnected: 'bg-zinc-400',
-  connecting: 'bg-amber-400 animate-pulse',
-  connected: 'bg-emerald-500',
-  error: 'bg-rose-500',
+  disconnected: 'bg-wv-panel-3',
+  connecting: 'bg-wv-amber animate-pulse',
+  connected: 'bg-wv-green',
+  error: 'bg-wv-red',
 };
 
 const connectionLabel: Record<ConnectionState, string> = {
@@ -43,20 +43,20 @@ export default function Topbar() {
   }, []);
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-gray-200 bg-white px-6">
+    <header className="flex h-14 items-center justify-between border-b border-wv-line bg-wv-panel px-6">
       <OrgSwitcher />
-      <span className="ml-3 text-sm text-gray-500 border-l border-gray-200 pl-3">WeVibe</span>
+      <span className="ml-3 border-l border-wv-line pl-3 text-sm text-wv-dim">WeVibe</span>
 
-      <div className="flex items-center gap-4 text-sm text-gray-500">
+      <div className="flex items-center gap-4 text-sm text-wv-dim">
         {walletAddr ? (
           <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span className="font-mono text-xs text-gray-600">{truncateAddress(walletAddr)}</span>
+            <span className="h-2 w-2 rounded-full bg-wv-green" />
+            <span className="font-mono text-xs text-wv-dim">{truncateAddress(walletAddr)}</span>
           </div>
         ) : (
           <Link
             href="/login"
-            className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-indigo-700"
+            className="rounded-md bg-wv-grad-btn px-3 py-1 text-xs font-medium text-white shadow-wv-sm transition hover:opacity-95"
           >
             Connect Wallet
           </Link>
@@ -66,7 +66,7 @@ export default function Topbar() {
           <span>{connectionLabel[state]}</span>
         </div>
         <NotificationBell />
-        <Link href="/settings" className="rounded-md border border-gray-200 px-3 py-1 text-xs font-medium text-gray-600 transition hover:border-indigo-400 hover:text-indigo-600">
+        <Link href="/settings" className="rounded-md border border-wv-line px-3 py-1 text-xs font-medium text-wv-dim transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet">
           Settings
         </Link>
       </div>

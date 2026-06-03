@@ -4,20 +4,7 @@ import { useState, useEffect } from 'react';
 import { getMySubmissions, type MySubmission } from '@/lib/hub-client';
 import { useOrgContext } from '@/lib/org-context';
 import Badge from '@/components/ui/badge';
-
-function formatRelativeTime(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 30) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-}
+import ClientTime from '@/components/ui/client-time';
 
 function truncateHash(hash: string): string {
   if (!hash) return 'N/A';
@@ -92,8 +79,8 @@ export default function MySubmissionsPage() {
   if (!activeOrg?.org_id) {
     return (
       <div className="p-6">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-4">My Submissions</h1>
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">
+        <h1 className="mb-4 text-2xl font-semibold text-wv-text">My Submissions</h1>
+        <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-4 text-wv-amber">
           No organization selected. Please select an organization first.
         </div>
       </div>
@@ -102,22 +89,22 @@ export default function MySubmissionsPage() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold text-gray-900">My Submissions</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-wv-text">My Submissions</h1>
         <button
           onClick={loadSubmissions}
-          className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+          className="rounded-md border border-wv-line-2 bg-wv-panel px-4 py-2 text-sm font-medium text-wv-text hover:bg-wv-line"
         >
           Refresh
         </button>
       </div>
 
       {loading && submissions.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">Loading submissions...</div>
+        <div className="py-12 text-center text-wv-dim">Loading submissions...</div>
       ) : error ? (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-red-800">{error}</div>
+        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] p-4 text-wv-red">{error}</div>
       ) : submissions.length === 0 ? (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-8 text-center text-gray-500">
+        <div className="rounded-lg border border-wv-line bg-wv-panel p-8 text-center text-wv-dim">
           No submissions yet. Submit memories from the Sessions page.
         </div>
       ) : (
@@ -125,33 +112,33 @@ export default function MySubmissionsPage() {
           {submissions.map((sub) => (
             <div
               key={sub.submission_hash}
-              className="bg-white border border-gray-200 rounded-lg p-4"
+              className="rounded-lg border border-wv-line bg-wv-panel p-4"
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
                     <Badge variant={statusVariant(sub.status)}>{statusLabel(sub.status)}</Badge>
-                    <span className="text-xs text-gray-500">{sub.memory_type}</span>
+                    <span className="text-xs font-mono text-wv-dim">{sub.memory_type}</span>
                   </div>
-                  <div className="text-sm text-gray-500 mb-1">
+                  <div className="mb-1 text-sm text-wv-dim">
                     Hash: <span className="font-mono">{truncateHash(sub.submission_hash)}</span>
                   </div>
-                  <div className="text-sm text-gray-500 mb-1">
-                    Epoch: {sub.epoch_id}
+                  <div className="mb-1 text-sm text-wv-dim">
+                    Epoch: <span className="font-mono">{sub.epoch_id}</span>
                   </div>
-                  <div className="text-xs text-gray-400">
-                    Submitted {formatRelativeTime(sub.created_at)}
+                  <div className="text-xs font-mono text-wv-faint">
+                    Submitted <ClientTime value={sub.created_at} mode="relative" />
                   </div>
                   {sub.status === 'denied' && sub.denial_reason && (
-                    <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-md">
-                      <div className="text-xs font-medium text-red-800 mb-1">Denial Reason:</div>
-                      <div className="text-sm text-red-700">{sub.denial_reason}</div>
+                    <div className="mt-3 rounded-md border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] p-3">
+                      <div className="mb-1 text-xs font-medium text-wv-red">Denial Reason:</div>
+                      <div className="text-sm text-wv-red">{sub.denial_reason}</div>
                     </div>
                   )}
                   {sub.status === 'pending_keyword' && sub.extraction_feedback && (
-                    <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-                      <div className="text-xs font-medium text-yellow-800 mb-1">Feedback:</div>
-                      <div className="text-sm text-yellow-700">{sub.extraction_feedback}</div>
+                    <div className="mt-3 rounded-md border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-3">
+                      <div className="mb-1 text-xs font-medium text-wv-amber">Feedback:</div>
+                      <div className="text-sm text-wv-amber">{sub.extraction_feedback}</div>
                     </div>
                   )}
                 </div>

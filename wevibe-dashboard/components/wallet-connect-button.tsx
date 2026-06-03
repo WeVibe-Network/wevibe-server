@@ -53,14 +53,14 @@ export function WalletConnectButton({ orgID }: WalletConnectButtonProps) {
     return (
       <div className="flex items-center gap-2">
         <Badge variant="success">Wallet</Badge>
-        <span className="text-xs font-mono text-gray-600">{truncateAddress(connection.address)}</span>
+        <span className="text-xs font-mono text-wv-dim">{truncateAddress(connection.address)}</span>
       </div>
     );
   }
 
   if (availableWallets.length === 0) {
     return (
-      <div className="text-xs text-amber-600">
+      <div className="text-xs text-wv-amber">
         Install Keplr or Leap wallet to connect
       </div>
     );
@@ -82,7 +82,7 @@ export function WalletConnectButton({ orgID }: WalletConnectButtonProps) {
         ))}
       </div>
       {error && (
-        <p className="text-xs text-red-600">{error}</p>
+        <p className="text-xs text-wv-red">{error}</p>
       )}
     </div>
   );

@@ -96,7 +96,7 @@ export default function NotificationsPage() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-6 py-16 text-center text-sm text-zinc-500">
+      <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
         Loading notification preferences...
       </div>
     );
@@ -104,7 +104,7 @@ export default function NotificationsPage() {
 
   if (!prefs) {
     return (
-      <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+      <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
         Unable to load notification preferences.
       </div>
     );
@@ -114,21 +114,21 @@ export default function NotificationsPage() {
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       <header className="space-y-1">
         <h1 className="text-3xl font-semibold tracking-tight">Notification Preferences</h1>
-        <p className="text-sm text-zinc-500">Choose where activity notifications are delivered.</p>
+        <p className="text-sm text-wv-dim">Choose where activity notifications are delivered.</p>
       </header>
 
-      {error && <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
-      {success && <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</div>}
+      {error && <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">{error}</div>}
+      {success && <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">{success}</div>}
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm space-y-4">
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium text-zinc-900">Email</h2>
-          <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+          <h2 className="text-lg font-medium text-wv-text">Email</h2>
+          <label className="inline-flex items-center gap-2 text-sm text-wv-text">
             <input
               type="checkbox"
               checked={prefs.email_enabled}
               onChange={(event) => setPrefs({ ...prefs, email_enabled: event.target.checked })}
-              className="h-4 w-4 rounded border-zinc-300"
+              className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2"
             />
             Enabled
           </label>
@@ -138,16 +138,16 @@ export default function NotificationsPage() {
           placeholder="you@example.com"
           value={prefs.email_address}
           onChange={(event) => setPrefs({ ...prefs, email_address: event.target.value })}
-          className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+          className="w-full rounded-lg bg-wv-panel-2 border border-wv-line-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:outline-none focus:border-wv-violet"
         />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {categories.map((category) => (
-            <label key={`email-${category}`} className="inline-flex items-center gap-2 text-sm text-zinc-700">
+            <label key={`email-${category}`} className="inline-flex items-center gap-2 text-sm font-mono text-wv-text">
               <input
                 type="checkbox"
                 checked={prefs.email_categories.includes(category)}
                 onChange={() => toggleCategory('email', category)}
-                className="h-4 w-4 rounded border-zinc-300"
+                className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2"
               />
               {category}
             </label>
@@ -155,15 +155,15 @@ export default function NotificationsPage() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm space-y-4">
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium text-zinc-900">Webhook</h2>
-          <label className="inline-flex items-center gap-2 text-sm text-zinc-700">
+          <h2 className="text-lg font-medium text-wv-text">Webhook</h2>
+          <label className="inline-flex items-center gap-2 text-sm text-wv-text">
             <input
               type="checkbox"
               checked={prefs.webhook_enabled}
               onChange={(event) => setPrefs({ ...prefs, webhook_enabled: event.target.checked })}
-              className="h-4 w-4 rounded border-zinc-300"
+              className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2"
             />
             Enabled
           </label>
@@ -173,16 +173,16 @@ export default function NotificationsPage() {
           placeholder="https://example.com/wevibe/webhook"
           value={prefs.webhook_url}
           onChange={(event) => setPrefs({ ...prefs, webhook_url: event.target.value })}
-          className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+          className="w-full rounded-lg bg-wv-panel-2 border border-wv-line-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:outline-none focus:border-wv-violet"
         />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {categories.map((category) => (
-            <label key={`webhook-${category}`} className="inline-flex items-center gap-2 text-sm text-zinc-700">
+            <label key={`webhook-${category}`} className="inline-flex items-center gap-2 text-sm font-mono text-wv-text">
               <input
                 type="checkbox"
                 checked={prefs.webhook_categories.includes(category)}
                 onChange={() => toggleCategory('webhook', category)}
-                className="h-4 w-4 rounded border-zinc-300"
+                className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2"
               />
               {category}
             </label>
@@ -195,7 +195,7 @@ export default function NotificationsPage() {
           type="button"
           onClick={() => void handleSave()}
           disabled={saving || testing}
-          className="inline-flex items-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-indigo-300 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-dim shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
         >
           {saving ? 'Saving...' : 'Save Preferences'}
         </button>
@@ -203,7 +203,7 @@ export default function NotificationsPage() {
           type="button"
           onClick={() => void handleTest()}
           disabled={saving || testing}
-          className="inline-flex items-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-60"
         >
           {testing ? 'Sending Test...' : 'Send Test Notification'}
         </button>

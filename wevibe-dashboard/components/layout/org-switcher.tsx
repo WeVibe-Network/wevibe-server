@@ -19,7 +19,7 @@ export default function OrgSwitcher() {
   }, []);
 
   if (loading) {
-    return <span className="h-5 w-24 animate-pulse rounded bg-gray-200" />;
+    return <span className="h-5 w-24 animate-pulse rounded bg-wv-panel-3" />;
   }
 
   if (orgs.length === 0) {
@@ -28,7 +28,7 @@ export default function OrgSwitcher() {
 
   if (orgs.length === 1) {
     return (
-      <span className="text-sm font-medium text-gray-900">
+      <span className="text-sm font-medium text-wv-text">
         {orgs[0].org_name}
       </span>
     );
@@ -36,9 +36,9 @@ export default function OrgSwitcher() {
 
   const roleBadgeColor = (role: string) => {
     switch (role) {
-      case 'leader': return 'bg-purple-100 text-purple-700';
-      case 'moderator': return 'bg-blue-100 text-blue-700';
-      default: return 'bg-gray-100 text-gray-600';
+      case 'leader': return 'border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.10)] text-wv-violet';
+      case 'moderator': return 'border border-[rgba(52,220,240,0.28)] bg-[rgba(52,220,240,0.10)] text-wv-cyan';
+      default: return 'border border-wv-line bg-wv-panel-2 text-wv-dim';
     }
   };
 
@@ -46,7 +46,7 @@ export default function OrgSwitcher() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition hover:border-gray-300 hover:text-gray-900"
+        className="flex items-center gap-1.5 rounded-md border border-wv-line bg-wv-panel px-3 py-1.5 text-sm font-medium text-wv-text transition hover:border-wv-line-2 hover:text-wv-violet"
       >
         <span>{activeOrg?.org_name || 'Select org'}</span>
         <svg className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -55,13 +55,13 @@ export default function OrgSwitcher() {
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-56 rounded-md border border-gray-200 bg-white shadow-lg">
+        <div className="absolute left-0 top-full z-50 mt-1 w-56 rounded-md border border-wv-line bg-wv-panel shadow-wv-lg">
           {orgs.map(org => (
             <button
               key={org.org_id}
               onClick={() => { setActiveOrg(org.org_id); setOpen(false); }}
-              className={`w-full text-left px-3 py-2 text-sm transition hover:bg-gray-50
-                ${activeOrg?.org_id === org.org_id ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700'}`}
+              className={`w-full px-3 py-2 text-left text-sm transition hover:bg-wv-line
+                ${activeOrg?.org_id === org.org_id ? 'bg-[rgba(124,92,255,0.14)] text-wv-violet' : 'text-wv-text'}`}
             >
               <div className="flex items-center justify-between">
                 <span className="font-medium">{org.org_name}</span>

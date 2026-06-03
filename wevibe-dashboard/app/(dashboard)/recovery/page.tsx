@@ -140,47 +140,47 @@ export default function RecoveryPage() {
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold tracking-tight">Recovery Shares</h1>
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-wv-dim">
           Shamir secret sharing for org key recovery. Store up to {MAX_SHARES} shares with trusted holders.
         </p>
       </header>
 
-      <section className="rounded-xl border border-zinc-200 bg-white/70 p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-zinc-900">Stored Shares</h2>
-        <p className="mt-1 text-sm text-zinc-500">
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+        <h2 className="text-lg font-semibold text-wv-text">Stored Shares</h2>
+        <p className="mt-1 text-sm text-wv-dim">
           {storedCount} of {MAX_SHARES} share slots filled.
         </p>
 
         {loading ? (
-          <p className="mt-4 text-sm text-zinc-500">Loading…</p>
+          <p className="mt-4 text-sm text-wv-dim">Loading…</p>
         ) : error ? (
-          <div className="mt-4 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
+          <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">{error}</div>
         ) : storedCount === 0 ? (
-          <p className="mt-4 text-sm text-zinc-500">No shares stored yet.</p>
+          <p className="mt-4 text-sm text-wv-dim">No shares stored yet.</p>
         ) : (
           <div data-testid="recovery-share-display" className="mt-4 space-y-2">
             {shares.map(share => (
-              <div key={share.share_index} className="flex items-center justify-between rounded-lg border border-zinc-100 bg-zinc-50/60 px-4 py-2">
+              <div key={share.share_index} className="flex items-center justify-between rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-2">
                 <div>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Share {share.share_index}</span>
-                  <p className="mt-0.5 font-mono text-sm text-zinc-700 truncate max-w-xs">{share.holder_pubkey.slice(0, 16)}…</p>
+                  <span className="text-xs font-mono font-semibold uppercase tracking-wide text-wv-dim">Share {share.share_index}</span>
+                  <p className="mt-0.5 max-w-xs truncate font-mono text-sm text-wv-text">{share.holder_pubkey.slice(0, 16)}…</p>
                 </div>
-                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Stored</span>
+                <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">Stored</span>
               </div>
             ))}
           </div>
         )}
       </section>
 
-      <section className="rounded-xl border border-zinc-200 bg-white/70 p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-zinc-900">Store Shares</h2>
-        <p className="mt-1 text-sm text-zinc-500">
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+        <h2 className="text-lg font-semibold text-wv-text">Store Shares</h2>
+        <p className="mt-1 text-sm text-wv-dim">
           Enter up to {MAX_SHARES} sealed shares. Each share should come from your Shamir split operation.
         </p>
 
         <form onSubmit={handleSave} className="mt-4 space-y-3">
           <div>
-            <label htmlFor="share-0" className="block text-sm font-medium text-zinc-700">Share 0</label>
+            <label htmlFor="share-0" className="block text-sm font-medium text-wv-text">Share 0</label>
             <input
               data-testid="recovery-share-input-0"
               id="share-0"
@@ -188,11 +188,11 @@ export default function RecoveryPage() {
               value={slot0}
               onChange={e => setSlot0(e.target.value)}
               placeholder="Sealed share for slot 0"
-              className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 font-mono"
+              className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text font-mono placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
             />
           </div>
           <div>
-            <label htmlFor="share-1" className="block text-sm font-medium text-zinc-700">Share 1</label>
+            <label htmlFor="share-1" className="block text-sm font-medium text-wv-text">Share 1</label>
             <input
               data-testid="recovery-share-input-1"
               id="share-1"
@@ -200,11 +200,11 @@ export default function RecoveryPage() {
               value={slot1}
               onChange={e => setSlot1(e.target.value)}
               placeholder="Sealed share for slot 1"
-              className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 font-mono"
+              className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text font-mono placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
             />
           </div>
           <div>
-            <label htmlFor="share-2" className="block text-sm font-medium text-zinc-700">Share 2</label>
+            <label htmlFor="share-2" className="block text-sm font-medium text-wv-text">Share 2</label>
             <input
               data-testid="recovery-share-input-2"
               id="share-2"
@@ -212,44 +212,44 @@ export default function RecoveryPage() {
               value={slot2}
               onChange={e => setSlot2(e.target.value)}
               placeholder="Sealed share for slot 2"
-              className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 font-mono"
+              className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text font-mono placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
             />
           </div>
 
           {saveError && (
-            <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{saveError}</div>
+            <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">{saveError}</div>
           )}
           {saveSuccess && (
-            <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{saveSuccess}</div>
+            <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green">{saveSuccess}</div>
           )}
 
           <button
             data-testid="recovery-save-button"
             type="submit"
             disabled={saveLoading || (!slot0.trim() && !slot1.trim() && !slot2.trim())}
-            className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-indigo-300"
+            className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-line-2 disabled:text-wv-faint"
           >
             {saveLoading ? 'Saving…' : 'Save Shares'}
           </button>
         </form>
       </section>
 
-      <section className="rounded-xl border border-zinc-200 bg-white/70 p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-zinc-900">Retrieve My Share</h2>
-        <p className="mt-1 text-sm text-zinc-500">
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+        <h2 className="text-lg font-semibold text-wv-text">Retrieve My Share</h2>
+        <p className="mt-1 text-sm text-wv-dim">
           Retrieve the share that was sealed under your identity pubkey.
         </p>
 
         {retrieveError && (
-          <div className="mt-4 rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{retrieveError}</div>
+          <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">{retrieveError}</div>
         )}
 
         {retrievedShare ? (
           <div data-testid="recovery-retrieved-share" className="mt-4 space-y-2">
-            <div className="flex items-center justify-between rounded-lg border border-emerald-100 bg-emerald-50/60 px-4 py-2">
+            <div className="flex items-center justify-between rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-2">
               <div>
-                <span className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Share {retrievedShare.share_index}</span>
-                <p className="mt-0.5 font-mono text-sm text-zinc-700 break-all">{retrievedShare.sealed_share}</p>
+                <span className="text-xs font-mono font-semibold uppercase tracking-wide text-wv-green">Share {retrievedShare.share_index}</span>
+                <p className="mt-0.5 font-mono text-sm text-wv-text break-all">{retrievedShare.sealed_share}</p>
               </div>
             </div>
           </div>
@@ -259,7 +259,7 @@ export default function RecoveryPage() {
             type="button"
             onClick={() => void handleRetrieve()}
             disabled={retrieveLoading}
-            className="mt-4 inline-flex items-center justify-center rounded-lg border border-indigo-300 px-4 py-2 text-sm font-medium text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:bg-zinc-100"
+            className="mt-4 inline-flex items-center justify-center rounded-lg border border-[rgba(124,92,255,0.4)] px-4 py-2 text-sm font-medium text-wv-violet transition hover:bg-[rgba(124,92,255,0.14)] disabled:cursor-not-allowed disabled:bg-wv-panel-2 disabled:text-wv-faint"
           >
             {retrieveLoading ? 'Retrieving…' : 'Retrieve My Share'}
           </button>

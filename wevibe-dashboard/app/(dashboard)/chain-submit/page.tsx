@@ -22,6 +22,7 @@ import {
   buildSubmitCommitmentMsg,
   relayOrgDecision,
 } from '@/lib/chain-client';
+import ClientTime from '@/components/ui/client-time';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
@@ -337,14 +338,14 @@ export default function ChainSubmitPage() {
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold tracking-tight">Chain Submit</h1>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-wv-dim">
             Connect to the dashboard MCP server in Settings to manage the batch pipeline.
           </p>
         </header>
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-800">
+        <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
           <p className="font-medium">No MCP session detected ({clientState}).</p>
           <p className="mt-2">
-            Open <a href="/settings" className="font-medium text-amber-900 underline-offset-2 hover:underline">Settings</a> and connect to your running `wevibe-mcp --dashboard` server.
+            Open <a href="/settings" className="font-medium text-wv-amber underline-offset-2 hover:underline">Settings</a> and connect to your running `wevibe-mcp --dashboard` server.
           </p>
         </div>
       </div>
@@ -356,7 +357,7 @@ export default function ChainSubmitPage() {
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Batch Pipeline</h1>
-          <p className="mt-1 text-sm text-zinc-500">
+          <p className="mt-1 text-sm text-wv-dim">
             Keyword extraction → Review → Chain submission
           </p>
         </div>
@@ -364,35 +365,35 @@ export default function ChainSubmitPage() {
           type="button"
           onClick={() => loadAll()}
           disabled={loading}
-          className="inline-flex items-center rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-indigo-300 hover:text-indigo-600"
+          className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-text shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
         >
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </header>
 
       {orgHealth && (
-        <div className="grid grid-cols-2 gap-4 rounded-xl border border-zinc-200 bg-white/70 p-4 shadow-sm sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-4 rounded-xl border border-wv-line bg-wv-panel p-4 shadow-wv-sm sm:grid-cols-4">
           <div>
-            <p className="text-xs text-zinc-500">Pending Keyword</p>
-            <p className="text-2xl font-semibold text-zinc-900">{orgHealth.pending_keyword_count}</p>
+            <p className="text-xs text-wv-dim">Pending Keyword</p>
+            <p className="text-2xl font-semibold text-wv-text">{orgHealth.pending_keyword_count}</p>
           </div>
           <div>
-            <p className="text-xs text-zinc-500">Pending Chain</p>
-            <p className="text-2xl font-semibold text-zinc-900">{orgHealth.pending_chain_count}</p>
+            <p className="text-xs text-wv-dim">Pending Chain</p>
+            <p className="text-2xl font-semibold text-wv-text">{orgHealth.pending_chain_count}</p>
           </div>
           <div>
-            <p className="text-xs text-zinc-500">Last Extraction</p>
-            <p className="text-sm font-medium text-zinc-900">
+            <p className="text-xs text-wv-dim">Last Extraction</p>
+            <p className="text-sm font-medium text-wv-text">
               {orgHealth.last_keyword_extraction
-                ? new Date(orgHealth.last_keyword_extraction).toLocaleString()
+                ? <ClientTime value={orgHealth.last_keyword_extraction} mode="datetime" />
                 : 'Never'}
             </p>
           </div>
           <div>
-            <p className="text-xs text-zinc-500">Last Chain Submit</p>
-            <p className="text-sm font-medium text-zinc-900">
+            <p className="text-xs text-wv-dim">Last Chain Submit</p>
+            <p className="text-sm font-medium text-wv-text">
               {orgHealth.last_chain_submission
-                ? new Date(orgHealth.last_chain_submission).toLocaleString()
+                ? <ClientTime value={orgHealth.last_chain_submission} mode="datetime" />
                 : 'Never'}
             </p>
           </div>
@@ -400,23 +401,23 @@ export default function ChainSubmitPage() {
       )}
 
       {error && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
           {error}
         </div>
       )}
 
       {notice && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+        <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
           {notice}
         </div>
       )}
 
       {verifyResults && (
-        <div className="rounded-xl border border-zinc-200 bg-white p-4">
-          <h3 className="font-semibold text-zinc-900">Verification Results</h3>
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-4">
+          <h3 className="font-semibold text-wv-text">Verification Results</h3>
           <div className="mt-2 space-y-1">
             {verifyResults.map(r => (
-              <div key={r.submission_hash} className={`text-sm ${r.passed ? 'text-emerald-700' : 'text-rose-700'}`}>
+              <div key={r.submission_hash} className={`font-mono text-sm ${r.passed ? 'text-wv-green' : 'text-wv-red'}`}>
                 {r.passed ? '✓' : '✗'} {r.submission_hash.slice(0, 12)}… — {r.passed ? 'Passed' : r.error}
               </div>
             ))}
@@ -425,22 +426,22 @@ export default function ChainSubmitPage() {
       )}
 
       {txResult && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-          <h3 className="font-semibold text-emerald-900">Batch Submitted</h3>
-          <p className="mt-1 text-sm text-emerald-700">
+        <div className="rounded-xl border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-4">
+          <h3 className="font-semibold text-wv-green">Batch Submitted</h3>
+          <p className="mt-1 text-sm text-wv-green">
             Tx: <span className="font-mono">{txResult.tx_hash}</span>
           </p>
-          <p className="text-sm text-emerald-700">
+          <p className="text-sm text-wv-green">
             Committed: {txResult.committed_count} memories
           </p>
         </div>
       )}
 
-      <section className="rounded-xl border border-amber-200 bg-amber-50/50 p-6">
+      <section className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Ready for Keywords</h2>
-            <p className="mt-1 text-sm text-zinc-600">
+            <h2 className="text-lg font-semibold text-wv-text">Ready for Keywords</h2>
+            <p className="mt-1 text-sm text-wv-dim">
               {pendingKeyword.length} memories approved, awaiting keyword extraction
             </p>
           </div>
@@ -448,55 +449,55 @@ export default function ChainSubmitPage() {
             type="button"
             onClick={() => runKeywordExtraction()}
             disabled={busy === 'extraction' || loading || pendingKeyword.length === 0}
-            className="inline-flex items-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:bg-amber-300"
+            className="inline-flex items-center rounded-lg bg-wv-amber px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:bg-[rgba(255,178,85,0.85)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
             {busy === 'extraction' ? 'Extracting…' : 'Run Keyword Extraction'}
           </button>
         </div>
 
         {pendingKeyword.length === 0 ? (
-          <p className="mt-4 text-sm text-zinc-500">No memories pending keyword extraction.</p>
+          <p className="mt-4 text-sm text-wv-dim">No memories pending keyword extraction.</p>
         ) : (
           <div className="mt-4 space-y-3">
             {pendingKeyword.map(item => (
-              <div key={item.submission_hash} className="rounded-lg border border-amber-200 bg-white p-4">
+              <div key={item.submission_hash} className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-wv-panel p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
                       <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs">
+                      <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
                         Epoch {item.epoch_id}
                       </span>
-				  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+				  <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
 					Memory
 				  </span>
                   {item.sanitization_findings && item.sanitization_findings.length > 0 && (
-                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                    <span className="rounded-full bg-[rgba(255,107,107,0.12)] px-2 py-0.5 text-xs font-medium text-wv-red">
                       {item.sanitization_findings.length} content issue(s)
                     </span>
                   )}
                   {item.preference_confidence !== undefined && item.preference_confidence > 0.8 && (
-                    <span className="rounded-full bg-red-200 px-2 py-0.5 text-xs font-medium text-red-800">
+                    <span className="rounded-full bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-xs font-medium text-wv-red">
                       Likely preference ({(item.preference_confidence * 100).toFixed(0)}%)
                     </span>
                   )}
                   {item.preference_confidence !== undefined && item.preference_confidence > 0.5 && item.preference_confidence <= 0.8 && (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                    <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
                       Possible preference ({(item.preference_confidence * 100).toFixed(0)}%)
                     </span>
                   )}
                       {item.moderation_approved_by && (
-                        <span>Approved by {item.moderation_approved_by.slice(0, 8)}…</span>
+                        <span className="font-mono text-wv-dim">Approved by {item.moderation_approved_by.slice(0, 8)}…</span>
                       )}
                       {item.moderation_approved_at && (
-                        <span>{new Date(item.moderation_approved_at).toLocaleString()}</span>
+                        <ClientTime value={item.moderation_approved_at} mode="datetime" />
                       )}
                     </div>
-                    <p className="mt-2 text-sm text-zinc-700 line-clamp-2">
+                    <p className="mt-2 text-sm text-wv-text line-clamp-2">
                       {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
                     </p>
                     {item.extraction_feedback && (
-                      <p className="mt-2 text-xs text-amber-700">
+                      <p className="mt-2 text-xs text-wv-amber">
                         Feedback: {item.extraction_feedback}
                       </p>
                     )}
@@ -508,11 +509,11 @@ export default function ChainSubmitPage() {
         )}
       </section>
 
-      <section className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-6">
+      <section className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.12)] p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Review Keywords</h2>
-            <p className="mt-1 text-sm text-zinc-600">
+            <h2 className="text-lg font-semibold text-wv-text">Review Keywords</h2>
+            <p className="mt-1 text-sm text-wv-dim">
               {reviewKeywords.length} memories with extracted keywords awaiting review
             </p>
           </div>
@@ -520,43 +521,43 @@ export default function ChainSubmitPage() {
             type="button"
             onClick={() => handleVerifyAll()}
             disabled={busy === 'verify' || loading || reviewKeywords.length === 0}
-            className="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-indigo-300"
+            className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
             {busy === 'verify' ? 'Verifying…' : 'Verify All'}
           </button>
         </div>
 
         {reviewKeywords.length === 0 ? (
-          <p className="mt-4 text-sm text-zinc-500">No keywords to review.</p>
+          <p className="mt-4 text-sm text-wv-dim">No keywords to review.</p>
         ) : (
           <div className="mt-4 space-y-4">
             {reviewKeywords.map(item => (
-              <div key={item.submission_hash} className="rounded-lg border border-indigo-200 bg-white p-4">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+              <div key={item.submission_hash} className="rounded-lg border border-[rgba(124,92,255,0.4)] bg-wv-panel p-4">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
                   <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
-                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs">
+                  <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
                     Epoch {item.epoch_id}
                   </span>
-				  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+				  <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
 					Memory
 				  </span>
                 </div>
-                <p className="mt-2 text-sm text-zinc-700 line-clamp-2">
+                <p className="mt-2 text-sm text-wv-text line-clamp-2">
                   {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
                 </p>
 
                 {item.extraction_result && item.extraction_result.length > 0 && (
                   <div className="mt-3">
-                    <p className="text-xs font-medium text-zinc-600">Keywords:</p>
+                    <p className="text-xs font-medium text-wv-dim">Keywords:</p>
                     <div className="mt-1 flex flex-wrap gap-2">
                       {item.extraction_result.map((kw, idx) => (
                         <span
                           key={idx}
-                          className="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-700"
+                          className="inline-flex items-center rounded-full border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.10)] px-2.5 py-0.5 text-xs font-medium text-wv-violet"
                           title={`Weight: ${(kw.weight * 100).toFixed(0)}%`}
                         >
                           {kw.keyword}
-                          <span className="ml-1 text-indigo-400">{(kw.weight * 100).toFixed(0)}%</span>
+                          <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
                         </span>
                       ))}
                     </div>
@@ -564,7 +565,7 @@ export default function ChainSubmitPage() {
                 )}
 
                 {item.extraction_feedback && (
-                  <p className="mt-2 text-xs text-amber-600">
+                  <p className="mt-2 text-xs text-wv-amber">
                     Feedback: {item.extraction_feedback}
                   </p>
                 )}
@@ -574,7 +575,7 @@ export default function ChainSubmitPage() {
                     type="button"
                     onClick={() => handleRerun(item.submission_hash)}
                     disabled={busy === item.submission_hash}
-                    className="rounded px-2 py-1 text-xs text-amber-600 hover:bg-amber-50 disabled:cursor-not-allowed"
+                    className="rounded px-2 py-1 text-xs text-wv-amber hover:bg-[rgba(255,178,85,0.12)] disabled:cursor-not-allowed"
                   >
                     Rerun
                   </button>
@@ -582,7 +583,7 @@ export default function ChainSubmitPage() {
                     type="button"
                     onClick={() => handleUpdateKeywords(item.submission_hash, item.extraction_result ?? [])}
                     disabled={busy === item.submission_hash}
-                    className="rounded px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50 disabled:cursor-not-allowed"
+                    className="rounded px-2 py-1 text-xs text-wv-violet hover:bg-[rgba(124,92,255,0.12)] disabled:cursor-not-allowed"
                   >
                     Edit Keywords
                   </button>
@@ -590,7 +591,7 @@ export default function ChainSubmitPage() {
                     type="button"
                     onClick={() => handleRemove(item.submission_hash)}
                     disabled={busy === item.submission_hash}
-                    className="rounded px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:cursor-not-allowed"
+                    className="rounded px-2 py-1 text-xs text-wv-red hover:bg-[rgba(255,107,107,0.12)] disabled:cursor-not-allowed"
                   >
                     Remove
                   </button>
@@ -601,11 +602,11 @@ export default function ChainSubmitPage() {
         )}
       </section>
 
-      <section className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-6">
+      <section className="rounded-xl border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.08)] p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Pending Denials</h2>
-            <p className="mt-1 text-sm text-zinc-600">
+            <h2 className="text-lg font-semibold text-wv-text">Pending Denials</h2>
+            <p className="mt-1 text-sm text-wv-dim">
               {pendingDenialCount} denial{pendingDenialCount !== 1 ? 's' : ''} queued for chain submission
             </p>
           </div>
@@ -613,33 +614,33 @@ export default function ChainSubmitPage() {
             type="button"
             onClick={() => handleDenialBatchSubmit()}
             disabled={denialSubmitting || !pendingDenialCount}
-            className="inline-flex items-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:bg-rose-300"
+            className="inline-flex items-center rounded-lg bg-wv-red px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:bg-[rgba(255,107,107,0.85)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
             {denialSubmitting ? 'Submitting…' : 'Batch Submit Denials'}
           </button>
         </div>
 
         {pendingDenialCount === 0 && (
-          <p className="mt-4 text-sm text-zinc-500">No pending consumer denials.</p>
+          <p className="mt-4 text-sm text-wv-dim">No pending consumer denials.</p>
         )}
 
         {denialResult?.txHash && (
-          <p className="mt-3 text-sm text-green-600">
+          <p className="mt-3 text-sm font-mono text-wv-green">
             ✓ Submitted — tx: {denialResult.txHash.slice(0, 16)}…
           </p>
         )}
         {denialResult?.error && (
-          <p className="mt-3 text-sm text-red-600">
+          <p className="mt-3 text-sm text-wv-red">
             ✗ {denialResult.error}
           </p>
         )}
       </section>
 
-      <section className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-6">
+      <section className="rounded-xl border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-zinc-900">Ready for Chain</h2>
-            <p className="mt-1 text-sm text-zinc-600">
+            <h2 className="text-lg font-semibold text-wv-text">Ready for Chain</h2>
+            <p className="mt-1 text-sm text-wv-dim">
               {pendingChain.length} verified memories awaiting chain submission
             </p>
           </div>
@@ -647,45 +648,45 @@ export default function ChainSubmitPage() {
             type="button"
             onClick={() => handleSubmitBatch()}
             disabled={busy === 'chain' || loading || pendingChain.length === 0}
-            className="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-emerald-300"
+            className="inline-flex items-center rounded-lg bg-wv-green px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:bg-[rgba(54,211,153,0.85)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
             {busy === 'chain' ? 'Submitting…' : 'Submit Batch to Chain'}
           </button>
         </div>
 
         {pendingChain.length === 0 ? (
-          <p className="mt-4 text-sm text-zinc-500">No memories ready for chain submission.</p>
+          <p className="mt-4 text-sm text-wv-dim">No memories ready for chain submission.</p>
         ) : (
           <div className="mt-4 space-y-3">
             {pendingChain.map(item => (
-              <div key={item.submission_hash} className="rounded-lg border border-emerald-200 bg-white p-4">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+              <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
                   <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
-                  <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs">
+                  <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
                     Epoch {item.epoch_id}
                   </span>
-				  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+				  <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
 					Memory
 				  </span>
                   {item.verified_by && (
-                    <span>Verified by {item.verified_by.slice(0, 8)}…</span>
+                    <span className="font-mono text-wv-dim">Verified by {item.verified_by.slice(0, 8)}…</span>
                   )}
                   {item.verified_at && (
-                    <span>{new Date(item.verified_at).toLocaleString()}</span>
+                    <ClientTime value={item.verified_at} mode="datetime" />
                   )}
                 </div>
-                <p className="mt-2 text-sm text-zinc-700 line-clamp-2">
+                <p className="mt-2 text-sm text-wv-text line-clamp-2">
                   {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
                 </p>
 
                 {item.extraction_result && item.extraction_result.length > 0 && (
                   <div className="mt-3">
-                    <p className="text-xs font-medium text-zinc-600">Keywords:</p>
+                    <p className="text-xs font-medium text-wv-dim">Keywords:</p>
                     <div className="mt-1 flex flex-wrap gap-2">
                       {item.extraction_result.map((kw, idx) => (
                         <span
                           key={idx}
-                          className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700"
+                          className="inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green"
                         >
                           {kw.keyword} {(kw.weight * 100).toFixed(0)}%
                         </span>

@@ -28,7 +28,8 @@ async function hubFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listMembers(orgId: string) {
-  return hubFetch<MemberRecord[]>(`/v1/orgs/${orgId}/members`);
+  const result = await hubFetch<MemberRecord[]>(`/v1/orgs/${orgId}/members`);
+  return result ?? [];
 }
 
 export async function getMemberOrgs(pubkey: string): Promise<MemberOrgEntry[]> {
@@ -362,7 +363,8 @@ export interface KeywordRecord {
 }
 
 export async function listKeywords(orgId: string): Promise<KeywordRecord[]> {
-  return hubFetch<KeywordRecord[]>(`/v1/orgs/${orgId}/keywords`);
+  const result = await hubFetch<KeywordRecord[]>(`/v1/orgs/${orgId}/keywords`);
+  return result ?? [];
 }
 
 export async function addKeyword(orgId: string, keyword: string): Promise<{ status: string; keyword: string }> {
@@ -678,7 +680,8 @@ export async function listNotifications(params?: {
   if (params?.before) searchParams.set('before', String(params.before));
   if (params?.unread_only) searchParams.set('unread_only', 'true');
   const query = searchParams.toString();
-  return hubFetch<ListNotificationsResponse>(`/v1/notifications${query ? `?${query}` : ''}`);
+  const resp = await hubFetch<ListNotificationsResponse>(`/v1/notifications${query ? `?${query}` : ''}`);
+  return { ...resp, notifications: resp.notifications ?? [] };
 }
 
 export async function getUnreadCount(): Promise<{ count: number }> {
@@ -740,7 +743,8 @@ export async function discoverOrgs(params?: {
   if (params?.offset) searchParams.set('offset', String(params.offset));
   if (params?.search) searchParams.set('search', params.search);
   const query = searchParams.toString();
-  return hubFetch<DiscoverResponse>(`/v1/orgs/discover${query ? `?${query}` : ''}`);
+  const resp = await hubFetch<DiscoverResponse>(`/v1/orgs/discover${query ? `?${query}` : ''}`);
+  return { ...resp, orgs: resp.orgs ?? [] };
 }
 
 export interface JoinRequest {

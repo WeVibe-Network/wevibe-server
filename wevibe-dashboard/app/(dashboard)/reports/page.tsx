@@ -11,6 +11,7 @@ import {
 } from '@/lib/hub-client';
 import { buildReportMemoryMsg, relayOrgDecision } from '@/lib/chain-client';
 import { connectWallet } from '@/lib/wallet-connect';
+import ClientTime from '@/components/ui/client-time';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
@@ -49,15 +50,6 @@ function formatReason(reason: string): string {
   return titleCase(reason);
 }
 
-function formatDate(value: string | null | undefined): string {
-  if (!value) return 'Unknown';
-  try {
-    return new Date(value).toLocaleString();
-  } catch (error) {
-    return value;
-  }
-}
-
 function shortCid(cid: string): string {
   if (cid.length <= 18) return cid;
   return `${cid.slice(0, 12)}…${cid.slice(-4)}`;
@@ -65,11 +57,11 @@ function shortCid(cid: string): string {
 
 function statusTone(status: string): string {
   const normalized = status.toLowerCase();
-  if (normalized === 'pending') return 'bg-amber-100 text-amber-800';
-  if (normalized === 'upheld_pending_tx') return 'bg-orange-100 text-orange-700';
-  if (normalized === 'upheld') return 'bg-rose-100 text-rose-700';
-  if (normalized === 'dismissed' || normalized === 'dismissed_malicious') return 'bg-emerald-100 text-emerald-700';
-  return 'bg-zinc-100 text-zinc-600';
+  if (normalized === 'pending') return 'bg-[rgba(255,178,85,0.12)] text-wv-amber';
+  if (normalized === 'upheld_pending_tx') return 'bg-[rgba(255,178,85,0.18)] text-wv-amber';
+  if (normalized === 'upheld') return 'bg-[rgba(255,107,107,0.12)] text-wv-red';
+  if (normalized === 'dismissed' || normalized === 'dismissed_malicious') return 'bg-[rgba(54,211,153,0.12)] text-wv-green';
+  return 'bg-wv-panel-2 text-wv-dim';
 }
 
 export default function ReportsPage() {
@@ -198,7 +190,7 @@ const handleAction = useCallback(
       <div className="mx-auto flex max-w-5xl flex-col gap-4">
         <header className="space-y-2">
           <h1 className="text-3xl font-semibold tracking-tight">Memory Reports</h1>
-          <p className="text-sm text-amber-700">
+          <p className="text-sm text-wv-amber">
             Set <code>NEXT_PUBLIC_ORG_ID</code> in <code>.env.local</code> to query the hub report queue.
           </p>
         </header>
@@ -212,7 +204,7 @@ const handleAction = useCallback(
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="space-y-2">
             <h1 className="text-3xl font-semibold tracking-tight">Memory Reports</h1>
-            <p className="text-sm text-zinc-500">
+            <p className="text-sm text-wv-dim">
               Track, escalate, and resolve memory abuse reports sourced from the hub API.
             </p>
           </div>
@@ -220,7 +212,7 @@ const handleAction = useCallback(
             type="button"
             onClick={() => refreshReports()}
             disabled={loading}
-            className="inline-flex items-center rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-indigo-300 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-text shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
           >
             {loading ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -234,8 +226,8 @@ const handleAction = useCallback(
               onClick={() => setActiveTab(tab.value)}
               className={`inline-flex items-center rounded-full px-4 py-1.5 text-sm font-medium transition ${
                 activeTab === tab.value
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'border border-zinc-200 text-zinc-600 hover:border-indigo-300 hover:text-indigo-600'
+                  ? 'bg-wv-grad-btn text-white shadow-wv-sm'
+                  : 'border border-wv-line text-wv-dim hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet'
               }`}
             >
               {tab.label}
@@ -245,34 +237,34 @@ const handleAction = useCallback(
       </header>
 
       {error && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
           {error}
         </div>
       )}
 
       {notice && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+        <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
           {notice}
         </div>
       )}
 
       {loading && reports.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-6 py-16 text-center text-sm text-zinc-500">
+        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
           Loading reports…
         </div>
       ) : null}
 
       {!loading && reports.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-6 py-16 text-center text-sm text-zinc-500">
+        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
           No reports match this filter yet. When moderators submit new reports, they will appear here.
         </div>
       ) : null}
 
       {reports.length > 0 ? (
         <>
-          <div className="hidden overflow-hidden rounded-2xl border border-zinc-200 bg-white/80 shadow-sm md:block">
+          <div className="hidden overflow-hidden rounded-2xl border border-wv-line bg-wv-panel shadow-wv-sm md:block">
             <table className="min-w-full text-sm">
-              <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+              <thead className="bg-wv-panel-2 text-xs uppercase tracking-wide text-wv-dim">
                 <tr>
                   <th className="px-4 py-3 text-left font-medium">Memory CID</th>
                   <th className="px-4 py-3 text-left font-medium">Reason</th>
@@ -284,7 +276,7 @@ const handleAction = useCallback(
                   <th className="px-4 py-3 text-left font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-zinc-100">
+              <tbody className="divide-y divide-wv-line">
                 {reports.map((report) => {
                   const votes = report.vote_count ?? 0;
                   const threshold = report.report_vote_threshold ?? 1;
@@ -298,12 +290,12 @@ const handleAction = useCallback(
                     <tr key={report.id} className="align-top">
                       <td className="px-4 py-4">
                         <div className="flex flex-col gap-1">
-                          <span className="font-mono text-xs text-zinc-600">{shortCid(report.memory_cid)}</span>
-                          <div className="flex items-center gap-2 text-xs text-zinc-400">
+                          <span className="font-mono text-xs text-wv-dim">{shortCid(report.memory_cid)}</span>
+                          <div className="flex items-center gap-2 text-xs text-wv-faint">
                             <button
                               type="button"
                               onClick={() => handleCopy(report.memory_cid)}
-                              className="rounded-md border border-transparent px-2 py-0.5 transition hover:border-zinc-200 hover:text-zinc-600"
+                              className="rounded-md border border-transparent px-2 py-0.5 transition hover:border-wv-line hover:text-wv-dim"
                             >
                               Copy CID
                             </button>
@@ -312,44 +304,44 @@ const handleAction = useCallback(
                       </td>
                       <td className="px-4 py-4">
                         <div className="space-y-1">
-                          <span className="font-medium text-zinc-800">{formatReason(report.reason)}</span>
+                          <span className="font-medium text-wv-text">{formatReason(report.reason)}</span>
                           {report.note ? (
-                            <p className="text-xs text-zinc-500">{report.note}</p>
+                            <p className="text-xs text-wv-dim">{report.note}</p>
                           ) : null}
                         </div>
                       </td>
                       <td className="px-4 py-4">
                         <div className="space-y-1 text-xs">
-                          <span className="font-mono text-zinc-600">{shortCid(report.reporter_pubkey)}</span>
+                          <span className="font-mono text-wv-dim">{shortCid(report.reporter_pubkey)}</span>
                           {report.reporter_wallet ? (
-                            <span className="font-mono text-zinc-400">{shortCid(report.reporter_wallet)}</span>
+                            <span className="font-mono text-wv-faint">{shortCid(report.reporter_wallet)}</span>
                           ) : null}
-                          <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] uppercase tracking-wide text-zinc-500">
+                          <span className="inline-flex items-center rounded-full bg-wv-panel-2 px-2 py-0.5 text-[11px] uppercase tracking-wide text-wv-dim">
                             {report.reporter_role}
                           </span>
                         </div>
                       </td>
-                      <td className="px-4 py-4 text-xs text-zinc-500">
+                      <td className="px-4 py-4 text-xs text-wv-dim">
                         {reporterDismissed > 0 ? (
-                          <span className="text-amber-600 font-medium">{reporterDismissed}</span>
+                          <span className="text-wv-amber font-medium">{reporterDismissed}</span>
                         ) : (
-                          <span className="text-zinc-300">0</span>
+                          <span className="text-wv-faint">0</span>
                         )}
                       </td>
-                      <td className="px-4 py-4 text-xs text-zinc-500">
+                      <td className="px-4 py-4 text-xs text-wv-dim">
                         {votes}/{threshold}
                       </td>
-                      <td className="px-4 py-4 text-xs text-zinc-500">{formatDate(report.created_at)}</td>
+                      <td className="px-4 py-4 text-xs text-wv-dim"><ClientTime value={report.created_at} mode="datetime" /></td>
                       <td className="px-4 py-4">
-                        <div className="space-y-1 text-xs text-zinc-600">
+                        <div className="space-y-1 text-xs text-wv-dim">
                           <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(report.status)}`}>
                             {statusLabel || 'Unknown'}
                           </span>
                           {resolution ? (
-                            <span className="text-zinc-500">{resolution}</span>
+                            <span className="text-wv-dim">{resolution}</span>
                           ) : null}
                           {report.resolved_by ? (
-                            <span className="text-zinc-400">by {shortCid(report.resolved_by)}</span>
+                            <span className="font-mono text-wv-faint">by {shortCid(report.resolved_by)}</span>
                           ) : null}
                         </div>
                       </td>
@@ -361,7 +353,7 @@ const handleAction = useCallback(
                                 type="button"
                                 onClick={() => handleAction(report, 'uphold')}
                                 disabled={busy === report.id}
-                                className="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                className="inline-flex items-center rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-1.5 text-xs font-medium text-wv-green shadow-wv-sm transition hover:bg-[rgba(54,211,153,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {busy === report.id ? 'Working…' : 'Uphold'}
                               </button>
@@ -369,7 +361,7 @@ const handleAction = useCallback(
                                 type="button"
                                 onClick={() => handleAction(report, 'dismiss')}
                                 disabled={busy === report.id}
-                                className="inline-flex items-center rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600 shadow-sm transition hover:border-rose-300 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                className="inline-flex items-center rounded-lg border border-wv-line px-3 py-1.5 text-xs font-medium text-wv-dim shadow-wv-sm transition hover:border-[rgba(255,107,107,0.4)] hover:text-wv-red disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {busy === report.id ? 'Working…' : 'Dismiss'}
                               </button>
@@ -377,7 +369,7 @@ const handleAction = useCallback(
                                 type="button"
                                 onClick={() => handleAction(report, 'dismiss_malicious')}
                                 disabled={busy === report.id}
-                                className="inline-flex items-center rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                className="inline-flex items-center rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-1.5 text-xs font-medium text-wv-red shadow-wv-sm transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {busy === report.id ? 'Working…' : 'Malicious'}
                               </button>
@@ -393,7 +385,7 @@ const handleAction = useCallback(
                                 }
                               }}
                               disabled={busy === report.id}
-                              className="inline-flex items-center rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-700 shadow-sm transition hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              className="inline-flex items-center rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-1.5 text-xs font-medium text-wv-amber shadow-wv-sm transition hover:bg-[rgba(255,178,85,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {busy === report.id ? 'Working…' : 'Submit to Chain'}
                             </button>
@@ -418,41 +410,41 @@ const showPending = report.status === 'pending';
                     const resolution = report.resolution ?? null;
 
                     return (
-                      <article key={report.id} className="rounded-2xl border border-zinc-200 bg-white/80 p-4 shadow-sm">
+                      <article key={report.id} className="rounded-2xl border border-wv-line bg-wv-panel p-4 shadow-wv-sm">
                         <div className="flex flex-col gap-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="font-mono text-xs text-zinc-600">{shortCid(report.memory_cid)}</span>
+                            <span className="font-mono text-xs text-wv-dim">{shortCid(report.memory_cid)}</span>
                             <button
                               type="button"
                               onClick={() => handleCopy(report.memory_cid)}
-                              className="rounded-md border border-transparent px-2 py-0.5 text-xs text-zinc-500 transition hover:border-zinc-200 hover:text-zinc-700"
+                              className="rounded-md border border-transparent px-2 py-0.5 text-xs text-wv-dim transition hover:border-wv-line hover:text-wv-text"
                             >
                               Copy CID
                             </button>
                           </div>
                           <div className="space-y-1">
-                            <p className="text-sm font-medium text-zinc-800">{formatReason(report.reason)}</p>
-                            {report.note ? <p className="text-xs text-zinc-500">{report.note}</p> : null}
+                            <p className="text-sm font-medium text-wv-text">{formatReason(report.reason)}</p>
+                            {report.note ? <p className="text-xs text-wv-dim">{report.note}</p> : null}
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                            <span className="font-mono text-zinc-600">{shortCid(report.reporter_pubkey)}</span>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
+                            <span className="font-mono text-wv-dim">{shortCid(report.reporter_pubkey)}</span>
                             {report.reporter_wallet ? (
-                              <span className="font-mono text-zinc-400">{shortCid(report.reporter_wallet)}</span>
+                              <span className="font-mono text-wv-faint">{shortCid(report.reporter_wallet)}</span>
                             ) : null}
-                            <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] uppercase tracking-wide text-zinc-500">
+                            <span className="inline-flex items-center rounded-full bg-wv-panel-2 px-2 py-0.5 text-[11px] uppercase tracking-wide text-wv-dim">
                               {report.reporter_role}
                             </span>
                             {reporterDismissed > 0 && (
-                              <span className="text-amber-600 font-medium">Dismissed: {reporterDismissed}</span>
+                              <span className="text-wv-amber font-medium">Dismissed: {reporterDismissed}</span>
                             )}
                           </div>
-                          <div className="text-xs text-zinc-500">Votes {votes}/{threshold} · Created {formatDate(report.created_at)}</div>
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                          <div className="text-xs text-wv-dim">Votes {votes}/{threshold} · Created <ClientTime value={report.created_at} mode="datetime" /></div>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
                             <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${statusTone(report.status)}`}>
                               {statusLabel || 'Unknown'}
                             </span>
                             {resolution ? <span>{resolution}</span> : null}
-                            {report.resolved_by ? <span>by {shortCid(report.resolved_by)}</span> : null}
+                            {report.resolved_by ? <span className="font-mono text-wv-faint">by {shortCid(report.resolved_by)}</span> : null}
                           </div>
                           <div className="flex flex-wrap gap-2 pt-2">
                             {showPending ? (
@@ -461,7 +453,7 @@ const showPending = report.status === 'pending';
                                   type="button"
                                   onClick={() => handleAction(report, 'uphold')}
                                   disabled={busy === report.id}
-                                  className="inline-flex flex-1 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  className="inline-flex flex-1 items-center justify-center rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-1.5 text-xs font-medium text-wv-green shadow-wv-sm transition hover:bg-[rgba(54,211,153,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {busy === report.id ? 'Working…' : 'Uphold'}
                                 </button>
@@ -469,7 +461,7 @@ const showPending = report.status === 'pending';
                                   type="button"
                                   onClick={() => handleAction(report, 'dismiss')}
                                   disabled={busy === report.id}
-                                  className="inline-flex flex-1 items-center justify-center rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600 shadow-sm transition hover:border-rose-300 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
+                                  className="inline-flex flex-1 items-center justify-center rounded-lg border border-wv-line px-3 py-1.5 text-xs font-medium text-wv-dim shadow-wv-sm transition hover:border-[rgba(255,107,107,0.4)] hover:text-wv-red disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {busy === report.id ? 'Working…' : 'Dismiss'}
                                 </button>
@@ -477,7 +469,7 @@ const showPending = report.status === 'pending';
                                   type="button"
                                   onClick={() => handleAction(report, 'dismiss_malicious')}
                                   disabled={busy === report.id}
-                                  className="inline-flex flex-1 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  className="inline-flex flex-1 items-center justify-center rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-1.5 text-xs font-medium text-wv-red shadow-wv-sm transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {busy === report.id ? 'Working…' : 'Malicious'}
                                 </button>
@@ -493,7 +485,7 @@ const showPending = report.status === 'pending';
                                   }
                                 }}
                                 disabled={busy === report.id}
-                                className="inline-flex flex-1 items-center justify-center rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-700 shadow-sm transition hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                className="inline-flex flex-1 items-center justify-center rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-1.5 text-xs font-medium text-wv-amber shadow-wv-sm transition hover:bg-[rgba(255,178,85,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 {busy === report.id ? 'Working…' : 'Submit to Chain'}
                               </button>

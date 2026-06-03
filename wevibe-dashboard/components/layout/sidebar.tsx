@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { useOrgContext } from '@/lib/org-context';
 import type { OrgRole } from '@/lib/org-role';
 
@@ -31,11 +32,13 @@ const nav: NavItem[] = [
   { href: '/settings', label: 'Settings', roles: ['leader'] },
 ];
 
-const showCreateOrg = typeof window === 'undefined' ? false : !process.env.NEXT_PUBLIC_ORG_ID;
-
 export default function Sidebar() {
   const path = usePathname();
   const { activeOrg } = useOrgContext();
+  const [showCreateOrg, setShowCreateOrg] = useState(false);
+  useEffect(() => {
+    setShowCreateOrg(!process.env.NEXT_PUBLIC_ORG_ID);
+  }, []);
   const userRole: OrgRole = activeOrg?.role || 'member';
 
   const visibleNav = nav.filter(item => {
@@ -44,9 +47,9 @@ export default function Sidebar() {
   });
 
   return (
-    <aside className="w-56 bg-white border-r border-gray-200 flex flex-col">
-      <div className="px-4 py-5 border-b border-gray-200">
-        <span className="font-semibold text-gray-900">WeVibe Network</span>
+    <aside className="flex w-56 flex-col border-r border-wv-line bg-wv-panel">
+      <div className="border-b border-wv-line px-4 py-5">
+        <span className="font-semibold text-wv-text">WeVibe Network</span>
       </div>
       <nav className="flex-1 p-3 space-y-1">
         {showCreateOrg && (
@@ -54,8 +57,8 @@ export default function Sidebar() {
             href="/create-org"
             className={`block px-3 py-2 rounded-md text-sm ${
               path.startsWith('/create-org')
-                ? 'bg-gray-100 font-medium text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50'
+                ? 'bg-[rgba(124,92,255,0.14)] font-medium text-wv-violet'
+                : 'text-wv-dim hover:bg-wv-line hover:text-wv-text'
             }`}
           >
             Create Org
@@ -68,8 +71,8 @@ export default function Sidebar() {
             data-testid={`nav-${href.slice(1)}`}
             className={`block px-3 py-2 rounded-md text-sm ${
               path.startsWith(href)
-                ? 'bg-gray-100 font-medium text-gray-900'
-                : 'text-gray-600 hover:bg-gray-50'
+                ? 'bg-[rgba(124,92,255,0.14)] font-medium text-wv-violet'
+                : 'text-wv-dim hover:bg-wv-line hover:text-wv-text'
             }`}
           >
             {label}

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { getOrg, submitJoinRequest, OrgSummary } from '@/lib/hub-client';
+import ClientTime from '@/components/ui/client-time';
 
 interface EnrichedOrgSummary extends OrgSummary {
   member_count?: number;
@@ -11,29 +12,6 @@ interface EnrichedOrgSummary extends OrgSummary {
 
 interface PageProps {
   params: { orgId: string };
-}
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-}
-
-function formatRelativeTime(dateStr: string | null): string {
-  if (!dateStr) return 'Never';
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins} minutes ago`;
-  if (diffHours < 24) return `${diffHours} hours ago`;
-  if (diffDays < 30) return `${diffDays} days ago`;
-  return formatDate(dateStr);
 }
 
 function truncatePubkey(pubkey: string): string {
@@ -80,8 +58,8 @@ export default function OrgDetailPage({ params }: PageProps) {
   if (loading) {
     return (
       <div className="p-6">
-        <Link href="/discover" className="text-blue-600 hover:underline mb-4 inline-block">← Back to Discover</Link>
-        <div className="text-center py-12 text-gray-500">Loading...</div>
+        <Link href="/discover" className="text-wv-violet hover:underline mb-4 inline-block">← Back to Discover</Link>
+        <div className="text-center py-12 text-wv-dim">Loading...</div>
       </div>
     );
   }
@@ -89,59 +67,59 @@ export default function OrgDetailPage({ params }: PageProps) {
   if (!org) {
     return (
       <div className="p-6">
-        <Link href="/discover" className="text-blue-600 hover:underline mb-4 inline-block">← Back to Discover</Link>
-        <div className="text-center py-12 text-gray-500">Organization not found</div>
+        <Link href="/discover" className="text-wv-violet hover:underline mb-4 inline-block">← Back to Discover</Link>
+        <div className="text-center py-12 text-wv-dim">Organization not found</div>
       </div>
     );
   }
 
   return (
     <div className="p-6">
-      <Link href="/discover" className="text-blue-600 hover:underline mb-4 inline-block">← Back to Discover</Link>
+      <Link href="/discover" className="text-wv-violet hover:underline mb-4 inline-block">← Back to Discover</Link>
 
-      <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-6">{org.org_name}</h1>
+      <div className="bg-wv-panel border border-wv-line rounded-lg p-6 shadow-wv-sm">
+        <h1 className="text-3xl font-bold text-wv-text mb-6">{org.org_name}</h1>
 
         <div className="grid grid-cols-2 gap-6">
           <div>
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Organization ID</h3>
-            <p className="text-gray-900 font-mono text-sm">{org.org_id}</p>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Organization ID</h3>
+            <p className="text-wv-text font-mono text-sm">{org.org_id}</p>
           </div>
 
           <div>
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Leader</h3>
-            <p className="text-gray-900 font-mono text-sm">{truncatePubkey(org.leader_pubkey)}</p>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Leader</h3>
+            <p className="text-wv-text font-mono text-sm">{truncatePubkey(org.leader_pubkey)}</p>
           </div>
 
           <div>
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Current Epoch</h3>
-            <p className="text-gray-900">{org.current_epoch}</p>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Current Epoch</h3>
+            <p className="text-wv-text font-mono">{org.current_epoch}</p>
           </div>
 
           <div>
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Status</h3>
-            <p className="text-gray-900 capitalize">{org.status}</p>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Status</h3>
+            <p className="text-wv-text capitalize font-mono">{org.status}</p>
           </div>
 
           <div>
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Member Count</h3>
-            <p className="text-gray-900">{org.member_count != null ? String(org.member_count) : 'N/A'}</p>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Member Count</h3>
+            <p className="text-wv-text font-mono">{org.member_count != null ? String(org.member_count) : 'N/A'}</p>
           </div>
 
           <div>
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Last Activity</h3>
-            <p className="text-gray-900">{org.last_activity_at ? formatRelativeTime(org.last_activity_at) : 'N/A'}</p>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Last Activity</h3>
+            <p className="text-wv-text font-mono"><ClientTime value={org.last_activity_at} mode="relative" fallback="N/A" /></p>
           </div>
 
           <div>
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Created</h3>
-            <p className="text-gray-900">{formatDate(org.created_at)}</p>
+            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Created</h3>
+            <p className="text-wv-text font-mono"><ClientTime value={org.created_at} mode="date" /></p>
           </div>
         </div>
 
-        <div className="mt-8 pt-6 border-t border-gray-200">
+        <div className="mt-8 pt-6 border-t border-wv-line">
           {joinStatus === 'success' ? (
-            <div className="px-6 py-3 bg-green-100 text-green-800 rounded-lg">
+            <div className="px-6 py-3 bg-[rgba(54,211,153,0.12)] border border-[rgba(54,211,153,0.4)] text-wv-green rounded-lg">
               Join request submitted! Check notifications for updates.
             </div>
           ) : (
@@ -149,12 +127,12 @@ export default function OrgDetailPage({ params }: PageProps) {
               <button
                 onClick={handleJoin}
                 disabled={joining}
-                className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="px-6 py-3 bg-wv-grad-btn text-white font-medium rounded-lg hover:opacity-95 disabled:opacity-50"
               >
                 {joining ? 'Submitting...' : 'Request to Join'}
               </button>
               {joinStatus === 'error' && (
-                <p className="mt-2 text-sm text-red-600">{joinError}</p>
+                <p className="mt-2 text-sm text-wv-red">{joinError}</p>
               )}
             </div>
           )}

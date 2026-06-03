@@ -152,23 +152,23 @@ export default function CreateOrgPage() {
     <div className="mx-auto flex max-w-2xl flex-col gap-8">
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold tracking-tight">Create Organization</h1>
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-wv-dim">
           Register a new organization in the WeVibe Network hub.
         </p>
       </header>
 
-      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+      <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-4 text-sm text-wv-amber">
         <p className="font-medium">Ephemeral Key Generation</p>
-        <p className="mt-1 text-amber-700">
+        <p className="mt-1 text-wv-amber">
           This form generates temporary keys for testing. Full org setup with real encryption envelopes requires running the wevibe-mcp setup_org tool.
         </p>
       </div>
 
       <form onSubmit={handleSubmit} data-testid="create-org-form" className="flex flex-col gap-6">
-        <div className="rounded-xl border border-zinc-200 bg-white/70 p-6 shadow-sm">
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
           <div className="flex flex-col gap-4">
             <div>
-              <label htmlFor="org-id" className="block text-sm font-medium text-zinc-700">
+              <label htmlFor="org-id" className="block text-sm font-medium text-wv-text">
                 Org ID
               </label>
               <input
@@ -178,15 +178,15 @@ export default function CreateOrgPage() {
                 value={orgId}
                 onChange={e => setOrgId(e.target.value)}
                 placeholder="my-org"
-                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm font-mono text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
               />
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-wv-dim">
                 A unique identifier for your organization (lowercase, hyphens allowed).
               </p>
             </div>
 
             <div>
-              <label htmlFor="org-name" className="block text-sm font-medium text-zinc-700">
+              <label htmlFor="org-name" className="block text-sm font-medium text-wv-text">
                 Org Name
               </label>
               <input
@@ -196,12 +196,12 @@ export default function CreateOrgPage() {
                 value={orgName}
                 onChange={e => setOrgName(e.target.value)}
                 placeholder="My Organization"
-                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
               />
             </div>
 
             <div>
-              <label htmlFor="domain" className="block text-sm font-medium text-zinc-700">
+              <label htmlFor="domain" className="block text-sm font-medium text-wv-text">
                 Domain
               </label>
               <input
@@ -211,9 +211,9 @@ export default function CreateOrgPage() {
                 value={domain}
                 onChange={e => setDomain(e.target.value)}
                 placeholder="example.com"
-                className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm font-mono text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
               />
-              <p className="mt-1 text-xs text-zinc-500">
+              <p className="mt-1 text-xs text-wv-dim">
                 The domain associated with this organization.
               </p>
             </div>
@@ -221,13 +221,13 @@ export default function CreateOrgPage() {
         </div>
 
         {error && (
-          <div data-testid="error-display" className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          <div data-testid="error-display" className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
             {error}
           </div>
         )}
 
         {success && (
-          <div data-testid="success-message" className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          <div data-testid="success-message" className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green">
             Organization created! Redirecting…
           </div>
         )}
@@ -237,7 +237,7 @@ export default function CreateOrgPage() {
             type="submit"
             data-testid="submit-button"
             disabled={submitting}
-            className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-1 disabled:cursor-not-allowed disabled:bg-indigo-300"
+            className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? 'Creating…' : 'Create Organization'}
           </button>

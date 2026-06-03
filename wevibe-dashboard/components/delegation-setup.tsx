@@ -6,6 +6,7 @@ import { registerDelegateKey } from '@/lib/hub-client';
 import { getDelegateKey } from '@/lib/delegate-key';
 import Button from '@/components/ui/button';
 import Badge from '@/components/ui/badge';
+import ClientTime from '@/components/ui/client-time';
 
 interface DelegationSetupProps {
   walletAddress: string;
@@ -64,23 +65,26 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
   function getExpirationDate(): string {
     const date = new Date();
     date.setDate(date.getDate() + 90);
-    return date.toLocaleDateString();
+    return date.toISOString();
   }
 
   if (currentStep === 'complete') {
     return (
-      <div className="flex flex-col gap-3 p-4 border border-green-200 rounded-lg bg-green-50">
+      <div className="flex flex-col gap-3 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-4">
         <div className="flex items-center gap-2">
           <Badge variant="success">Signing Key Active</Badge>
         </div>
-        <div className="text-xs space-y-1">
-          <p className="text-gray-600">
+        <div className="space-y-1 text-xs">
+          <p className="font-mono text-wv-dim">
             Delegate: <span className="font-mono">{truncateAddress(delegateAddress || '')}</span>
           </p>
-          <p className="text-gray-600">
-            Expires: <span className="font-mono">{getExpirationDate()}</span>
+          <p className="font-mono text-wv-dim">
+            Expires:{' '}
+            <span className="font-mono">
+              <ClientTime value={getExpirationDate()} mode="date" />
+            </span>
           </p>
-          <p className="text-gray-500 text-[10px]">
+          <p className="font-mono text-[10px] text-wv-faint">
             Tx: {txHash}
           </p>
         </div>
@@ -93,8 +97,8 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
 
   if (currentStep === 'error') {
     return (
-      <div className="flex flex-col gap-3 p-4 border border-red-200 rounded-lg bg-red-50">
-        <p className="text-xs text-red-700">{error}</p>
+      <div className="flex flex-col gap-3 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] p-4">
+        <p className="text-xs text-wv-red">{error}</p>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => setCurrentStep('idle')}>
             Retry
@@ -111,10 +115,10 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
 
   if (currentStep === 'generating') {
     return (
-      <div className="flex flex-col gap-2 p-4 border border-gray-200 rounded-lg">
+      <div className="flex flex-col gap-2 rounded-lg border border-wv-line bg-wv-panel p-4">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-gray-700">Generating your local signing key...</span>
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-wv-violet border-t-transparent" />
+          <span className="text-sm text-wv-text">Generating your local signing key...</span>
         </div>
       </div>
     );
@@ -122,22 +126,22 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
 
   if (currentStep === 'authorizing') {
     return (
-      <div className="flex flex-col gap-2 p-4 border border-gray-200 rounded-lg">
+      <div className="flex flex-col gap-2 rounded-lg border border-wv-line bg-wv-panel p-4">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-gray-700">Waiting for wallet authorization...</span>
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-wv-violet border-t-transparent" />
+          <span className="text-sm text-wv-text">Waiting for wallet authorization...</span>
         </div>
-        <p className="text-xs text-gray-500">Check your wallet extension</p>
+        <p className="text-xs text-wv-dim">Check your wallet extension</p>
       </div>
     );
   }
 
   if (currentStep === 'registering') {
     return (
-      <div className="flex flex-col gap-2 p-4 border border-gray-200 rounded-lg">
+      <div className="flex flex-col gap-2 rounded-lg border border-wv-line bg-wv-panel p-4">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-gray-700">Registering signing key with WeVibe...</span>
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-wv-violet border-t-transparent" />
+          <span className="text-sm text-wv-text">Registering signing key with WeVibe...</span>
         </div>
       </div>
     );
@@ -145,10 +149,10 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
 
   if (currentStep === 'revoking') {
     return (
-      <div className="flex flex-col gap-2 p-4 border border-gray-200 rounded-lg">
+      <div className="flex flex-col gap-2 rounded-lg border border-wv-line bg-wv-panel p-4">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-gray-700">Revoking signing key...</span>
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-wv-red border-t-transparent" />
+          <span className="text-sm text-wv-text">Revoking signing key...</span>
         </div>
       </div>
     );
@@ -156,10 +160,10 @@ export function DelegationSetup({ walletAddress, orgId, onDelegationComplete }: 
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="text-xs text-gray-600">
+      <div className="text-xs text-wv-dim">
         <p className="mb-2">Your wallet will be asked to authorize WeVibe operations. This is a one-time setup.</p>
         <p className="font-medium mb-1">Permissions being granted:</p>
-        <ul className="list-disc list-inside text-gray-500 space-y-0.5">
+        <ul className="list-inside list-disc space-y-0.5 text-wv-dim">
           <li>Submit memory commitments</li>
           <li>Approve/reject memory</li>
           <li>Submit serve batches</li>

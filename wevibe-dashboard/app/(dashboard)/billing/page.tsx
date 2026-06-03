@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { getOrgCredits, getOrgFinances } from '@/lib/hub-client'
 import { useOrgContext } from '@/lib/org-context'
+import ClientTime from '@/components/ui/client-time'
 
 const REASON_LABELS: Record<string, string> = {
   topup: 'Credit top-up',
@@ -40,7 +41,7 @@ export default function BillingPage() {
   if (!orgId) return (
     <div>
       <h1 className="text-2xl font-semibold mb-4">Billing</h1>
-      <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-4">
+      <p className="text-sm text-wv-amber bg-[rgba(255,178,85,0.12)] border border-[rgba(255,178,85,0.4)] rounded-lg p-4">
         Select or join an organization first.
       </p>
     </div>
@@ -52,66 +53,66 @@ export default function BillingPage() {
         <h1 className="text-2xl font-semibold">Billing</h1>
         <button
           onClick={() => alert('Stripe integration coming soon')}
-          className="text-sm px-4 py-1.5 bg-blue-600 text-white rounded border border-blue-600 hover:bg-blue-700"
+          className="text-sm px-4 py-1.5 bg-wv-grad-btn text-white rounded border border-[rgba(124,92,255,0.4)] hover:opacity-95"
         >
           Top Up Credits
         </button>
       </div>
 
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm">
+        <div className="mb-4 bg-[rgba(255,107,107,0.12)] border border-[rgba(255,107,107,0.4)] rounded-lg p-3 text-wv-red text-sm">
           {error}
         </div>
       )}
 
       {loading ? (
-        <p className="text-gray-400 text-sm">Loading...</p>
+        <p className="text-wv-faint text-sm">Loading...</p>
       ) : (
         <>
           <div className="grid gap-4 mb-6 sm:grid-cols-2">
-            <div className="bg-white border border-gray-200 rounded-lg p-6">
-              <p className="text-sm text-gray-500 mb-1">Hub Credits (off-chain)</p>
-              <p className="text-3xl font-semibold text-gray-900">{hubCredits.toLocaleString()} credits</p>
+            <div className="bg-wv-panel border border-wv-line rounded-lg p-6 shadow-wv-sm">
+              <p className="text-sm font-mono text-wv-dim tracking-[0.08em] uppercase mb-1">Hub Credits (off-chain)</p>
+              <p className="text-3xl font-semibold tracking-[-0.02em] text-wv-text font-mono">{hubCredits.toLocaleString()} credits</p>
             </div>
-            <div className="bg-white border border-gray-200 rounded-lg p-6">
-              <p className="text-sm text-gray-500 mb-1">Chain Treasury (on-chain retrieval budget)</p>
-              <p className="text-3xl font-semibold text-gray-900">{chainTreasury.toLocaleString()} uvibe</p>
+            <div className="bg-wv-panel border border-wv-line rounded-lg p-6 shadow-wv-sm">
+              <p className="text-sm font-mono text-wv-dim tracking-[0.08em] uppercase mb-1">Chain Treasury (on-chain retrieval budget)</p>
+              <p className="text-3xl font-semibold tracking-[-0.02em] text-wv-text font-mono">{chainTreasury.toLocaleString()} uvibe</p>
             </div>
           </div>
 
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="bg-wv-panel border border-wv-line rounded-lg overflow-hidden shadow-wv-sm">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Amount</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Reason</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Actor</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Date</th>
+                <tr className="border-b border-wv-line bg-wv-panel-2">
+                  <th className="text-left px-4 py-3 text-xs font-mono font-medium uppercase tracking-[0.08em] text-wv-dim">Amount</th>
+                  <th className="text-left px-4 py-3 text-xs font-mono font-medium uppercase tracking-[0.08em] text-wv-dim">Reason</th>
+                  <th className="text-left px-4 py-3 text-xs font-mono font-medium uppercase tracking-[0.08em] text-wv-dim">Actor</th>
+                  <th className="text-left px-4 py-3 text-xs font-mono font-medium uppercase tracking-[0.08em] text-wv-dim">Date</th>
                 </tr>
               </thead>
               <tbody>
                 {transactions.map((t, i) => (
-                  <tr key={t.txn_id ?? i} className="border-b border-gray-100 last:border-0">
+                  <tr key={t.txn_id ?? i} className="border-b border-wv-line last:border-0">
                     <td className="px-4 py-3">
-                      <span className={`font-medium ${t.delta >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                      <span className={`font-mono font-medium ${t.delta >= 0 ? 'text-wv-green' : 'text-wv-red'}`}>
                         {(t.delta ?? 0) >= 0 ? '+' : ''}{(t.delta ?? 0).toLocaleString()}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-600">
+                    <td className="px-4 py-3 text-wv-dim">
                       {REASON_LABELS[t.reason] ?? t.reason}
                     </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs font-mono">
+                    <td className="px-4 py-3 text-wv-dim text-xs font-mono">
                       {t.actor}
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">
-                      {t.created_at ? new Date(t.created_at).toLocaleString() : '—'}
+                    <td className="px-4 py-3 text-wv-faint text-xs font-mono">
+                      {t.created_at ? <ClientTime value={t.created_at} mode="datetime" /> : '—'}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
             {transactions.length === 0 && (
-              <p className="text-center py-8 text-gray-400">No transactions yet</p>
+              <p className="text-center py-8 text-wv-faint">No transactions yet</p>
             )}
           </div>
         </>

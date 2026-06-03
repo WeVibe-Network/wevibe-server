@@ -74,14 +74,14 @@ export default async function HealthPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Pipeline Health</h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <h1 className="text-2xl font-semibold text-wv-text">Pipeline Health</h1>
+          <p className="mt-1 text-sm font-mono text-wv-dim">
             Last checked: {timestamp}
           </p>
         </div>
         <Link
           href="/health"
-          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+          className="rounded-md bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95"
         >
           Refresh
         </Link>
@@ -89,14 +89,16 @@ export default async function HealthPage() {
 
       <div
         className={`rounded-lg p-4 ${
-          allHealthy ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'
+          allHealthy
+            ? 'border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)]'
+            : 'border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)]'
         }`}
       >
         <div className="flex items-center gap-3">
           <span
-            className={`w-3 h-3 rounded-full ${allHealthy ? 'bg-green-500' : 'bg-red-500'}`}
+            className={`h-3 w-3 rounded-full ${allHealthy ? 'bg-wv-green' : 'bg-wv-red'}`}
           />
-          <span className={`text-lg font-medium ${allHealthy ? 'text-green-800' : 'text-red-800'}`}>
+          <span className={`text-lg font-medium ${allHealthy ? 'text-wv-green' : 'text-wv-red'}`}>
             {allHealthy ? 'All systems operational' : 'System degradation detected'}
           </span>
         </div>
@@ -106,19 +108,19 @@ export default async function HealthPage() {
         {allServices.map((service) => (
           <div
             key={service.name}
-            className="rounded-lg border p-4 bg-white"
+            className="rounded-lg border border-wv-line bg-wv-panel p-4 shadow-wv-sm"
           >
             <div className="flex items-center justify-between">
-              <span className="font-medium text-gray-900">{service.name}</span>
+              <span className="font-medium text-wv-text">{service.name}</span>
               <span
-                className={`w-2.5 h-2.5 rounded-full ${service.healthy ? 'bg-green-500' : 'bg-red-500'}`}
+                className={`h-2.5 w-2.5 rounded-full ${service.healthy ? 'bg-wv-green' : 'bg-wv-red'}`}
               />
             </div>
-            <div className="mt-2 text-sm text-gray-500">
+            <div className="mt-2 text-sm font-mono text-wv-dim">
               {service.healthy ? (
                 <span>{service.ms}ms</span>
               ) : (
-                <span className="text-red-600">{service.error || 'unreachable'}</span>
+                <span className="text-wv-red">{service.error || 'unreachable'}</span>
               )}
             </div>
           </div>

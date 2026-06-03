@@ -100,11 +100,11 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center">
-      <div className="rounded-lg border p-8 max-w-lg w-full">
-        <h1 className="text-xl font-semibold">WeVibe Dashboard Identity</h1>
+      <div className="w-full max-w-lg rounded-lg border border-wv-line bg-wv-panel p-8 shadow-wv-sm">
+        <h1 className="text-xl font-semibold text-wv-text">WeVibe Dashboard Identity</h1>
 
         {error && (
-          <div className="mt-4 rounded border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+          <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] p-3 text-sm text-wv-red">
             {error}
           </div>
         )}
@@ -112,8 +112,8 @@ export default function LoginPage() {
         {pubkeyHex ? (
           <div className="mt-4 space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-500">Your Dashboard Public Key</label>
-              <code className="mt-1 block break-all rounded bg-gray-100 p-3 text-sm font-mono">
+              <label className="block text-sm font-mono uppercase tracking-[0.08em] text-wv-dim">Your Dashboard Public Key</label>
+              <code className="mt-1 block break-all rounded-lg border border-wv-line bg-wv-panel-2 p-3 text-sm font-mono text-wv-text">
                 {pubkeyHex}
               </code>
             </div>
@@ -121,13 +121,13 @@ export default function LoginPage() {
             <div className="flex gap-2">
               <button
                 onClick={handleExport}
-                className="rounded bg-gray-200 px-4 py-2 text-sm hover:bg-gray-300"
+                className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-4 py-2 text-sm text-wv-text transition hover:bg-wv-line"
               >
                 Export Key (for backup/migration)
               </button>
               <button
                 onClick={() => setImportMode(!importMode)}
-                className="rounded bg-gray-200 px-4 py-2 text-sm hover:bg-gray-300"
+                className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-4 py-2 text-sm text-wv-text transition hover:bg-wv-line"
               >
                 Import Key
               </button>
@@ -139,12 +139,12 @@ export default function LoginPage() {
                   value={importJson}
                   onChange={(e) => setImportJson(e.target.value)}
                   placeholder="Paste exported key JSON here..."
-                  className="w-full rounded border p-2 text-sm font-mono"
+                  className="w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm font-mono text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
                   rows={6}
                 />
                 <button
                   onClick={handleImport}
-                  className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+                  className="rounded-lg bg-wv-grad-btn px-4 py-2 text-sm text-white shadow-wv-sm transition hover:opacity-95"
                 >
                   Import
                 </button>
@@ -153,19 +153,19 @@ export default function LoginPage() {
 
             <button
               onClick={() => router.push('/')}
-              className="mt-4 block rounded bg-black px-4 py-2 text-center text-sm text-white hover:bg-gray-800"
+              className="mt-4 block rounded-lg bg-wv-grad-btn px-4 py-2 text-center text-sm text-white shadow-wv-sm transition hover:opacity-95"
             >
               Continue to Dashboard
             </button>
           </div>
         ) : (
           <div className="mt-4 space-y-4">
-            <p className="text-gray-600">Connect your wallet to derive your dashboard identity.</p>
+            <p className="text-wv-dim">Connect your wallet to derive your dashboard identity.</p>
 
             {checkingIdentity ? (
-              <p className="text-gray-500">Checking existing identity...</p>
+              <p className="text-wv-dim">Checking existing identity...</p>
             ) : availableWallets.length === 0 ? (
-              <p className="text-gray-500">Install Keplr or Leap wallet to continue</p>
+              <p className="text-wv-dim">Install Keplr or Leap wallet to continue</p>
             ) : (
               <div className="flex gap-2">
                 {availableWallets.map((provider) => (
@@ -173,7 +173,7 @@ export default function LoginPage() {
                     key={provider}
                     onClick={() => handleConnect(provider)}
                     disabled={loading}
-                    className="rounded bg-black px-4 py-2 text-sm text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-lg bg-wv-grad-btn px-4 py-2 text-sm text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
                   >
                     {loading
                       ? 'Connecting...'

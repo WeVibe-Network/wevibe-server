@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Badge from '@/components/ui/badge';
+import ClientTime from '@/components/ui/client-time';
 import type {
   SessionSummary,
   SessionDetail,
@@ -47,7 +48,7 @@ export default function SessionsPage() {
           sessions: SessionSummary[];
           error?: string;
         };
-        setSessions(data.sessions);
+        setSessions(data.sessions ?? []);
         if (data.error) setLoadError(data.error);
       } catch (err) {
         setLoadError((err as Error).message);
@@ -124,12 +125,12 @@ export default function SessionsPage() {
         error?: string;
       };
 
-      if (data.error && data.memories.length === 0) {
+      if (data.error && (data.memories ?? []).length === 0) {
         throw new Error(data.error);
       }
 
-      setMemories(data.memories);
-      setSelected(new Set(data.memories.map((_, i) => i)));
+      setMemories(data.memories ?? []);
+      setSelected(new Set((data.memories ?? []).map((_, i) => i)));
       setExtractionStatus('done');
     } catch (err) {
       setExtractionError((err as Error).message);
@@ -314,62 +315,37 @@ export default function SessionsPage() {
     }
   }, [selected, memories, sessionDetail, memoryOrgs, activeOrg, orgs]);
 
-  const formatTime = (iso: string) => {
-    try {
-      const d = new Date(iso);
-      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch {
-      return iso;
-    }
-  };
-
-  const formatRelative = (iso: string) => {
-    try {
-      const d = new Date(iso);
-      const now = Date.now();
-      const diff = now - d.getTime();
-      const mins = Math.floor(diff / 60000);
-      if (mins < 60) return `${mins}m ago`;
-      const hours = Math.floor(mins / 60);
-      if (hours < 24) return `${hours}h ago`;
-      const days = Math.floor(hours / 24);
-      return `${days}d ago`;
-    } catch {
-      return '';
-    }
-  };
-
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">Sessions</h1>
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm text-wv-dim">
           Extract technical memories from your coding sessions.
           Memories are processed locally — only selected memories are submitted to your org.
         </p>
       </header>
 
       {loadError && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-4 py-3 text-sm text-wv-amber">
           {loadError}
         </div>
       )}
 
       {!loadError && (
-        <div className="rounded-lg border border-zinc-100 bg-zinc-50 px-4 py-2 text-xs text-zinc-500 flex items-center gap-3">
+        <div className="flex items-center gap-3 rounded-lg border border-wv-line bg-wv-panel px-4 py-2 text-xs text-wv-dim">
           {identity ? (
             <>
-              <span className="font-medium text-zinc-600">Signing as:</span>
-              <code className="text-indigo-600">
+              <span className="font-mono font-medium text-wv-dim">Signing as:</span>
+              <code className="font-mono text-wv-violet">
                 {identity.pubkeyHex.slice(0, 8)}...{identity.pubkeyHex.slice(-4)}
               </code>
             </>
           ) : (
             <>
-              <span className="font-medium text-amber-600">No identity:</span>
+              <span className="font-mono font-medium text-wv-amber">No identity:</span>
               <button
                 onClick={() => router.push('/login')}
-                className="text-indigo-600 underline hover:text-indigo-800"
+                className="text-wv-violet underline hover:text-wv-text"
               >
                 Set Up Identity
               </button>
@@ -379,13 +355,13 @@ export default function SessionsPage() {
       )}
 
       {loading && (
-        <div className="py-16 text-center text-sm text-zinc-400">
+        <div className="py-16 text-center text-sm text-wv-faint">
           Loading sessions…
         </div>
       )}
 
       {!loading && sessions.length === 0 && !loadError && (
-        <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-6 py-16 text-center text-sm text-zinc-500">
+        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
           No OpenCode sessions found. Start a coding session and it will appear here.
         </div>
       )}
@@ -398,25 +374,27 @@ export default function SessionsPage() {
             <div key={session.id}>
               <button
                 onClick={() => selectSession(session.id)}
-                className={`w-full text-left rounded-2xl border bg-white/80 p-5 shadow-sm transition
+                className={`w-full rounded-2xl border bg-wv-panel p-5 text-left shadow-wv-sm transition
                   ${isActive
-                    ? 'border-indigo-300 ring-2 ring-indigo-100'
-                    : 'border-zinc-200 hover:border-zinc-300'
+                    ? 'border-[rgba(124,92,255,0.4)] ring-2 ring-[rgba(124,92,255,0.22)]'
+                    : 'border-wv-line hover:border-wv-line-2'
                   }`}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <h3 className="font-medium text-zinc-900 truncate">
+                    <h3 className="truncate font-medium text-wv-text">
                       {session.title || 'Untitled Session'}
                     </h3>
-                    <p className="mt-1 text-xs text-zinc-500 truncate">
+                    <p className="mt-1 truncate text-xs font-mono text-wv-dim">
                       {session.directory}
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className="text-xs text-zinc-400">
-                      {formatRelative(session.time_updated)}
-                    </span>
+                    <ClientTime
+                      value={session.time_updated}
+                      mode="relative"
+                      className="font-mono text-xs text-wv-faint"
+                    />
                     <div className="flex gap-2">
                       {session.model && (
                         <Badge>{session.model.split('/').pop()}</Badge>
@@ -431,50 +409,50 @@ export default function SessionsPage() {
 
               {isActive && (
                 <div className="mt-2 ml-4 space-y-4">
-                  <div className="rounded-xl border border-zinc-100 bg-zinc-50 p-4 text-xs text-zinc-500 space-y-1">
-                    <p><span className="font-medium text-zinc-600">Created:</span> {formatTime(session.time_created)}</p>
-                    <p><span className="font-medium text-zinc-600">Updated:</span> {formatTime(session.time_updated)}</p>
-                    <p><span className="font-medium text-zinc-600">Model:</span> {session.model || 'unknown'}</p>
-                    <p><span className="font-medium text-zinc-600">Messages:</span> {sessionDetail?.message_count ?? session.message_count}</p>
+                  <div className="space-y-1 rounded-xl border border-wv-line bg-wv-panel p-4 text-xs font-mono text-wv-dim">
+                    <p><span className="font-medium text-wv-dim">Created:</span> <ClientTime value={session.time_created} mode="datetime-compact" /></p>
+                    <p><span className="font-medium text-wv-dim">Updated:</span> <ClientTime value={session.time_updated} mode="datetime-compact" /></p>
+                    <p><span className="font-medium text-wv-dim">Model:</span> {session.model || 'unknown'}</p>
+                    <p><span className="font-medium text-wv-dim">Messages:</span> {sessionDetail?.message_count ?? session.message_count}</p>
                   </div>
 
                   {extractionStatus === 'idle' && sessionDetail && (
                     <button
                       onClick={extractMemories}
-                      className="inline-flex items-center rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500"
+                      className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v"
                     >
                       Extract Memories
                     </button>
                   )}
 
                   {extractionStatus === 'loading-transcript' && (
-                    <div className="flex items-center gap-3 py-4 text-sm text-zinc-500">
-                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-indigo-600" />
+                    <div className="flex items-center gap-3 py-4 text-sm text-wv-dim">
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-wv-line-2 border-t-wv-violet" />
                       Loading session transcript…
                     </div>
                   )}
 
                   {extractionStatus === 'extracting' && (
-                    <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-8 text-center">
-                      <div className="mx-auto h-8 w-8 animate-spin rounded-full border-3 border-indigo-200 border-t-indigo-600" />
-                      <p className="mt-4 text-sm font-medium text-indigo-900">
+                    <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] p-8 text-center">
+                      <div className="mx-auto h-8 w-8 animate-spin rounded-full border-3 border-[rgba(124,92,255,0.22)] border-t-wv-violet" />
+                      <p className="mt-4 text-sm font-medium text-wv-text">
                         Extracting memories…
                       </p>
-                      <p className="mt-1 text-xs text-indigo-600">
+                      <p className="mt-1 text-xs text-wv-violet">
                         Please wait while your session is being analyzed
                       </p>
                     </div>
                   )}
 
                   {extractionStatus === 'error' && extractionError && (
-                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
                       {extractionError}
                       <button
                         onClick={() => {
                           setExtractionStatus('idle');
                           setExtractionError(null);
                         }}
-                        className="ml-3 text-rose-900 underline"
+                        className="ml-3 text-wv-red underline"
                       >
                         Try again
                       </button>
@@ -483,11 +461,11 @@ export default function SessionsPage() {
 
                   {extractionStatus === 'done' && (
                     <div className="space-y-4">
-                      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                      <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
                         <span className="font-semibold">
                           Your session produced {memories.length} memory{memories.length !== 1 ? 'ies' : ''}!
                         </span>
-                        <span className="ml-2 text-emerald-600">
+                        <span className="ml-2 text-wv-green">
                           Select which to submit for review.
                         </span>
                       </div>
@@ -495,18 +473,18 @@ export default function SessionsPage() {
                       <div className="flex items-center gap-3 text-xs">
                         <button
                           onClick={selectAll}
-                          className="text-indigo-600 hover:text-indigo-800"
+                          className="text-wv-violet hover:text-wv-text"
                         >
                           Select All
                         </button>
-                        <span className="text-zinc-300">|</span>
+                        <span className="text-wv-faint">|</span>
                         <button
                           onClick={selectNone}
-                          className="text-indigo-600 hover:text-indigo-800"
+                          className="text-wv-violet hover:text-wv-text"
                         >
                           Select None
                         </button>
-                        <span className="ml-auto text-zinc-500">
+                        <span className="ml-auto font-mono text-wv-dim">
                           {selected.size} of {memories.length} selected
                         </span>
                       </div>
@@ -522,8 +500,8 @@ export default function SessionsPage() {
                             key={idx}
                             className={`rounded-xl border p-4 transition
                               ${isSelected
-                                ? 'border-indigo-300 bg-indigo-50/50 ring-1 ring-indigo-200'
-                                : 'border-zinc-200 bg-white hover:border-zinc-300'
+                                ? 'border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] ring-1 ring-[rgba(124,92,255,0.28)]'
+                                : 'border-wv-line bg-wv-panel hover:border-wv-line-2'
                               }`}
                           >
                             <div className="flex items-start gap-3">
@@ -531,8 +509,8 @@ export default function SessionsPage() {
                                 onClick={() => toggleMemory(idx)}
                                 className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 flex items-center justify-center transition
                                   ${isSelected
-                                    ? 'border-indigo-600 bg-indigo-600'
-                                    : 'border-zinc-300 bg-white'
+                                    ? 'border-wv-violet bg-wv-violet'
+                                    : 'border-wv-line-2 bg-wv-panel'
                                   }`}
                               >
                                 {isSelected && (
@@ -546,7 +524,7 @@ export default function SessionsPage() {
                                 <div className="flex items-center justify-between gap-2">
 							<div className="flex items-center gap-2">
 							  <span
-								className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+								className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green"
 							  >
 								Memory
 							  </span>
@@ -560,7 +538,7 @@ export default function SessionsPage() {
                                         setMemoryOrg(idx, e.target.value);
                                       }}
                                       onClick={e => e.stopPropagation()}
-                                      className="text-xs border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-700 hover:border-gray-300 focus:outline-none focus:border-indigo-400"
+                                      className="rounded-md border border-wv-line-2 bg-wv-panel-2 px-2 py-1 text-xs text-wv-text hover:border-wv-violet focus:border-wv-violet focus:outline-none"
                                     >
                                       {orgs.map(org => (
                                         <option key={org.org_id} value={org.org_id}>
@@ -570,24 +548,24 @@ export default function SessionsPage() {
                                     </select>
                                   )}
                                   {!showOrgDropdown && currentOrgEntry && (
-                                    <span className="text-xs text-gray-500">
+                                    <span className="text-xs font-mono text-wv-dim">
                                       → {currentOrgEntry.org_name}
                                     </span>
                                   )}
                                 </div>
-                                <p className="text-sm font-medium text-zinc-900">
+                                <p className="text-sm font-medium text-wv-text">
                                   {memory.insight}
                                 </p>
 
                                 {memory.context && (
-                                  <p className="text-xs text-zinc-500">
-                                    <span className="font-medium">Context:</span> {memory.context}
+                                  <p className="text-xs text-wv-dim">
+                                    <span className="font-mono font-medium">Context:</span> {memory.context}
                                   </p>
                                 )}
 
                                 {memory.avoid && (
-                                  <p className="text-xs text-amber-700 bg-amber-50 rounded px-2 py-1">
-                                    <span className="font-medium">⚠ Avoid:</span> {memory.avoid}
+                                  <p className="rounded bg-[rgba(255,178,85,0.12)] px-2 py-1 text-xs text-wv-amber">
+                                    <span className="font-mono font-medium">⚠ Avoid:</span> {memory.avoid}
                                   </p>
                                 )}
 
@@ -596,7 +574,7 @@ export default function SessionsPage() {
                                     {memory.stack.map((tech) => (
                                       <span
                                         key={tech}
-                                        className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600"
+                                        className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs font-mono text-wv-dim"
                                       >
                                         {tech}
                                       </span>
@@ -613,11 +591,11 @@ export default function SessionsPage() {
                         <button
                           onClick={submitSelected}
                           disabled={selected.size === 0 || submitting}
-                          className="inline-flex items-center rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {submitting ? (
                             <>
-                              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-[rgba(236,237,246,0.3)] border-t-wv-text" />
                               Submitting Batch…
                             </>
                           ) : (
@@ -627,27 +605,27 @@ export default function SessionsPage() {
 
                         <button
                           onClick={extractMemories}
-                          className="inline-flex items-center rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-indigo-300 hover:text-indigo-600"
+                          className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-text shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
                         >
                           Re-extract
                         </button>
                       </div>
 
                       {submitProgress && (
-                        <div className="text-xs text-indigo-600">
+                        <div className="font-mono text-xs text-wv-violet">
                           {submitProgress}
                         </div>
                       )}
 
                       {submitFindings && submitFindings.length > 0 && (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-                          <div className="font-medium text-amber-800 mb-1">
+                        <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-4 py-3 text-sm">
+                          <div className="mb-1 font-medium text-wv-amber">
                             Content flagged during sanitization
                           </div>
-                          <div className="text-amber-700">
+                          <div className="text-wv-amber">
                             {submitFindings.length} finding{submitFindings.length !== 1 ? 's' : ''} detected: {submitFindings.map(f => f.category).filter((v, i, a) => a.indexOf(v) === i).join(', ')}
                           </div>
-                          <div className="mt-1 text-amber-700">
+                          <div className="mt-1 text-wv-amber">
                             Your submission was received. The moderator will see these findings during review.
                           </div>
                         </div>
@@ -657,8 +635,8 @@ export default function SessionsPage() {
                         <div
                           className={`rounded-lg border px-4 py-3 text-sm ${
                             submitResult.includes('failed')
-                              ? 'border-rose-200 bg-rose-50 text-rose-700'
-                              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              ? 'border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] text-wv-red'
+                              : 'border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] text-wv-green'
                           }`}
                         >
                           {submitResult}
@@ -668,7 +646,7 @@ export default function SessionsPage() {
                   )}
 
                   {extractionStatus === 'done' && memories.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 p-6 text-center text-sm text-zinc-500">
+                    <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel p-6 text-center text-sm text-wv-dim">
                       No technical insights found in this session.
                       Try a session with more problem-solving or configuration work.
                     </div>

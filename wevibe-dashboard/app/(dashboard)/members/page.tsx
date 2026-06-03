@@ -9,13 +9,14 @@ import type { EncodeObject } from '@/lib/chain-client'
 import type { OrgRole } from '@/lib/org-role'
 import Button from '@/components/ui/button'
 import Card from '@/components/ui/card'
+import ClientTime from '@/components/ui/client-time'
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? ''
 
 const ROLE_COLORS: Record<string, string> = {
-  leader:    'bg-purple-100 text-purple-700',
-  moderator: 'bg-blue-100 text-blue-700',
-  member:    'bg-gray-100 text-gray-600',
+  leader:    'bg-[rgba(124,92,255,0.14)] text-wv-violet',
+  moderator: 'bg-[rgba(52,220,240,0.12)] text-wv-cyan',
+  member:    'bg-wv-panel-2 text-wv-dim',
 }
 
 type ViewerRole = OrgRole
@@ -189,7 +190,7 @@ export default function MembersPage() {
   if (!ORG_ID) return (
     <div>
       <h1 className="text-2xl font-semibold mb-4">Members</h1>
-      <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-4">
+      <p className="text-sm text-wv-amber bg-[rgba(255,178,85,0.12)] border border-[rgba(255,178,85,0.4)] rounded-lg p-4">
         Set <code>NEXT_PUBLIC_ORG_ID</code> in <code>.env.local</code>.
       </p>
     </div>
@@ -198,7 +199,7 @@ export default function MembersPage() {
   return (
     <div className="space-y-8">
       <h1 className="text-2xl font-semibold">Members</h1>
-      {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
+      {error && <p className="text-wv-red text-sm mb-4">{error}</p>}
 
       {viewerRole === 'leader' && (
         <Card className="p-6">
@@ -206,7 +207,7 @@ export default function MembersPage() {
           <form onSubmit={handleInvite} className="flex flex-col gap-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Public Key</label>
+                <label className="block text-sm font-medium text-wv-text mb-1">Public Key</label>
                 <input
                   type="text"
                   data-testid="invite-pubkey-input"
@@ -214,11 +215,11 @@ export default function MembersPage() {
                   onChange={e => setInvitePubkey(e.target.value)}
                   placeholder="0000..."
                   required
-                  className="w-full rounded border border-gray-300 px-3 py-2 text-sm font-mono"
+                  className="w-full bg-wv-panel-2 border border-wv-line-2 text-wv-text rounded-[11px] px-3 py-2 text-sm font-mono placeholder:text-wv-faint focus:outline-none focus:border-wv-violet"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">X25519 Public Key</label>
+                <label className="block text-sm font-medium text-wv-text mb-1">X25519 Public Key</label>
                 <input
                   type="text"
                   data-testid="invite-x25519-input"
@@ -226,24 +227,24 @@ export default function MembersPage() {
                   onChange={e => setInviteX25519Pubkey(e.target.value)}
                   placeholder="0000..."
                   required
-                  className="w-full rounded border border-gray-300 px-3 py-2 text-sm font-mono"
+                  className="w-full bg-wv-panel-2 border border-wv-line-2 text-wv-text rounded-[11px] px-3 py-2 text-sm font-mono placeholder:text-wv-faint focus:outline-none focus:border-wv-violet"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <label className="block text-sm font-medium text-wv-text mb-1">Role</label>
                 <select
                   data-testid="invite-role-select"
                   value={inviteRole}
                   onChange={e => setInviteRole(e.target.value as 'moderator' | 'member')}
-                  className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+                  className="w-full bg-wv-panel-2 border border-wv-line-2 text-wv-text rounded-[11px] px-3 py-2 text-sm focus:outline-none focus:border-wv-violet"
                 >
                   <option value="member">Member</option>
                   <option value="moderator">Moderator</option>
                 </select>
               </div>
             </div>
-            {inviteError && <p className="text-red-600 text-sm">{inviteError}</p>}
-            {inviteSuccess && <p className="text-green-600 text-sm">{inviteSuccess}</p>}
+            {inviteError && <p className="text-wv-red text-sm">{inviteError}</p>}
+            {inviteSuccess && <p className="text-wv-green text-sm">{inviteSuccess}</p>}
             <div>
               <Button type="submit" disabled={inviteLoading} data-testid="invite-submit-button">
                 {inviteLoading ? 'Inviting...' : 'Invite Member'}
@@ -253,26 +254,26 @@ export default function MembersPage() {
         </Card>
       )}
 
-      {loading ? <p className="text-gray-400 text-sm">Loading...</p> : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      {loading ? <p className="text-wv-faint text-sm">Loading...</p> : (
+        <div className="bg-wv-panel border border-wv-line rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 bg-gray-50">
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Member</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Role</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Epoch</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Dismissed</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Joined</th>
-                {viewerRole === 'leader' && <th className="text-left px-4 py-3 font-medium text-gray-600">Actions</th>}
+              <tr className="border-b border-wv-line bg-wv-panel-2">
+                <th className="text-left px-4 py-3 font-medium text-wv-dim">Member</th>
+                <th className="text-left px-4 py-3 font-medium text-wv-dim">Role</th>
+                <th className="text-left px-4 py-3 font-medium text-wv-dim">Epoch</th>
+                <th className="text-left px-4 py-3 font-medium text-wv-dim">Status</th>
+                <th className="text-left px-4 py-3 font-medium text-wv-dim">Dismissed</th>
+                <th className="text-left px-4 py-3 font-medium text-wv-dim">Joined</th>
+                {viewerRole === 'leader' && <th className="text-left px-4 py-3 font-medium text-wv-dim">Actions</th>}
               </tr>
             </thead>
             <tbody>
               {members.map((m) => (
-                <tr key={m.pubkey} className="border-b border-gray-100 last:border-0">
+                <tr key={m.pubkey} className="border-b border-wv-line last:border-0">
                   <td className="px-4 py-3 text-xs">
-                    <p className="font-medium text-gray-900" title={m.wallet_address || m.pubkey}>{m.display_name || 'Unnamed'}</p>
-                    <p className="font-mono text-gray-500">{m.pubkey.slice(0, 20)}…</p>
+                    <p className="font-medium text-wv-text" title={m.wallet_address || m.pubkey}>{m.display_name || 'Unnamed'}</p>
+                    <p className="font-mono text-wv-dim">{m.pubkey.slice(0, 20)}…</p>
                   </td>
                   <td className="px-4 py-3">
                     {roleChangeTarget === m.pubkey ? (
@@ -282,32 +283,32 @@ export default function MembersPage() {
                         onChange={e => handleRoleChange(m.pubkey, e.target.value)}
                         onBlur={() => setRoleChangeTarget(null)}
                         autoFocus
-                        className="rounded border border-gray-300 px-2 py-1 text-xs"
+                        className="rounded bg-wv-panel-2 border border-wv-line-2 text-wv-text px-2 py-1 text-xs focus:outline-none focus:border-wv-violet"
                       >
                         <option value="moderator">Moderator</option>
                         <option value="member">Member</option>
                       </select>
                     ) : (
-                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${ROLE_COLORS[m.role] ?? 'bg-gray-100 text-gray-600'}`}>
+                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${ROLE_COLORS[m.role] ?? 'bg-wv-panel-2 text-wv-dim'}`}>
                         {m.role}
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{m.join_epoch}</td>
+                  <td className="px-4 py-3 font-mono text-wv-dim">{m.join_epoch}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${m.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}`}>
+                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${m.active ? 'bg-[rgba(54,211,153,0.12)] text-wv-green' : 'bg-wv-panel-2 text-wv-faint'}`}>
                       {m.active ? 'active' : 'inactive'}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-xs">
                     {(m.dismissed_reports_count ?? 0) > 0 ? (
-                      <span className="text-amber-600 font-medium">{m.dismissed_reports_count}</span>
+                      <span className="text-wv-amber font-medium">{m.dismissed_reports_count}</span>
                     ) : (
-                      <span className="text-gray-300">0</span>
+                      <span className="text-wv-faint">0</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">
-                    {new Date(m.joined_at).toLocaleDateString()}
+                  <td className="px-4 py-3 text-wv-faint text-xs">
+                    <ClientTime value={m.joined_at} mode="date" />
                   </td>
                   {viewerRole === 'leader' && (
                     <td className="px-4 py-3">
@@ -316,7 +317,7 @@ export default function MembersPage() {
                           data-testid="role-change-trigger"
                           onClick={() => setRoleChangeTarget(m.pubkey)}
                           disabled={roleChangeLoading || m.role === 'leader'}
-                          className="text-xs text-blue-600 hover:text-blue-800 disabled:opacity-50 disabled:pointer-events-none"
+                          className="text-xs text-wv-violet hover:opacity-80 disabled:opacity-50 disabled:pointer-events-none"
                         >
                           Change Role
                         </button>
@@ -324,7 +325,7 @@ export default function MembersPage() {
                           data-testid="remove-member-trigger"
                           onClick={() => setRemoveTarget(m.pubkey)}
                           disabled={removeLoading || m.role === 'leader'}
-                          className="text-xs text-red-600 hover:text-red-800 disabled:opacity-50 disabled:pointer-events-none"
+                          className="text-xs text-wv-red hover:opacity-80 disabled:opacity-50 disabled:pointer-events-none"
                         >
                           Remove
                         </button>
@@ -332,7 +333,7 @@ export default function MembersPage() {
                           data-testid="transfer-leadership-trigger"
                           onClick={() => setTransferTarget(m.pubkey)}
                           disabled={transferLoading || m.role === 'leader'}
-                          className="text-xs text-purple-600 hover:text-purple-800 disabled:opacity-50 disabled:pointer-events-none"
+                          className="text-xs text-wv-violet hover:opacity-80 disabled:opacity-50 disabled:pointer-events-none"
                         >
                           Transfer Leadership
                         </button>
@@ -344,16 +345,16 @@ export default function MembersPage() {
             </tbody>
           </table>
           {members.length === 0 && (
-            <p className="text-center py-8 text-gray-400">No members found</p>
+            <p className="text-center py-8 text-wv-faint">No members found</p>
           )}
         </div>
       )}
 
       {removeTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-wv-bg/70 flex items-center justify-center z-50">
           <Card className="p-6 max-w-sm w-full mx-4">
             <h3 className="text-lg font-medium mb-2">Remove Member</h3>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-wv-dim mb-4">
               Are you sure you want to remove <span className="font-mono">{removeTarget.slice(0, 12)}…</span>?
             </p>
             <div className="flex gap-2">
@@ -373,10 +374,10 @@ export default function MembersPage() {
       )}
 
       {transferTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-wv-bg/70 flex items-center justify-center z-50">
           <Card className="p-6 max-w-sm w-full mx-4">
             <h3 className="text-lg font-medium mb-2">Transfer Leadership</h3>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-wv-dim mb-4">
               Transfer leadership to <span className="font-mono">{transferTarget.slice(0, 12)}…</span>?
             </p>
             <div className="flex gap-2">
@@ -395,9 +396,9 @@ export default function MembersPage() {
       )}
 
       {viewerRole === 'leader' && (
-        <Card className="p-6 border-red-200">
-          <h2 className="text-lg font-medium mb-2 text-red-700">Danger Zone</h2>
-          <p className="text-sm text-gray-600 mb-4">
+        <Card className="p-6 border-[rgba(255,107,107,0.4)]">
+          <h2 className="text-lg font-medium mb-2 text-wv-red">Danger Zone</h2>
+          <p className="text-sm text-wv-dim mb-4">
             Closing the organization is permanent and cannot be undone.
           </p>
           <Button
@@ -409,10 +410,10 @@ export default function MembersPage() {
           </Button>
 
           {closeDialogOpen && (
-            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="fixed inset-0 bg-wv-bg/70 flex items-center justify-center z-50">
               <Card className="p-6 max-w-sm w-full mx-4">
                 <h3 className="text-lg font-medium mb-2">Confirm Close Organization</h3>
-                <p className="text-sm text-gray-600 mb-4">
+                <p className="text-sm text-wv-dim mb-4">
                   This action is irreversible. All members will be removed and the organization will be closed permanently.
                 </p>
                 <div className="flex gap-2">

@@ -8,25 +8,10 @@ import {
   markNotificationsRead,
   markAllNotificationsRead,
 } from '@/lib/hub-client';
+import ClientTime from '@/components/ui/client-time';
 
 const WS_URL = 'ws://localhost:4440/v1/notifications/ws';
 const PAGE_SIZE = 50;
-
-function relativeTime(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHour = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHour / 24);
-
-  if (diffSec < 60) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHour < 24) return `${diffHour}h ago`;
-  if (diffDay < 30) return `${diffDay}d ago`;
-  return date.toLocaleDateString();
-}
 
 export default function ActivityPage() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -155,7 +140,7 @@ export default function ActivityPage() {
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-3xl font-semibold tracking-tight">Activity</h1>
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-wv-dim">
             Notifications from all your organizations.
           </p>
         </div>
@@ -163,7 +148,7 @@ export default function ActivityPage() {
           <button
             type="button"
             onClick={() => void handleMarkAllRead()}
-            className="inline-flex items-center rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-indigo-300 hover:text-indigo-600"
+            className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-text shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
           >
             Mark all read
           </button>
@@ -171,19 +156,19 @@ export default function ActivityPage() {
       </header>
 
       {error && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
           {error}
         </div>
       )}
 
       {loading && notifications.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-6 py-16 text-center text-sm text-zinc-500">
+        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
           Loading notifications…
         </div>
       ) : null}
 
       {!loading && notifications.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-6 py-16 text-center text-sm text-zinc-500">
+        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
           No activity yet. Notifications will appear here as your org processes memories.
         </div>
       ) : null}
@@ -196,26 +181,28 @@ export default function ActivityPage() {
                 key={n.id}
                 type="button"
                 onClick={() => { if (!n.read) void handleMarkRead(n.id); }}
-                className={`group flex items-start gap-4 rounded-xl border bg-white p-4 text-left shadow-sm transition ${
+                className={`group flex items-start gap-4 rounded-xl border bg-wv-panel p-4 text-left shadow-wv-sm transition ${
                   n.read
-                    ? 'border-zinc-100'
-                    : 'border-indigo-200 hover:border-indigo-300'
+                    ? 'border-wv-line'
+                    : 'border-[rgba(124,92,255,0.4)] hover:border-wv-violet'
                 }`}
               >
                 <div className="mt-1 flex-shrink-0">
                   {!n.read && (
-                    <span className="block h-2 w-2 rounded-full bg-indigo-500" />
+                    <span className="block h-2 w-2 rounded-full bg-wv-violet" />
                   )}
                 </div>
                 <div className="min-w-0 flex-1 space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
+                    <span className="inline-flex items-center rounded-full border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.10)] px-2 py-0.5 text-xs text-wv-violet">
                       {n.org_name}
                     </span>
                   </div>
-                  <p className="font-medium text-zinc-900">{n.title}</p>
-                  <p className="text-sm text-zinc-500">{n.body}</p>
-                  <p className="text-xs text-zinc-400">{relativeTime(n.created_at)}</p>
+                  <p className="font-medium text-wv-text">{n.title}</p>
+                  <p className="text-sm text-wv-dim">{n.body}</p>
+                  <p className="text-xs font-mono text-wv-faint">
+                    <ClientTime value={n.created_at} mode="relative" />
+                  </p>
                 </div>
               </button>
             ))}
@@ -227,7 +214,7 @@ export default function ActivityPage() {
                 type="button"
                 onClick={() => void loadMore()}
                 disabled={loadingMore}
-                className="inline-flex items-center rounded-lg border border-zinc-200 px-6 py-2 text-sm font-medium text-zinc-700 shadow-sm transition hover:border-indigo-300 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center rounded-lg border border-wv-line px-6 py-2 text-sm font-medium text-wv-text shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loadingMore ? 'Loading…' : 'Load more'}
               </button>
