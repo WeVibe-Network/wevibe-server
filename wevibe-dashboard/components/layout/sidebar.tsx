@@ -94,10 +94,12 @@ export default function Sidebar() {
 
         {hasOrg && (
           <div className="mt-4 rounded-xl border border-[rgba(124,92,255,0.28)] bg-wv-panel-2 p-3 shadow-[0_0_28px_rgba(124,92,255,0.16)]">
-            <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-wv-faint">My Org</span>
-            <p className="mt-1.5 truncate text-sm font-medium text-wv-text" title={activeOrg?.org_name}>
-              {activeOrg?.org_name}
-            </p>
+            <Link href="/my-org" className="group block">
+              <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-wv-faint">My Org</span>
+              <p className="mt-1.5 truncate text-sm font-medium text-wv-text transition group-hover:text-wv-violet" title={activeOrg?.org_name}>
+                {activeOrg?.org_name}
+              </p>
+            </Link>
             <span
               className={`mt-1.5 inline-block rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.12em] ${rolePillClass(
                 userRole,
