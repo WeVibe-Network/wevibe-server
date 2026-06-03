@@ -48,11 +48,18 @@ export default function Topbar() {
       <span className="ml-3 text-sm text-gray-500 border-l border-gray-200 pl-3">WeVibe</span>
 
       <div className="flex items-center gap-4 text-sm text-gray-500">
-        {walletAddr && (
+        {walletAddr ? (
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-emerald-500" />
             <span className="font-mono text-xs text-gray-600">{truncateAddress(walletAddr)}</span>
           </div>
+        ) : (
+          <Link
+            href="/login"
+            className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white transition hover:bg-indigo-700"
+          >
+            Connect Wallet
+          </Link>
         )}
         <div className="flex items-center gap-2">
           <span className={`h-2.5 w-2.5 rounded-full ${connectionColor[state]}`} />

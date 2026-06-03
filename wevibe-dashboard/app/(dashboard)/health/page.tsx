@@ -1,5 +1,7 @@
 import Link from 'next/link';
 
+export const dynamic = 'force-dynamic';
+
 type ServiceStatus = {
   name: string;
   healthy: boolean;
@@ -46,18 +48,23 @@ async function checkService(
 
 export default async function HealthPage() {
   const timestamp = new Date().toISOString();
+  const hubBaseUrl = process.env.HEALTH_HUB_URL || 'http://wevibe-hub:4440';
+  const qdrantBaseUrl = process.env.HEALTH_QDRANT_URL || 'http://wevibe-qdrant:6333';
+  const chainRpcBaseUrl = process.env.HEALTH_CHAIN_RPC || 'http://wevibe-chain:26657';
+  const mcpBaseUrl = process.env.HEALTH_MCP_URL || 'http://wevibe-mcp:4450';
+  const ollamaBaseUrl = process.env.HEALTH_OLLAMA_URL || 'http://host.docker.internal:11434';
 
   const [pg, qdrant, chain, hub, mcp, ollama] = await Promise.all([
     checkService(
       'PostgreSQL (via Hub)',
-      'http://localhost:4440/health',
+      `${hubBaseUrl}/health`,
       (data) => isHubHealthPayload(data) && data.status === 'ok' && data.db === 'connected',
     ),
-    checkService('Qdrant', 'http://localhost:6333/healthz'),
-    checkService('wevibe-chain', 'http://localhost:26657/status'),
-    checkService('wevibe-hub', 'http://localhost:4440/health', (data) => isHubHealthPayload(data) && data.status === 'ok'),
-    checkService('wevibe-mcp HTTP', 'http://127.0.0.1:4450/v1/health', (data) => isMcpHealthPayload(data) && data.status === 'ok'),
-    checkService('Ollama', 'http://localhost:11434/api/tags'),
+    checkService('Qdrant', `${qdrantBaseUrl}/healthz`),
+    checkService('wevibe-chain', `${chainRpcBaseUrl}/status`),
+    checkService('wevibe-hub', `${hubBaseUrl}/health`, (data) => isHubHealthPayload(data) && data.status === 'ok'),
+    checkService('wevibe-mcp HTTP', `${mcpBaseUrl}/v1/health`, (data) => isMcpHealthPayload(data) && data.status === 'ok'),
+    checkService('Ollama', `${ollamaBaseUrl}/api/tags`),
   ]);
 
   const dashboard: ServiceStatus = { name: 'Dashboard', healthy: true, ms: 0 };
