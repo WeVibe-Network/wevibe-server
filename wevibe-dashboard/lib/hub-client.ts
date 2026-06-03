@@ -139,6 +139,9 @@ export interface OrgSummary {
   org_name: string;
   domain: string;
   leader_pubkey: string;
+  leader_wallet_address?: string;
+  hub_serving_address?: string;
+  hub_serving_key_address?: string;
   current_epoch: number;
   egress_mode: string;
   allowed_providers: string[];
@@ -301,6 +304,7 @@ export interface CreateOrgRequest {
   leader_wallet: string;
   org_name: string;
   domain: string;
+  fee_model?: Record<string, unknown> | null;
   enc_envelope: string;
   search_envelope: string;
   mod_envelope: string;
@@ -314,7 +318,33 @@ export interface CreateOrgResponse extends OrgSummary {
   epoch_pk?: string;
 }
 
+export interface HubServingAddressResponse {
+  serving_address: string;
+}
+
+export interface RecordOrgRequest extends CreateOrgRequest {
+  org_id: string;
+  tx_hash: string;
+  hub_serving_key: string;
+}
+
+export async function getHubServingAddress(): Promise<string> {
+  const response = await hubFetch<HubServingAddressResponse>('/v1/hub/serving-address');
+  const servingAddress = response.serving_address?.trim();
+  if (!servingAddress) {
+    throw new Error('Hub serving address missing from /v1/hub/serving-address response');
+  }
+  return servingAddress;
+}
+
 export async function createOrg(body: CreateOrgRequest): Promise<CreateOrgResponse> {
+  return hubFetch<CreateOrgResponse>('/v1/orgs', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function recordOrg(body: RecordOrgRequest): Promise<CreateOrgResponse> {
   return hubFetch<CreateOrgResponse>('/v1/orgs', {
     method: 'POST',
     body: JSON.stringify(body),

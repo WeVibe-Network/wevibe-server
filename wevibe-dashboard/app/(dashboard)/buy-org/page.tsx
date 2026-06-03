@@ -3,12 +3,14 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { TxMsgData } from 'cosmjs-types/cosmos/base/abci/v1beta1/abci';
 import { toast } from 'sonner';
 import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
 import { ErrorBanner, LoadingState } from '@/components/ui/states';
+import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
 import { classifyError, type ErrorKind } from '@/lib/errors';
-import { createOrg, discoverOrgs } from '@/lib/hub-client';
+import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
 import { SLOT_CAP, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 import { connectWallet, getChainConfig } from '@/lib/wallet-connect';
@@ -16,8 +18,92 @@ import { deriveIdentityFromWallet, setWalletAddress } from '@/lib/wevibe-auth';
 import { buildOrgSetup } from '@/lib/wevibe-crypto';
 
 const vibeFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
+const REGISTER_ORG_STORAGE_QUOTA = 1000;
+const REGISTER_ORG_RETRIEVAL_BUDGET = 500;
+const MSG_REGISTER_ORG_RESPONSE_TYPE_URL = '/wevibe.org.v1.MsgRegisterOrgResponse';
 
 type ChartBarState = 'sold' | 'current' | 'future';
+
+function readVarint(bytes: Uint8Array, startOffset: number): { value: number; nextOffset: number } {
+  let offset = startOffset;
+  let value = 0;
+  let shift = 0;
+
+  while (offset < bytes.length) {
+    const byte = bytes[offset];
+    value |= (byte & 0x7f) << shift;
+    offset += 1;
+
+    if ((byte & 0x80) === 0) {
+      return { value, nextOffset: offset };
+    }
+
+    shift += 7;
+    if (shift > 28) {
+      throw new Error('MsgRegisterOrgResponse varint is too large');
+    }
+  }
+
+  throw new Error('Unexpected EOF while decoding MsgRegisterOrgResponse');
+}
+
+function decodeRegisterOrgResponseOrgId(responseBytes: Uint8Array): string {
+  let offset = 0;
+
+  while (offset < responseBytes.length) {
+    const tag = readVarint(responseBytes, offset);
+    offset = tag.nextOffset;
+
+    const fieldNumber = tag.value >>> 3;
+    const wireType = tag.value & 0x07;
+
+    if (fieldNumber === 1 && wireType === 2) {
+      const length = readVarint(responseBytes, offset);
+      offset = length.nextOffset;
+      const endOffset = offset + length.value;
+      if (endOffset > responseBytes.length) {
+        throw new Error('Invalid MsgRegisterOrgResponse org_id length');
+      }
+      return new TextDecoder().decode(responseBytes.slice(offset, endOffset));
+    }
+
+    if (wireType === 0) {
+      const skip = readVarint(responseBytes, offset);
+      offset = skip.nextOffset;
+      continue;
+    }
+
+    if (wireType === 2) {
+      const length = readVarint(responseBytes, offset);
+      offset = length.nextOffset + length.value;
+      if (offset > responseBytes.length) {
+        throw new Error('Invalid MsgRegisterOrgResponse field length');
+      }
+      continue;
+    }
+
+    throw new Error(`Unsupported MsgRegisterOrgResponse wire type: ${wireType}`);
+  }
+
+  throw new Error('MsgRegisterOrgResponse missing org_id');
+}
+
+function extractOrgIdFromDeliverTxData(deliverTxData?: Uint8Array): string {
+  if (!deliverTxData || deliverTxData.length === 0) {
+    throw new Error('DeliverTx data missing; cannot decode MsgRegisterOrgResponse');
+  }
+
+  const txMsgData = TxMsgData.decode(deliverTxData);
+  const registerOrgResponse = txMsgData.msgResponses.find(
+    (response) => response.typeUrl === MSG_REGISTER_ORG_RESPONSE_TYPE_URL,
+  );
+
+  if (!registerOrgResponse) {
+    throw new Error('MsgRegisterOrgResponse missing in DeliverTx msgResponses');
+  }
+
+  return decodeRegisterOrgResponseOrgId(registerOrgResponse.value);
+}
 
 function formatVibe(uvibe: number): string {
   return `${vibeFormatter.format(uvibeToVibe(uvibe))} VIBE`;
@@ -176,6 +262,13 @@ export default function BuyOrgPage() {
     setShowFaucetPrompt(false);
 
     try {
+      const walletConn = await connectWallet('keplr');
+      if (walletConn.address !== walletAddress) {
+        throw new Error('Connected wallet does not match dashboard wallet. Reconnect wallet and try again.');
+      }
+
+      const hubServingKey = await getHubServingAddress();
+
       const setup = await buildOrgSetup({
         orgName: orgNameValue,
         domain: domainValue,
@@ -183,15 +276,47 @@ export default function BuyOrgPage() {
         leaderSeedHex: identity.seedHex,
         leaderWallet: walletAddress,
       });
-      // TODO(phase-h): replace createOrg POST with CosmJS-direct MsgRegisterOrg broadcast
-      const created = await createOrg(setup.payload);
 
-      toast.success(`Organization purchased: ${created.org_id}`, { position: 'top-right' });
+      const registerOrgMsg = buildRegisterOrgMsg(
+        walletConn.address,
+        setup.payload.leader_pubkey,
+        REGISTER_ORG_STORAGE_QUOTA,
+        REGISTER_ORG_RETRIEVAL_BUDGET,
+        setup.payload.domain,
+        hubServingKey,
+        setup.payload.leader_wallet,
+      );
+
+      const broadcastResult = await directBroadcast(walletConn.address, [registerOrgMsg]);
+      if (!broadcastResult.txHash) {
+        throw new Error('Chain broadcast succeeded but tx_hash was missing');
+      }
+
+      const orgId = extractOrgIdFromDeliverTxData(broadcastResult.deliverTxData);
+
+      await recordOrg({
+        org_id: orgId,
+        tx_hash: broadcastResult.txHash,
+        leader_pubkey: setup.payload.leader_pubkey,
+        leader_x25519_pubkey: setup.payload.leader_x25519_pubkey,
+        leader_wallet: setup.payload.leader_wallet,
+        org_name: setup.payload.org_name,
+        domain: setup.payload.domain,
+        fee_model: setup.payload.fee_model,
+        enc_envelope: setup.payload.enc_envelope,
+        search_envelope: setup.payload.search_envelope,
+        mod_envelope: setup.payload.mod_envelope,
+        pk_mod: setup.payload.pk_mod,
+        signature: setup.payload.signature,
+        hub_serving_key: hubServingKey,
+      });
+
+      toast.success(`Organization purchased: ${orgId}`, { position: 'top-right' });
       setConfirmOpen(false);
       setOrgName('');
       setDomain('');
       void loadCurrentSlot();
-      router.push(`/discover/${created.org_id}`);
+      router.push(`/discover/${orgId}`);
     } catch (err) {
       const kind = classifyError(err);
       if (kind === 'needs_gas') {

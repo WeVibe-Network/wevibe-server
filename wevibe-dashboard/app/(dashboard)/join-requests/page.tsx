@@ -2,9 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { listJoinRequests, approveJoinRequest, denyJoinRequest, JoinRequest } from '@/lib/hub-client';
-import { relayBroadcast } from '@/lib/relay-client';
 import { connectWallet } from '@/lib/wallet-connect';
-import type { EncodeObject } from '@/lib/chain-client';
+import { buildAddMemberMsg, directBroadcast } from '@/lib/chain-client';
 import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
 
@@ -63,16 +62,13 @@ export default function JoinRequestsPage() {
       await approveJoinRequest(orgId, requestId, mode === 'trial');
       hubApproved = true;
 
-      const msgAddMember = {
-        typeUrl: '/wevibe.org.v1.MsgAddMember',
-        value: Buffer.from(JSON.stringify({
-          signer: walletConn.address,
-          org_id: orgId,
-          pubkey: request.requester_pubkey,
-          role: 'member',
-        })),
-      } as unknown as EncodeObject;
-      await relayBroadcast(orgId, walletConn.address, [msgAddMember]);
+      const msgAddMember = buildAddMemberMsg(
+        walletConn.address,
+        orgId,
+        request.requester_pubkey,
+        'member',
+      );
+      await directBroadcast(walletConn.address, [msgAddMember]);
 
       setRequests(prev => prev.filter(r => r.request_id !== requestId));
       setApprovalMode(prev => {

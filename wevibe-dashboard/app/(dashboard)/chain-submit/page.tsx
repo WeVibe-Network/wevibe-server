@@ -20,7 +20,7 @@ import {
   buildApproveMemoryMsg,
   buildDenialBatchMsg,
   buildSubmitCommitmentMsg,
-  relayOrgDecision,
+  directBroadcast,
 } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
 import { getConfig } from '@/lib/config';
@@ -273,7 +273,8 @@ export default function ChainSubmitPage() {
         return [commitment, approval];
       });
 
-      const txHash = await relayOrgDecision(orgId, msgs);
+      const result = await directBroadcast(walletAddress, msgs);
+      const txHash = result.txHash;
 
       if (txHash) {
         setTxResult({ tx_hash: txHash, committed_count: prepared.batch.length });
@@ -312,7 +313,6 @@ export default function ChainSubmitPage() {
       const epochResp = await fetch(`${HUB_URL}/v1/orgs/${orgId}`, { headers: authHeaders });
       const epochData = await epochResp.json() as { current_epoch?: number };
       const epoch = epochData.current_epoch ?? 0;
-      const { directBroadcast } = await import('@/lib/chain-client');
       const msg = buildDenialBatchMsg(
         walletAddress,
         orgId,

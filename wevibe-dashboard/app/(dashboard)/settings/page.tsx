@@ -2,13 +2,13 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectionState, WeVibeMcpClient, getMcpClient, resetMcpClient } from '@/lib/mcp-client';
-import { getOrg, getOrgChainConfig } from '@/lib/hub-client';
+import { getHubServingAddress, getOrg, getOrgChainConfig } from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
 import { WalletConnectButton } from '@/components/wallet-connect-button';
 import { connectWallet } from '@/lib/wallet-connect';
-import { directBroadcast, type EncodeObject } from '@/lib/chain-client';
-import { relayBroadcast } from '@/lib/relay-client';
+import { buildSetOrgConfigMsg, buildSetServingKeyMsg, directBroadcast } from '@/lib/chain-client';
 import { getConfig } from '@/lib/config';
+import { useOrgContext } from '@/lib/org-context';
 
 type OrgInfoResponse =
   | { error: string; identity?: string }
@@ -40,6 +40,7 @@ const stateColors: Record<ConnectionState, string> = {
 };
 
 export default function SettingsPage() {
+  const { activeOrg } = useOrgContext();
   const [url, setUrl] = useState(getConfig().mcpUrl);
   const [state, setState] = useState<ConnectionState>('disconnected');
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +58,12 @@ export default function SettingsPage() {
   const [chainConfigSuccess, setChainConfigSuccess] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);
   const [serveAttestationRequired, setServeAttestationRequired] = useState(false);
+  const [hubServingAddress, setHubServingAddress] = useState('');
+  const [showServingKeyEditor, setShowServingKeyEditor] = useState(false);
+  const [newServingKey, setNewServingKey] = useState('');
+  const [hubInfraError, setHubInfraError] = useState<string | null>(null);
+  const [hubInfraSuccess, setHubInfraSuccess] = useState<string | null>(null);
+  const [savingServingKey, setSavingServingKey] = useState(false);
 
   const attachListener = useCallback((client: WeVibeMcpClient) => {
     listenerRef.current?.();
@@ -165,11 +172,20 @@ export default function SettingsPage() {
     let cancelled = false;
     setConfigLoading(true);
     setConfigError(null);
-    void getOrg(orgInfo.org_id)
-      .then(summary => {
+    void Promise.all([getOrg(orgInfo.org_id), getHubServingAddress()])
+      .then(([summary, fallbackServingAddress]) => {
         if (cancelled) return;
         setRequiredApprovals(summary.required_approvals ?? 1);
         setReportVoteThreshold(summary.report_vote_threshold ?? 1);
+
+        const activeOrgServingAddress = (activeOrg as unknown as Record<string, unknown> | null)?.hub_serving_address;
+        const summaryServingAddress = summary.hub_serving_address ?? summary.hub_serving_key_address;
+        const resolvedServingAddress = [
+          typeof summaryServingAddress === 'string' ? summaryServingAddress : '',
+          typeof activeOrgServingAddress === 'string' ? activeOrgServingAddress : '',
+          fallbackServingAddress,
+        ].find((value) => value.trim().length > 0) ?? '';
+        setHubServingAddress(resolvedServingAddress);
       })
       .catch(err => {
         if (cancelled) return;
@@ -183,7 +199,7 @@ export default function SettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [orgLoaded, orgInfo]);
+  }, [activeOrg, orgLoaded, orgInfo]);
 
   useEffect(() => {
     if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
@@ -229,17 +245,13 @@ export default function SettingsPage() {
     setConfigSuccess(null);
     try {
       const walletConn = await connectWallet();
-
-      const msgSetOrgConfig: EncodeObject = {
-        typeUrl: '/wevibe.org.v1.MsgSetOrgConfig',
-        value: Buffer.from(JSON.stringify({
-          signer: walletConn.address,
-          org_id: orgInfo.org_id,
-          serve_attestation_required: false,
-          min_contributions_per_epoch: 0,
-          contest_stake_vibe: 0,
-        })),
-      };
+      const msgSetOrgConfig = buildSetOrgConfigMsg(
+        walletConn.address,
+        orgInfo.org_id,
+        false,
+        0,
+        0,
+      );
 
       const result = await directBroadcast(walletConn.address, [msgSetOrgConfig]);
       setConfigSuccess(`Moderation settings updated. Tx: ${result.txHash.slice(0, 16)}...`);
@@ -261,26 +273,57 @@ export default function SettingsPage() {
 
     try {
       const walletConn = await connectWallet();
+      const msgSetOrgConfig = buildSetOrgConfigMsg(
+        walletConn.address,
+        orgInfo.org_id,
+        serveAttestationRequired,
+        0,
+        0,
+      );
 
-      const msgSetOrgConfig: EncodeObject = {
-        typeUrl: '/wevibe.org.v1.MsgSetOrgConfig',
-        value: Buffer.from(JSON.stringify({
-          signer: walletConn.address,
-          org_id: orgInfo.org_id,
-          serve_attestation_required: serveAttestationRequired,
-          min_contributions_per_epoch: 0,
-          contest_stake_vibe: 0,
-        })),
-      };
-
-      const txHash = await relayBroadcast(orgInfo.org_id, walletConn.address, [msgSetOrgConfig]);
-      setChainConfigSuccess(`Chain config updated. Tx: ${txHash.slice(0, 16)}...`);
+      const result = await directBroadcast(walletConn.address, [msgSetOrgConfig]);
+      setChainConfigSuccess(`Chain config updated. Tx: ${result.txHash.slice(0, 16)}...`);
     } catch (err) {
       setChainConfigError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingChainConfig(false);
     }
   }, [orgLoaded, orgInfo, serveAttestationRequired]);
+
+  const handleServingKeySave = useCallback(async () => {
+    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
+      return;
+    }
+
+    const nextServingKey = newServingKey.trim();
+    if (!nextServingKey) {
+      setHubInfraError('New serving key address is required.');
+      return;
+    }
+
+    setSavingServingKey(true);
+    setHubInfraError(null);
+    setHubInfraSuccess(null);
+
+    try {
+      const walletConn = await connectWallet();
+      const msgSetServingKey = buildSetServingKeyMsg(
+        walletConn.address,
+        orgInfo.org_id,
+        nextServingKey,
+      );
+
+      const result = await directBroadcast(walletConn.address, [msgSetServingKey]);
+      setHubServingAddress(nextServingKey);
+      setShowServingKeyEditor(false);
+      setNewServingKey('');
+      setHubInfraSuccess(`Serving key updated. Tx: ${result.txHash.slice(0, 16)}...`);
+    } catch (err) {
+      setHubInfraError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingServingKey(false);
+    }
+  }, [newServingKey, orgLoaded, orgInfo]);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
@@ -506,7 +549,7 @@ export default function SettingsPage() {
       <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
         <h2 className="text-lg font-semibold text-wv-text">Chain Configuration</h2>
         <p className="mt-1 text-sm text-wv-dim">
-          Manage on-chain org settings via hub relay and transaction broadcast.
+          Manage on-chain org settings via direct wallet-signed transaction broadcast.
         </p>
 
         {chainConfigError && (
@@ -546,6 +589,86 @@ export default function SettingsPage() {
           {chainConfigLoading && <span className="text-xs text-wv-dim">Loading chain config…</span>}
         </div>
       </section>
+
+      {orgLoaded && orgInfo && !('error' in orgInfo) && orgInfo.role === 'leader' && (
+        <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+          <h2 className="text-lg font-semibold text-wv-text">Hub Infrastructure</h2>
+          <p className="mt-1 text-sm text-wv-dim">
+            Control the serving key address used for on-chain serve/denial submissions.
+          </p>
+
+          <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current HubServingAddress</p>
+            <p className="mt-1 break-all font-mono text-sm text-wv-text">{hubServingAddress || '—'}</p>
+          </div>
+
+          {hubInfraError && (
+            <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+              {hubInfraError}
+            </div>
+          )}
+
+          {hubInfraSuccess && (
+            <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
+              {hubInfraSuccess}
+            </div>
+          )}
+
+          <div className="mt-4">
+            {!showServingKeyEditor ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setHubInfraError(null);
+                  setHubInfraSuccess(null);
+                  setNewServingKey(hubServingAddress);
+                  setShowServingKeyEditor(true);
+                }}
+                className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet"
+              >
+                Change serving key (self-host)
+              </button>
+            ) : (
+              <div className="rounded-lg border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.08)] p-4">
+                <label htmlFor="new-serving-key" className="block text-sm font-medium text-wv-text">
+                  New serving key address
+                </label>
+                <input
+                  id="new-serving-key"
+                  type="text"
+                  value={newServingKey}
+                  onChange={(event) => setNewServingKey(event.target.value)}
+                  placeholder="wevibe1..."
+                  disabled={savingServingKey}
+                  className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 font-mono text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                />
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleServingKeySave}
+                    disabled={savingServingKey || !orgLoaded}
+                    className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  >
+                    {savingServingKey ? 'Broadcasting…' : 'Broadcast MsgSetServingKey'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowServingKeyEditor(false);
+                      setNewServingKey('');
+                      setHubInfraError(null);
+                    }}
+                    disabled={savingServingKey}
+                    className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
         <h2 className="text-lg font-semibold text-wv-text">Org & LLM Configuration</h2>

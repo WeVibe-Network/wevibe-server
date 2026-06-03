@@ -9,7 +9,7 @@ import {
   listReports,
   updateReport,
 } from '@/lib/hub-client';
-import { buildReportMemoryMsg, relayOrgDecision } from '@/lib/chain-client';
+import { buildReportMemoryMsg, directBroadcast } from '@/lib/chain-client';
 import { connectWallet } from '@/lib/wallet-connect';
 import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
@@ -178,7 +178,8 @@ const handleAction = useCallback(
           reason,
         });
 
-        const txHash = await relayOrgDecision(orgId, [msgReportMemory]);
+        const result = await directBroadcast(walletConn.address, [msgReportMemory]);
+        const txHash = result.txHash;
         setNotice(`Report committed to chain. TX: ${txHash.slice(0, 12)}...`);
         await refreshReports();
       } catch (err) {

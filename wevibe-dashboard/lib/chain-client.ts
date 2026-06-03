@@ -3,9 +3,6 @@ import { OfflineSigner } from '@cosmjs/proto-signing';
 import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
 import { MsgGrant, MsgRevoke } from 'cosmjs-types/cosmos/authz/v1beta1/tx';
 import { GenericAuthorization } from 'cosmjs-types/cosmos/authz/v1beta1/authz';
-import { buildRelayCanonicalBody } from './canonical-body';
-import { connectWallet, getOfflineSigner, type WalletProvider } from './wallet-connect';
-import { postRelayCanonicalBody } from './relay-client';
 import { getConfig } from '@/lib/config';
 
 export interface EncodeObject {
@@ -22,6 +19,8 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.org.v1.MsgAddMember',
   '/wevibe.org.v1.MsgRemoveMember',
   '/wevibe.org.v1.MsgSetOrgConfig',
+  '/wevibe.org.v1.MsgUpdateMemberRole',
+  '/wevibe.org.v1.MsgSetServingKey',
   '/wevibe.reputation.v1.MsgIncrementContribution',
   '/wevibe.reputation.v1.MsgIncrementServe',
   '/wevibe.reputation.v1.MsgRecordBan',
@@ -117,13 +116,6 @@ interface KeywordWeightInput {
   weight?: string;
 }
 
-interface RelayBroadcastResponse {
-  tx_hash: string;
-  code: number;
-  raw_log: string;
-  height: number;
-}
-
 function encodeRepeatedStringField(tag: number, values: string[]): number[] {
   const fields: number[] = [];
   for (const value of values) {
@@ -167,30 +159,6 @@ function mapMemoryType(memoryType: string): number {
     throw new Error(`unsupported memory_type: ${memoryType}`);
   }
   return 1;
-}
-
-function base64Encode(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
-}
-
-async function connectSupportedWallet(): Promise<{ provider: WalletProvider }> {
-  const providers: WalletProvider[] = ['keplr', 'leap'];
-  let lastError: Error | null = null;
-
-  for (const provider of providers) {
-    try {
-      const walletConnection = await connectWallet(provider);
-      return { provider: walletConnection.provider };
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-  }
-
-  throw lastError ?? new Error('No supported wallet available (Keplr or Leap)');
 }
 
 export function buildSubmitCommitmentMsg(
@@ -321,7 +289,6 @@ export function buildReportMemoryMsg(args: {
 
 export function buildRegisterOrgMsg(
   signer: string,
-  orgId: string,
   leader: string,
   storageQuota: number,
   retrievalBudget: number,
@@ -331,7 +298,6 @@ export function buildRegisterOrgMsg(
 ): EncodeObject {
   const fields: number[] = [
     ...encodeStringField(0x0a, signer),
-    ...encodeStringField(0x12, orgId),
     ...encodeStringField(0x1a, leader),
     ...encodeVarint(0x20), ...encodeVarint(storageQuota),
     ...encodeVarint(0x28), ...encodeVarint(retrievalBudget),
@@ -346,49 +312,97 @@ export function buildRegisterOrgMsg(
   };
 }
 
-export async function relayOrgDecision(
-  orgID: string,
-  msgs: EncodeObject[],
-  memo = '',
-): Promise<string> {
-  const chainId = getConfig().chainId;
-  const wallet = await connectSupportedWallet();
-  const signer = getOfflineSigner(chainId, wallet.provider);
-  const client = await getSigningClient(signer);
+export function buildAddMemberMsg(
+  signer: string,
+  orgId: string,
+  pubkey: string,
+  role: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeStringField(0x1a, pubkey),
+    ...encodeStringField(0x22, role),
+  ];
 
-  const [account] = await signer.getAccounts();
-  if (!account) {
-    throw new Error('No account found from connected wallet');
-  }
-
-  const fee = {
-    amount: [{ denom: 'uvibe', amount: '5000' }],
-    gas: '200000',
+  return {
+    typeUrl: '/wevibe.org.v1.MsgAddMember',
+    value: Uint8Array.from(fields),
   };
+}
 
-  const txRaw = await client.sign(account.address, msgs, fee, memo);
-  const txBytes = TxRaw.encode(txRaw).finish();
-  const txBytesBase64 = base64Encode(txBytes);
-  const canonicalBody = buildRelayCanonicalBody(orgID, account.address, txBytesBase64);
+export function buildRemoveMemberMsg(
+  signer: string,
+  orgId: string,
+  pubkey: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeStringField(0x1a, pubkey),
+  ];
 
-  const walletApi = wallet.provider === 'keplr' ? window.keplr : window.leap;
-  if (!walletApi) {
-    throw new Error('Connected wallet provider not available');
-  }
-  await walletApi.enable(chainId);
-  const signed = await walletApi.signArbitrary(chainId, account.address, canonicalBody);
+  return {
+    typeUrl: '/wevibe.org.v1.MsgRemoveMember',
+    value: Uint8Array.from(fields),
+  };
+}
 
-  const result = await postRelayCanonicalBody(
-    orgID,
-    `Wallet ${signed.signature}`,
-    canonicalBody,
-  ) as RelayBroadcastResponse;
+export function buildUpdateMemberRoleMsg(
+  signer: string,
+  orgId: string,
+  pubkey: string,
+  newRole: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeStringField(0x1a, pubkey),
+    ...encodeStringField(0x22, newRole),
+  ];
 
-  if (!result.tx_hash) {
-    throw new Error('Relay broadcast missing tx_hash');
-  }
+  return {
+    typeUrl: '/wevibe.org.v1.MsgUpdateMemberRole',
+    value: Uint8Array.from(fields),
+  };
+}
 
-  return result.tx_hash;
+export function buildSetOrgConfigMsg(
+  signer: string,
+  orgId: string,
+  serveAttestationRequired: boolean,
+  minContributionsPerEpoch: number,
+  contestStakeVibe: number,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeVarint(0x18), ...encodeVarint(serveAttestationRequired ? 1 : 0),
+    ...encodeVarint(0x20), ...encodeVarint(minContributionsPerEpoch),
+    ...encodeVarint(0x28), ...encodeVarint(contestStakeVibe),
+  ];
+
+  return {
+    typeUrl: '/wevibe.org.v1.MsgSetOrgConfig',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildSetServingKeyMsg(
+  signer: string,
+  orgId: string,
+  newServingKey: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeStringField(0x1a, newServingKey),
+  ];
+
+  return {
+    typeUrl: '/wevibe.org.v1.MsgSetServingKey',
+    value: Uint8Array.from(fields),
+  };
 }
 
 export function buildDenialBatchMsg(
@@ -467,7 +481,42 @@ export function buildServeBatchMsg(
 export async function directBroadcast(
   walletAddress: string,
   msgs: EncodeObject[]
-): Promise<{ txHash: string; code: number; rawLog: string }> {
+): Promise<{ txHash: string; code: number; rawLog: string; deliverTxData?: Uint8Array }> {
+  const decodeRpcDataField = (data: unknown): Uint8Array | undefined => {
+    if (data == null) {
+      return undefined;
+    }
+
+    if (data instanceof Uint8Array) {
+      return data.length > 0 ? data : undefined;
+    }
+
+    if (Array.isArray(data)) {
+      if (data.length === 0) {
+        return undefined;
+      }
+      return Uint8Array.from(data.map((value) => Number(value) & 0xff));
+    }
+
+    if (typeof data === 'string') {
+      const trimmed = data.trim();
+      if (trimmed === '') {
+        return undefined;
+      }
+
+      const normalizedHex = trimmed.startsWith('0x') ? trimmed.slice(2) : trimmed;
+      if (/^[0-9a-fA-F]+$/.test(normalizedHex) && normalizedHex.length % 2 === 0) {
+        const hexBytes = Buffer.from(normalizedHex, 'hex');
+        return hexBytes.length > 0 ? Uint8Array.from(hexBytes) : undefined;
+      }
+
+      const base64Bytes = Buffer.from(trimmed, 'base64');
+      return base64Bytes.length > 0 ? Uint8Array.from(base64Bytes) : undefined;
+    }
+
+    return undefined;
+  };
+
   const { getOfflineSigner } = await import('./wallet-connect');
   const chainId = getConfig().chainId;
   const signer = getOfflineSigner(chainId);
@@ -481,6 +530,9 @@ export async function directBroadcast(
   const [account] = await signer.getAccounts();
   if (!account) {
     throw new Error('No account found');
+  }
+  if (account.address !== walletAddress) {
+    throw new Error('Signer account mismatch for requested wallet address');
   }
 
   const txRaw = await client.sign(account.address, msgs, fee, '');
@@ -498,16 +550,22 @@ export async function directBroadcast(
   });
 
   const result = await resp.json();
-  if (result.result?.CheckTx?.code !== 0) {
-    throw new Error(`CheckTx failed: ${result.result?.CheckTx?.log}`);
+  const rpcResult = result?.result ?? {};
+  const checkTx = rpcResult.CheckTx ?? rpcResult.check_tx;
+  const deliverTx = rpcResult.DeliverTx ?? rpcResult.deliver_tx;
+  const checkCode = Number(checkTx?.code ?? 0);
+  if (checkCode !== 0) {
+    throw new Error(`CheckTx failed: ${checkTx?.log ?? checkTx?.raw_log ?? ''}`);
   }
-  if (result.result?.DeliverTx?.code !== 0) {
-    throw new Error(`DeliverTx failed: ${result.result?.DeliverTx?.log}`);
+  const deliverCode = Number(deliverTx?.code ?? 0);
+  if (deliverCode !== 0) {
+    throw new Error(`DeliverTx failed: ${deliverTx?.log ?? deliverTx?.raw_log ?? ''}`);
   }
 
   return {
-    txHash: result.result?.DeliverTx?.hash || '',
-    code: result.result?.DeliverTx?.code || 0,
-    rawLog: result.result?.DeliverTx?.log || '',
+    txHash: String(deliverTx?.hash ?? rpcResult.hash ?? ''),
+    code: deliverCode,
+    rawLog: String(deliverTx?.log ?? deliverTx?.raw_log ?? ''),
+    deliverTxData: decodeRpcDataField(deliverTx?.data),
   };
 }
