@@ -8,8 +8,8 @@ import (
 )
 
 // Category B chain config (serve_attestation_required, min_contributions_per_epoch,
-// contest_stake_vibe, rep_tiers) is no longer written via the hub. Per Decision C
-// (CO-011a.4) the dashboard builds MsgSetOrgConfig / MsgSetRepTiers and broadcasts
+// contest_stake_vibe) is no longer written via the hub. Per Decision C
+// (CO-011a.4) the dashboard builds MsgSetOrgConfig and broadcasts
 // via the relay endpoint. The hub keeps the READ-ONLY GetOrgChainConfig handler so
 // callers can fetch the current chain state without going through the chain RPC
 // directly; there is no hub-side off-chain mirror for these fields.
@@ -36,18 +36,11 @@ func GetOrgChainConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tiers, err := chainClient.GetRepTiersFromChain(r.Context(), orgID)
-	if err != nil {
-		http.Error(w, `{"error":"failed to fetch rep tiers"}`, http.StatusBadGateway)
-		return
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"org_id":                      orgID,
 		"serve_attestation_required":  orgConfig.ServeAttestationRequired,
 		"min_contributions_per_epoch": orgConfig.MinContributionsPerEpoch,
 		"contest_stake_vibe":          orgConfig.ContestStakeVibe,
-		"rep_tiers":                   tiers,
 	})
 }

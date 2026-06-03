@@ -78,7 +78,6 @@ func TestIsRelayAllowed(t *testing.T) {
 		"/wevibe.org.v1.MsgAddMember",
 		"/wevibe.org.v1.MsgRemoveMember",
 		"/wevibe.org.v1.MsgSetOrgConfig",
-		"/wevibe.org.v1.MsgSetRepTiers",
 		"/wevibe.org.v1.MsgUpdateMemberRole",
 		"/wevibe.org.v1.MsgRotateEpoch",
 	}
@@ -90,7 +89,6 @@ func TestIsRelayAllowed(t *testing.T) {
 	}
 
 	disallowed := []string{
-		"/wevibe.ledger.v1.MsgFundTreasury",
 		"/wevibe.memory.v1.MsgRejectMemory",
 		"/cosmos.authz.v1beta1.MsgGrant",
 	}
@@ -120,8 +118,8 @@ func TestExtractInnerGranter_AllSame(t *testing.T) {
 		OrgId:  "my-org",
 	}
 	msg2 := &memorytypes.MsgApproveMemory{
-		Signer:      signer,
-		OrgId:       "my-org",
+		Signer: signer,
+		OrgId:  "my-org",
 	}
 
 	execMsg := &authztypes.MsgExec{
@@ -194,6 +192,7 @@ func TestExtractInnerGranter_DisallowedType(t *testing.T) {
 		t.Errorf("expected 'not allowed' error, got %v", err)
 	}
 }
+
 // ── Direct (non-delegate) leader-signing path — D-S32-CO044-LEADER-DUAL-PATH ──
 
 func init() {

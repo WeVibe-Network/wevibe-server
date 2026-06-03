@@ -100,30 +100,6 @@ func (c *GrpcClient) GetOrgConfigFromChain(ctx context.Context, orgID string) (*
 	}, nil
 }
 
-// GetRepTiersFromChain queries chain org reputation tiers.
-// Returns nil, nil if no tiers are configured or org does not exist.
-func (c *GrpcClient) GetRepTiersFromChain(ctx context.Context, orgID string) ([]*orgtypes.RepTier, error) {
-	if c == nil {
-		return nil, nil
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	resp, err := c.orgQuery.GetRepTiers(ctx, &orgtypes.QueryGetRepTiersRequest{OrgId: orgID})
-	if err != nil {
-		if c.isNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if resp == nil {
-		return nil, nil
-	}
-
-	return resp.Tiers, nil
-}
-
 // --- x/memory ---
 
 // GetEpochMerkleRoot queries the chain for a submitted merkle root.

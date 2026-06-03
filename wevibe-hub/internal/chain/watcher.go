@@ -421,8 +421,7 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 			*reputationtypes.MsgIncrementContribution,
 			*reputationtypes.MsgIncrementServe,
 			*reputationtypes.MsgRecordBan,
-			*orgtypes.MsgSetOrgConfig,
-			*orgtypes.MsgSetRepTiers:
+			*orgtypes.MsgSetOrgConfig:
 			w.logger.Debug("processed msg type with no bookkeeping", "msg_type", fmt.Sprintf("%T", msg))
 		}
 	}
