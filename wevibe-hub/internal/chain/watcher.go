@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtx "github.com/cosmos/cosmos-sdk/x/auth/tx"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	orgtypes "github.com/wevibe-network/wevibe-chain/x/org/types"
@@ -384,6 +386,24 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 				w.logger.Error("processRegisterOrgBookkeeping failed", "err", err, "org_id", m.OrgId)
 			}
 
+		case *orgtypes.MsgAddMember:
+			if err := w.processAddMemberBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Pubkey, m.Role); err != nil {
+				w.logger.Error("processAddMemberBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
+			}
+
+		case *orgtypes.MsgUpdateMemberRole:
+			if err := w.processUpdateMemberRoleBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Pubkey, m.NewRole); err != nil {
+				w.logger.Error("processUpdateMemberRoleBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
+			}
+
+		case *orgtypes.MsgRemoveMember:
+			if err := w.processRemoveMemberBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Pubkey); err != nil {
+				w.logger.Error("processRemoveMemberBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
+			}
+
 		case *memorytypes.MsgSubmitCommitment,
 			*reputationtypes.MsgIncrementContribution,
 			*reputationtypes.MsgIncrementServe,
@@ -393,6 +413,126 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 			w.logger.Debug("processed msg type with no bookkeeping", "msg_type", fmt.Sprintf("%T", msg))
 		}
 	}
+	return nil
+}
+
+func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, newRole string) error {
+	var oldRole string
+	err := w.db.QueryRow(ctx, `
+		SELECT role
+		FROM members
+		WHERE org_id = $1 AND pubkey = $2
+	`, orgID, pubkey).Scan(&oldRole)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to fetch current member role: %w", err)
+	}
+
+	tag, err := w.db.Exec(ctx, `
+		UPDATE members
+		SET role = $1,
+		    updated_at = NOW()
+		WHERE org_id = $2 AND pubkey = $3
+	`, newRole, orgID, pubkey)
+	if err != nil {
+		return fmt.Errorf("failed to update member role: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		w.logger.Warn("member row not found during update-member-role bookkeeping",
+			"org_id", orgID,
+			"pubkey", pubkey,
+			"tx_hash", txHash)
+		return nil
+	}
+
+	wasContributor := oldRole == "contributor"
+	isContributor := newRole == "contributor"
+	if wasContributor == isContributor {
+		return nil
+	}
+
+	orgLabel := orgID
+	var orgName string
+	err = w.db.QueryRow(ctx, `
+		SELECT org_name
+		FROM orgs
+		WHERE org_id = $1
+	`, orgID).Scan(&orgName)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			w.logger.Warn("failed to load org name for contributor role notification",
+				"org_id", orgID,
+				"pubkey", pubkey,
+				"tx_hash", txHash,
+				"err", err)
+		}
+	} else if orgName != "" {
+		orgLabel = orgName
+	}
+
+	category := "contributor_revoked"
+	title := "Contributor access revoked"
+	body := fmt.Sprintf("Your contributor access to %s has been revoked.", orgLabel)
+	if isContributor {
+		category = "contributor_promoted"
+		title = "Promoted to Contributor"
+		body = fmt.Sprintf("You can now contribute memories to %s.", orgLabel)
+	}
+
+	if err := notifications.EmitUserNotification(
+		ctx,
+		w.db,
+		w.notifHub,
+		w.dispatcher,
+		pubkey,
+		category,
+		title,
+		body,
+		txHash,
+		orgID,
+	); err != nil {
+		return fmt.Errorf("failed to emit contributor role notification: %w", err)
+	}
+
+	return nil
+}
+
+func (w *ChainWatcher) processRemoveMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string) error {
+	tag, err := w.db.Exec(ctx, `
+		UPDATE members
+		SET active = false,
+		    updated_at = NOW()
+		WHERE org_id = $1 AND pubkey = $2
+	`, orgID, pubkey)
+	if err != nil {
+		return fmt.Errorf("failed to mark member inactive: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		w.logger.Warn("member row not found during remove-member bookkeeping",
+			"org_id", orgID,
+			"pubkey", pubkey,
+			"tx_hash", txHash)
+	}
+
+	return nil
+}
+
+func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, role string) error {
+	tag, err := w.db.Exec(ctx, `
+		UPDATE members
+		SET role = $1,
+		    updated_at = NOW()
+		WHERE org_id = $2 AND pubkey = $3
+	`, role, orgID, pubkey)
+	if err != nil {
+		return fmt.Errorf("failed to sync added member role: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		w.logger.Warn("member row not found during add-member bookkeeping",
+			"org_id", orgID,
+			"pubkey", pubkey,
+			"tx_hash", txHash)
+	}
+
 	return nil
 }
 

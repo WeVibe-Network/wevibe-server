@@ -125,6 +125,10 @@ func renderEmailTemplate(event DispatchEvent) (string, string) {
 		subject = "WeVibe: join request approved"
 	case "join_denied":
 		subject = "WeVibe: join request denied"
+	case "contributor_promoted":
+		subject = "WeVibe: promoted to contributor"
+	case "contributor_revoked":
+		subject = "WeVibe: contributor access revoked"
 	case "test_notification":
 		subject = "WeVibe: test notification"
 	}

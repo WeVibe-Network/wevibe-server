@@ -514,8 +514,8 @@ func UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Role != "moderator" && req.Role != "member" {
-		http.Error(w, `{"error":"role must be 'moderator' or 'member'"}`, http.StatusBadRequest)
+	if req.Role != "moderator" && req.Role != "member" && req.Role != "contributor" {
+		http.Error(w, `{"error":"role must be 'moderator', 'contributor', or 'member'"}`, http.StatusBadRequest)
 		return
 	}
 

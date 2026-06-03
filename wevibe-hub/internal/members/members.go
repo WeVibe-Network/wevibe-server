@@ -293,9 +293,9 @@ func RevokeDelegateKey(ctx context.Context, pool *pgxpool.Pool, walletAddress st
 }
 
 func UpdateMemberRole(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey, newRole string) error {
-	validRoles := map[string]bool{"moderator": true, "member": true}
+	validRoles := map[string]bool{"moderator": true, "member": true, "contributor": true}
 	if !validRoles[newRole] {
-		return fmt.Errorf("invalid role: %s (must be 'moderator' or 'member')", newRole)
+		return fmt.Errorf("invalid role: %s (must be 'moderator', 'contributor', or 'member')", newRole)
 	}
 
 	tag, err := pool.Exec(ctx, `
