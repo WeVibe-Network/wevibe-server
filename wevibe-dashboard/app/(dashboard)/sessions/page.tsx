@@ -13,6 +13,7 @@ import type {
 import { getIdentity } from '@/lib/wevibe-auth';
 import { buildSubmitMemoryPayload, submitMemoryBatchToHub } from '@/lib/wevibe-submit';
 import { useOrgContext, type MemberOrgEntry } from '@/lib/org-context';
+import { getConfig } from '@/lib/config';
 
 export default function SessionsPage() {
   const router = useRouter();
@@ -179,8 +180,7 @@ export default function SessionsPage() {
     setSubmitResult(null);
     setSubmitFindings(null);
 
-    const hubUrl =
-      process.env.NEXT_PUBLIC_WEVIBE_HUB_URL ?? 'http://localhost:4440';
+    const hubUrl = getConfig().hubUrl;
 
     interface OrgGroup {
       orgId: string;

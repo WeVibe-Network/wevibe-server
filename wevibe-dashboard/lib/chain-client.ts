@@ -6,6 +6,7 @@ import { GenericAuthorization } from 'cosmjs-types/cosmos/authz/v1beta1/authz';
 import { buildRelayCanonicalBody } from './canonical-body';
 import { connectWallet, getOfflineSigner, type WalletProvider } from './wallet-connect';
 import { postRelayCanonicalBody } from './relay-client';
+import { getConfig } from '@/lib/config';
 
 export interface EncodeObject {
   typeUrl: string;
@@ -31,7 +32,7 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
 ];
 
 export function getChainRpcEndpoint(): string {
-  let rpc = process.env.NEXT_PUBLIC_WEVIBE_CHAIN_RPC || 'tcp://localhost:26657';
+  let rpc = getConfig().chainRpc;
   rpc = rpc.replace(/^tcp:\/\//, 'http://');
   rpc = rpc.replace(/^rpc\./, 'http://rpc.');
   if (!rpc.startsWith('http')) {
@@ -353,7 +354,7 @@ export async function relayOrgDecision(
   msgs: EncodeObject[],
   memo = '',
 ): Promise<string> {
-  const chainId = process.env.NEXT_PUBLIC_WEVIBE_CHAIN_ID || 'wevibe-local-1';
+  const chainId = getConfig().chainId;
   const wallet = await connectSupportedWallet();
   const signer = getOfflineSigner(chainId, wallet.provider);
   const client = await getSigningClient(signer);
@@ -471,7 +472,7 @@ export async function directBroadcast(
   msgs: EncodeObject[]
 ): Promise<{ txHash: string; code: number; rawLog: string }> {
   const { getOfflineSigner } = await import('./wallet-connect');
-  const chainId = process.env.NEXT_PUBLIC_WEVIBE_CHAIN_ID || 'wevibe-local-1';
+  const chainId = getConfig().chainId;
   const signer = getOfflineSigner(chainId);
   const client = await getSigningClient(signer);
 

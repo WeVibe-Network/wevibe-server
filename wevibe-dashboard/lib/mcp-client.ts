@@ -2,6 +2,8 @@
  * Lightweight MCP-over-SSE client for the WeVibe dashboard (browser environment).
  */
 
+import { getConfig } from '@/lib/config';
+
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 type JsonPrimitive = string | number | boolean | null;
@@ -57,8 +59,9 @@ export class WeVibeMcpClient {
   private _state: ConnectionState = 'disconnected';
   private readonly stateListeners = new Set<(state: ConnectionState) => void>();
 
-  constructor(baseUrl: string = 'http://localhost:4450') {
-    const normalized = baseUrl.replace(/\/$/, '');
+  constructor(baseUrl?: string) {
+    const resolvedBaseUrl = baseUrl ?? getConfig().mcpUrl;
+    const normalized = resolvedBaseUrl.replace(/\/$/, '');
     this.sseUrl = `${normalized}/sse`;
   }
 
@@ -337,8 +340,9 @@ export class WeVibeMcpClient {
     return textBlock.text as T;
   }
 
-  async healthCheck(baseUrl: string = 'http://localhost:4450'): Promise<{ status: string; server: string; hub: string; sessions: number; }> {
-    const normalized = baseUrl.replace(/\/$/, '');
+  async healthCheck(baseUrl?: string): Promise<{ status: string; server: string; hub: string; sessions: number; }> {
+    const resolvedBaseUrl = baseUrl ?? getConfig().mcpUrl;
+    const normalized = resolvedBaseUrl.replace(/\/$/, '');
     const resp = await fetch(`${normalized}/health`);
     if (!resp.ok) {
       throw new Error(`Health check failed: ${resp.status}`);
@@ -354,9 +358,10 @@ export function getMcpClient(): WeVibeMcpClient {
     return singleton;
   }
 
+  const defaultMcpUrl = getConfig().mcpUrl;
   const defaultUrl = typeof window !== 'undefined'
-    ? (window.localStorage.getItem('wevibe-mcp-url') ?? 'http://localhost:4450')
-    : 'http://localhost:4450';
+    ? (window.localStorage.getItem('wevibe-mcp-url') ?? defaultMcpUrl)
+    : defaultMcpUrl;
 
   singleton = new WeVibeMcpClient(defaultUrl);
   return singleton;

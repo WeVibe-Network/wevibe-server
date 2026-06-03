@@ -1,4 +1,5 @@
 import { OfflineSigner } from '@cosmjs/proto-signing';
+import { getConfig } from '@/lib/config';
 
 interface KeplrKey {
   name: string;
@@ -72,14 +73,15 @@ export interface WeVibeChainConfig {
 }
 
 export function getChainConfig(): WeVibeChainConfig {
+  const config = getConfig();
   return {
-    chainId: process.env.NEXT_PUBLIC_WEVIBE_CHAIN_ID || 'wevibe-local-1',
+    chainId: config.chainId,
     chainName: 'WeVibe Network',
-    rpc: process.env.NEXT_PUBLIC_WEVIBE_CHAIN_RPC || 'http://localhost:26657',
-    rest: process.env.NEXT_PUBLIC_WEVIBE_CHAIN_REST || 'http://localhost:1317',
-    bech32Prefix: process.env.NEXT_PUBLIC_WEVIBE_BECH32_PREFIX || 'wevibe',
-    coinDenom: process.env.NEXT_PUBLIC_WEVIBE_COIN_DENOM || 'VIBE',
-    coinMinimalDenom: process.env.NEXT_PUBLIC_WEVIBE_COIN_MIN_DENOM || 'uvibe',
+    rpc: config.chainRpc,
+    rest: config.chainRest,
+    bech32Prefix: config.bech32Prefix,
+    coinDenom: config.coinDenom,
+    coinMinimalDenom: config.coinMinDenom,
     coinDecimals: 6,
   };
 }

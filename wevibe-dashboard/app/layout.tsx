@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { JetBrains_Mono, Space_Grotesk } from 'next/font/google';
+import { readConfigFromEnv } from '@/lib/config';
 import './globals.css';
 
 const wvSans = Space_Grotesk({
@@ -22,9 +23,17 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const cfg = readConfigFromEnv();
+
   return (
     <html lang="en" className={`${wvSans.variable} ${wvMono.variable}`}>
-      <body className="min-h-screen bg-wv-bg font-sans text-wv-text antialiased">{children}</body>
+      <body className="min-h-screen bg-wv-bg font-sans text-wv-text antialiased">
+        <script
+          id="wevibe-config"
+          dangerouslySetInnerHTML={{ __html: `window.__WEVIBE_CONFIG__=${JSON.stringify(cfg)}` }}
+        />
+        {children}
+      </body>
     </html>
   );
 }

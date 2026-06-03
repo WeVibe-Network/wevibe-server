@@ -2,16 +2,10 @@ import { buildAuthHeaders, getIdentity, signEd25519WithSeed } from './wevibe-aut
 import { linkWalletCanonical, registerDelegateKeyCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
 import type { OrgRole } from './org-role';
 import type { MemberOrgEntry } from './org-context';
+import { getConfig } from '@/lib/config';
 
-let _hubUrl: string | null = null;
 function getHubUrl(): string {
-  if (_hubUrl) return _hubUrl;
-  if (typeof window === 'undefined') {
-    _hubUrl = process.env.WEVIBE_HUB_URL ?? 'http://localhost:4440';
-  } else {
-    _hubUrl = `${window.location.protocol}//${window.location.hostname}:4440`;
-  }
-  return _hubUrl;
+  return getConfig().hubUrl;
 }
 
 async function hubFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -25,6 +19,19 @@ async function hubFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(err.error ?? `Hub error ${resp.status}`);
   }
   return resp.json();
+}
+
+export interface FaucetFundResponse {
+  address: string;
+  amount: number;
+  status: string;
+}
+
+export async function fundFromFaucet(address: string, amount?: number): Promise<FaucetFundResponse> {
+  return hubFetch<FaucetFundResponse>('/v1/faucet/fund', {
+    method: 'POST',
+    body: JSON.stringify(amount != null ? { address, amount } : { address }),
+  });
 }
 
 export async function listMembers(orgId: string) {

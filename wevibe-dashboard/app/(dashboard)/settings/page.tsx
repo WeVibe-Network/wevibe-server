@@ -8,6 +8,7 @@ import { WalletConnectButton } from '@/components/wallet-connect-button';
 import { getChainConfig, connectWallet } from '@/lib/wallet-connect';
 import { directBroadcast, type EncodeObject } from '@/lib/chain-client';
 import { relayBroadcast } from '@/lib/relay-client';
+import { getConfig } from '@/lib/config';
 
 type OrgInfoResponse =
   | { error: string; identity?: string }
@@ -39,7 +40,7 @@ const stateColors: Record<ConnectionState, string> = {
 };
 
 export default function SettingsPage() {
-  const [url, setUrl] = useState('http://localhost:4450');
+  const [url, setUrl] = useState(getConfig().mcpUrl);
   const [state, setState] = useState<ConnectionState>('disconnected');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -84,7 +85,7 @@ export default function SettingsPage() {
       return;
     }
 
-    const savedUrl = window.localStorage.getItem('wevibe-mcp-url') ?? 'http://localhost:4450';
+    const savedUrl = window.localStorage.getItem('wevibe-mcp-url') ?? getConfig().mcpUrl;
     setUrl(savedUrl);
 
     const client = getMcpClient();
@@ -136,7 +137,7 @@ export default function SettingsPage() {
     setError(null);
     setOrgInfo(null);
 
-    const targetUrl = url.trim() || 'http://localhost:4450';
+    const targetUrl = url.trim() || getConfig().mcpUrl;
 
     try {
       const client = resetMcpClient(targetUrl);

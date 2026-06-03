@@ -23,6 +23,7 @@ import {
   relayOrgDecision,
 } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
+import { getConfig } from '@/lib/config';
 
 const ORG_ID = process.env.NEXT_PUBLIC_ORG_ID ?? '';
 
@@ -62,7 +63,7 @@ export default function ChainSubmitPage() {
     setLoading(true);
     setError(null);
     try {
-      const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';
+      const HUB_URL = getConfig().hubUrl;
       const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
       const [health, pk, rk, pc] = await Promise.all([
         getOrgHealth(ORG_ID),
@@ -285,7 +286,7 @@ export default function ChainSubmitPage() {
   }, [ORG_ID, pendingChain]);
 
   const handleDenialBatchSubmit = useCallback(async () => {
-    const HUB_URL = process.env.NEXT_PUBLIC_HUB_URL ?? 'http://localhost:8080';
+    const HUB_URL = getConfig().hubUrl;
     const { connectWallet } = await import('@/lib/wallet-connect');
     const walletConnection = await connectWallet().catch(() => null);
     const walletAddress = walletConnection?.address ?? null;

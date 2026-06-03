@@ -9,8 +9,8 @@ import {
   markAllNotificationsRead,
 } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
+import { hubWsUrl } from '@/lib/config';
 
-const WS_URL = 'ws://localhost:4440/v1/notifications/ws';
 const PAGE_SIZE = 50;
 
 export default function ActivityPage() {
@@ -35,7 +35,7 @@ export default function ActivityPage() {
     const data = encoder.encode(timestamp);
     const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(hubWsUrl('/v1/notifications/ws'));
     wsRef.current = ws;
 
     ws.onopen = () => {

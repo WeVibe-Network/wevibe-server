@@ -13,6 +13,7 @@ interface NavItem {
 
 const nav: NavItem[] = [
   { href: '/health', label: 'Pipeline Health' },
+  { href: '/faucet', label: 'Faucet' },
   { href: '/activity', label: 'Activity' },
   { href: '/notifications', label: 'Notifications' },
   { href: '/sessions', label: 'Sessions' },

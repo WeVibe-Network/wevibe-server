@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getUnreadCount } from '@/lib/hub-client';
 import { getIdentity, signEd25519WithSeed } from '@/lib/wevibe-auth';
+import { hubWsUrl } from '@/lib/config';
 
 export default function NotificationBell() {
   const [count, setCount] = useState(0);
@@ -30,7 +31,7 @@ export default function NotificationBell() {
       const data = encoder.encode(timestamp);
       const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
 
-      ws = new WebSocket('ws://localhost:4440/v1/notifications/ws');
+      ws = new WebSocket(hubWsUrl('/v1/notifications/ws'));
 
       ws.onopen = () => {
         ws?.send(JSON.stringify({

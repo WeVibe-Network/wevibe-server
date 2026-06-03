@@ -19,13 +19,15 @@
     "@cosmjs/encoding": "0.39.0",
     "@cosmjs/proto-signing": "0.39.0",
     "@cosmjs/stargate": "0.39.0",
+    "@noble/curves": "2.2.0",
     "@noble/ed25519": "^2.3.0",
     "@noble/hashes": "^1.8.0",
     "better-sqlite3": "^11.0.0",
     "cosmjs-types": "0.11.0",
     "next": "14.2.3",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "wevibe-sdk-wasm": "file:./vendor/wevibe-sdk-wasm"
   },
   "devDependencies": {
     "@playwright/test": "1.59.1",

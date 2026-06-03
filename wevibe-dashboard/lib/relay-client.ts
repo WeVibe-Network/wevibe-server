@@ -2,16 +2,14 @@ import { SigningStargateClient } from '@cosmjs/stargate';
 import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
 import { buildRelayCanonicalBody } from './canonical-body';
 import { connectWallet, getOfflineSigner, type WalletProvider } from './wallet-connect';
+import { getConfig } from '@/lib/config';
 
 function getHubUrl(): string {
-  if (typeof window === 'undefined') {
-    return process.env.WEVIBE_HUB_URL ?? 'http://localhost:4440';
-  }
-  return `${window.location.protocol}//${window.location.hostname}:4440`;
+  return getConfig().hubUrl;
 }
 
 function getChainRpcEndpoint(): string {
-  let rpc = process.env.NEXT_PUBLIC_WEVIBE_CHAIN_RPC || 'tcp://localhost:26657';
+  let rpc = getConfig().chainRpc;
   rpc = rpc.replace(/^tcp:\/\//, 'http://');
   if (!rpc.startsWith('http')) {
     rpc = 'http://' + rpc;
@@ -90,7 +88,7 @@ export async function relayBroadcast(
     throw new Error('Connected wallet does not match requested wallet address');
   }
 
-  const chainId = process.env.NEXT_PUBLIC_WEVIBE_CHAIN_ID || 'wevibe-local-1';
+  const chainId = getConfig().chainId;
   const signer = getOfflineSigner(chainId, provider);
   const client = await SigningStargateClient.connectWithSigner(getChainRpcEndpoint(), signer);
 
