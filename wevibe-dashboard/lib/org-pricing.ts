@@ -12,6 +12,13 @@ export function slotPriceUvibe(slot: number): number {
   return Math.round(BASE_PRICE_UVIBE * multiplier);
 }
 
+export function slotBarHeightPercent(slot: number): number {
+  const FLOOR = 6;
+  const maxSlot = SLOT_CAP - 1;
+  const s = Math.max(0, Math.min(Math.floor(slot), maxSlot));
+  return FLOOR + (s / maxSlot) * (100 - FLOOR);
+}
+
 export function uvibeToVibe(uvibe: number): number {
   return uvibe / UVIBE_PER_VIBE;
 }

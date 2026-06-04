@@ -11,7 +11,7 @@ import { ErrorBanner, LoadingState } from '@/components/ui/states';
 import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
 import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
-import { SLOT_CAP, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
+import { SLOT_CAP, slotBarHeightPercent, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 import { connectWallet, getChainConfig } from '@/lib/wallet-connect';
 import { deriveIdentityFromWallet, setWalletAddress } from '@/lib/wevibe-auth';
@@ -23,6 +23,8 @@ const REGISTER_ORG_RETRIEVAL_BUDGET = 500;
 const MSG_REGISTER_ORG_RESPONSE_TYPE_URL = '/wevibe.org.v1.MsgRegisterOrgResponse';
 
 type ChartBarState = 'sold' | 'current' | 'future';
+
+const AXIS_TICK_SLOTS = new Set([0, 7, 15, 23, SLOT_CAP - 1]);
 
 function readVarint(bytes: Uint8Array, startOffset: number): { value: number; nextOffset: number } {
   let offset = startOffset;
@@ -183,24 +185,11 @@ export default function BuyOrgPage() {
     ? null
     : slotPriceUvibe(currentSlot + 1);
 
-  const chartSlots = useMemo(() => {
-    const visible = Math.min(10, SLOT_CAP);
-    const centeredStart = capReached
-      ? SLOT_CAP - visible
-      : currentSlot - Math.floor(visible / 2);
-    const start = Math.max(0, Math.min(centeredStart, SLOT_CAP - visible));
-    return Array.from({ length: visible }, (_, index) => start + index);
-  }, [capReached, currentSlot]);
+  const chartSlots = useMemo(() => Array.from({ length: SLOT_CAP }, (_, index) => index), []);
 
   const chartBars = useMemo(() => {
-    const prices = chartSlots.map((slot) => slotPriceUvibe(slot));
-    const minPrice = Math.min(...prices);
-    const maxPrice = Math.max(...prices);
-    const spread = Math.max(maxPrice - minPrice, 1);
-
-    return chartSlots.map((slot, index) => {
-      const price = prices[index];
-      const heightPercent = 24 + (((price - minPrice) / spread) * 76);
+    return chartSlots.map((slot) => {
+      const heightPercent = slotBarHeightPercent(slot);
       const isCurrent = !capReached && slot === currentSlot;
       const isSold = capReached || slot < currentSlot;
       const stateValue: ChartBarState = isCurrent ? 'current' : isSold ? 'sold' : 'future';
@@ -349,6 +338,15 @@ export default function BuyOrgPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      <Link
+        href="/create-org"
+        aria-label="Back to org chooser"
+        className="inline-flex w-fit items-center gap-1 text-sm text-wv-dim transition-colors hover:text-wv-text"
+      >
+        <span aria-hidden>←</span>
+        <span>Back</span>
+      </Link>
+
       <header className="flex flex-col gap-2">
         <h1 className="text-3xl font-semibold tracking-tight text-wv-text">Buy An Org</h1>
         <p className="max-w-3xl text-sm text-wv-dim">
@@ -388,18 +386,24 @@ export default function BuyOrgPage() {
               </div>
 
               <div className="rounded-lg border border-wv-line bg-wv-panel-2/70 p-4">
-                <div className="flex h-56 items-end gap-2">
+                <div className="flex h-56 items-end gap-px">
                   {chartBars.map(({ slot, stateValue, heightPercent }) => (
-                    <div key={slot} className="flex min-w-0 flex-1 flex-col items-center gap-2">
-                      <div
-                        className={`w-full rounded-t-sm border transition-all ${barStyles(stateValue)}`}
-                        style={{ height: `${heightPercent}%` }}
-                        title={`Slot ${slot + 1}`}
-                      />
-                      <span className={`font-mono text-[11px] ${stateValue === 'current' ? 'text-wv-amber' : 'text-wv-dim'}`}>
-                        {slot + 1}
-                      </span>
-                    </div>
+                    <div
+                      key={slot}
+                      className={`min-w-0 flex-1 rounded-t-sm border transition-all ${barStyles(stateValue)}`}
+                      style={{ height: `${heightPercent}%` }}
+                      title={`Slot ${slot + 1}`}
+                    />
+                  ))}
+                </div>
+                <div className="mt-1 flex gap-px">
+                  {chartBars.map(({ slot, stateValue }) => (
+                    <span
+                      key={slot}
+                      className={`min-w-0 flex-1 text-center font-mono text-[10px] leading-none ${stateValue === 'current' ? 'text-wv-amber' : 'text-wv-dim opacity-70'}`}
+                    >
+                      {stateValue === 'current' || AXIS_TICK_SLOTS.has(slot) ? slot + 1 : ''}
+                    </span>
                   ))}
                 </div>
 

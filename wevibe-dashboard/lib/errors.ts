@@ -40,6 +40,12 @@ export function classifyError(err: unknown): ErrorKind {
     || message.includes('out of gas')
     || message.includes('not enough')
     || message.includes('insufficient balance')
+    || message.includes('does not exist on chain')
+    || message.includes('does not exist')
+    || message.includes('account does not exist')
+    || message.includes('send some tokens')
+    || message.includes('unknown address')
+    || message.includes('account sequence')
   ) {
     return 'needs_gas';
   }

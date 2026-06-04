@@ -1,5 +1,6 @@
-import { SigningStargateClient } from '@cosmjs/stargate';
-import { OfflineSigner } from '@cosmjs/proto-signing';
+import { SigningStargateClient, defaultRegistryTypes } from '@cosmjs/stargate';
+import { OfflineSigner, Registry, GeneratedType } from '@cosmjs/proto-signing';
+import { toBase64 } from '@cosmjs/encoding';
 import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
 import { MsgGrant, MsgRevoke } from 'cosmjs-types/cosmos/authz/v1beta1/tx';
 import { GenericAuthorization } from 'cosmjs-types/cosmos/authz/v1beta1/authz';
@@ -37,9 +38,29 @@ export function getChainRpcEndpoint(): string {
   return rpc;
 }
 
+// The wevibe Msg `value` fields are already-encoded protobuf bytes (hand-rolled
+// encoders above). This passthrough GeneratedType returns those bytes verbatim so
+// CosmJS's Registry can place them into the tx body without re-encoding.
+const rawProtoType: GeneratedType = {
+  encode: (message: unknown) => {
+    const bytes = message instanceof Uint8Array ? message : Uint8Array.from((message as number[]) ?? []);
+    return { finish: () => bytes } as unknown as ReturnType<GeneratedType['encode']>;
+  },
+  decode: (input: unknown) => input,
+  fromPartial: (object: unknown) => object,
+};
+
+function buildWevibeRegistry(): Registry {
+  const registry = new Registry(defaultRegistryTypes);
+  for (const typeUrl of WEVIBE_MSG_TYPE_URLS) {
+    registry.register(typeUrl, rawProtoType);
+  }
+  return registry;
+}
+
 export async function getSigningClient(signer: OfflineSigner): Promise<SigningStargateClient> {
   const rpc = getChainRpcEndpoint();
-  return SigningStargateClient.connectWithSigner(rpc, signer);
+  return SigningStargateClient.connectWithSigner(rpc, signer, { registry: buildWevibeRegistry() });
 }
 
 export function buildMsgGrant(
@@ -538,21 +559,24 @@ export async function directBroadcast(
   const txRaw = await client.sign(account.address, msgs, fee, '');
   const txBytes = TxRaw.encode(txRaw).finish();
 
-  const resp = await fetch(`${getChainRpcEndpoint()}/broadcast`, {
+  const resp = await fetch(`${getChainRpcEndpoint()}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0',
       id: 1,
       method: 'broadcast_tx_commit',
-      params: [txBytes],
+      params: { tx: toBase64(txBytes) },
     }),
   });
 
   const result = await resp.json();
+  if (result?.error) {
+    throw new Error(result.error?.data ?? result.error?.message ?? 'RPC error');
+  }
   const rpcResult = result?.result ?? {};
-  const checkTx = rpcResult.CheckTx ?? rpcResult.check_tx;
-  const deliverTx = rpcResult.DeliverTx ?? rpcResult.deliver_tx;
+  const checkTx = rpcResult.check_tx ?? rpcResult.CheckTx;
+  const deliverTx = rpcResult.tx_result ?? rpcResult.deliver_tx ?? rpcResult.DeliverTx;
   const checkCode = Number(checkTx?.code ?? 0);
   if (checkCode !== 0) {
     throw new Error(`CheckTx failed: ${checkTx?.log ?? checkTx?.raw_log ?? ''}`);
@@ -563,8 +587,8 @@ export async function directBroadcast(
   }
 
   return {
-    txHash: String(deliverTx?.hash ?? rpcResult.hash ?? ''),
-    code: deliverCode,
+    txHash: String(rpcResult.hash ?? deliverTx?.hash ?? ''),
+    code: Number(deliverTx?.code ?? 0),
     rawLog: String(deliverTx?.log ?? deliverTx?.raw_log ?? ''),
     deliverTxData: decodeRpcDataField(deliverTx?.data),
   };
