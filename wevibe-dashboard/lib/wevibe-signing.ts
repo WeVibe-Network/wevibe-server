@@ -165,22 +165,6 @@ export async function linkWalletCanonical(
   return new TextEncoder().encode(msg);
 }
 
-export async function registerDelegateKeyCanonical(
-  orgId: string,
-  walletAddress: string,
-  delegateAddress: string,
-  signedBy: string,
-): Promise<Uint8Array> {
-  const msg = [
-    'wevibe.register_delegate_key.v1',
-    `org_id:${orgId}`,
-    `wallet_address:${walletAddress}`,
-    `delegate_address:${delegateAddress}`,
-    `signed_by:${signedBy}`,
-  ].join('\n');
-  return new TextEncoder().encode(msg);
-}
-
 export async function signCanonical(
   privateKey: CryptoKey,
   canonicalMessage: Uint8Array,

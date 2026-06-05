@@ -45,7 +45,7 @@ export async function mockHubApi(page: Page): Promise<MockHubController> {
       });
     }
 
-    if (request.method() === 'POST' && url.includes('/members') && !url.includes('/wallet') && !url.includes('/delegate-key')) {
+    if (request.method() === 'POST' && url.includes('/members') && !url.includes('/wallet')) {
       return route.fulfill({
         status: 201,
         contentType: 'application/json',

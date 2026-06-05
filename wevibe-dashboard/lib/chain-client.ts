@@ -2,8 +2,6 @@ import { SigningStargateClient, defaultRegistryTypes } from '@cosmjs/stargate';
 import { OfflineSigner, Registry, GeneratedType } from '@cosmjs/proto-signing';
 import { toBase64 } from '@cosmjs/encoding';
 import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
-import { MsgGrant, MsgRevoke } from 'cosmjs-types/cosmos/authz/v1beta1/tx';
-import { GenericAuthorization } from 'cosmjs-types/cosmos/authz/v1beta1/authz';
 import { getConfig } from '@/lib/config';
 
 export interface EncodeObject {
@@ -61,57 +59,6 @@ function buildWevibeRegistry(): Registry {
 export async function getSigningClient(signer: OfflineSigner): Promise<SigningStargateClient> {
   const rpc = getChainRpcEndpoint();
   return SigningStargateClient.connectWithSigner(rpc, signer, { registry: buildWevibeRegistry() });
-}
-
-export function buildMsgGrant(
-  granterAddress: string,
-  granteeAddress: string,
-  msgTypeUrl: string,
-  expirationDays: number,
-): EncodeObject {
-  const expiration = new Date();
-  expiration.setDate(expiration.getDate() + expirationDays);
-
-  const genericAuth = GenericAuthorization.fromPartial({
-    msg: msgTypeUrl,
-  });
-
-  const msgGrant = MsgGrant.fromPartial({
-    granter: granterAddress,
-    grantee: granteeAddress,
-    grant: {
-      authorization: {
-        typeUrl: '/cosmos.authz.v1beta1.GenericAuthorization',
-        value: Buffer.from(GenericAuthorization.encode(genericAuth).finish()),
-      },
-      expiration: {
-        seconds: BigInt(Math.floor(expiration.getTime() / 1000)),
-        nanos: 0,
-      },
-    },
-  });
-
-  return {
-    typeUrl: '/cosmos.authz.v1beta1.MsgGrant',
-    value: Buffer.from(MsgGrant.encode(msgGrant).finish()),
-  };
-}
-
-export function buildMsgRevoke(
-  granterAddress: string,
-  granteeAddress: string,
-  msgTypeUrl: string,
-): EncodeObject {
-  const msgRevoke = MsgRevoke.fromPartial({
-    granter: granterAddress,
-    grantee: granteeAddress,
-    msgTypeUrl,
-  });
-
-  return {
-    typeUrl: '/cosmos.authz.v1beta1.MsgRevoke',
-    value: Buffer.from(MsgRevoke.encode(msgRevoke).finish()),
-  };
 }
 
 export interface DenialEntry {

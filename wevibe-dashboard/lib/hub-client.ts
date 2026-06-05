@@ -1,5 +1,5 @@
 import { buildAuthHeaders, getIdentity, signWithIdentity } from './wevibe-auth';
-import { linkWalletCanonical, registerDelegateKeyCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
+import { linkWalletCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
 import type { OrgRole } from './org-role';
 import type { MemberOrgEntry } from './org-context';
 import { getConfig } from '@/lib/config';
@@ -263,33 +263,6 @@ export async function linkWallet(orgId: string, walletAddress: string): Promise<
     method: 'POST',
     body: JSON.stringify({
       wallet_address: walletAddress,
-      signed_by: identity.pubkeyHex,
-      signature,
-    }),
-  });
-}
-
-export async function registerDelegateKey(
-  orgId: string,
-  walletAddress: string,
-  delegateAddress: string,
-  grantTxHash: string,
-): Promise<{ status: string }> {
-  const identity = await getIdentity();
-  if (!identity) {
-    throw new Error('No dashboard identity');
-  }
-
-  const canonical = await registerDelegateKeyCanonical(orgId, walletAddress, delegateAddress, identity.pubkeyHex);
-  const signature = await signWithIdentity(canonical);
-
-  return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/members/delegate-key`, {
-    method: 'POST',
-    body: JSON.stringify({
-      wallet_address: walletAddress,
-      delegate_address: delegateAddress,
-      delegate_pubkey: identity.pubkeyHex,
-      grant_tx_hash: grantTxHash,
       signed_by: identity.pubkeyHex,
       signature,
     }),
