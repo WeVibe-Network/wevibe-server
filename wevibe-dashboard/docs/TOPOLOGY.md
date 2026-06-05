@@ -16,9 +16,9 @@ Browser (Next.js App)
 1. User authenticates via wallet connector or local key -> obtains session token from hub.
 2. Moderation page fetches pending commitments (`GET /orgs/{id}/pending`), renders cards with guard findings + lifecycle status.
 3. Reports page consumes moderation votes, surfaces escalation state and final actions.
-4. Actions (approve/reject/relate/archive/contest) call hub endpoints that in turn broadcast transactions to wevibe-chain.
+4. Chain-bound actions (approve/report/member updates/config updates/serving-key updates) are built in `lib/chain-client.ts`, signed by the connected Keplr/Leap wallet, and broadcast directly to wevibe-chain RPC via `directBroadcast`.
 5. WebSocket stream pushes serve metrics, confidence decay alerts, and contest updates in real time.
-6. Rotation page uploads anchor manifest; hub validates and submits rotation completion to wevibe-chain.
+6. Rotation page uploads anchor manifest; hub validates and records metadata, while chain tx submission remains wallet-direct.
 
 ## Sprint 32 — CO-033b Serve Batch Submit Path
 
@@ -31,41 +31,31 @@ Browser (Next.js App)
 
 `buildServeBatchMsg` enforces the chain/hub contract that `matched_keywords` is required and non-empty, and emits repeated field-8 string entries for every keyword in each `ServeEntry`.
 
-## CO-011a.4 — Category A / Category B Broadcast Split (Decision C, F)
+## CO-214 Removal Sync — Single Wallet-Direct Broadcast Path
 
-All chain-bound writes from the dashboard go through one of two paths. The hub no longer brokers chain writes for the dashboard.
+All chain-bound writes from the dashboard now use ONE path: wallet-sign + direct RPC broadcast. The hub is record/query infrastructure only and does not relay dashboard transactions.
 
-### Category A — Direct Keplr Broadcast (`lib/chain-client.ts :: directBroadcast`)
+### `lib/chain-client.ts` Signing + Broadcast Surface
 
-Messages that MUST originate from the wallet itself (no authz delegation) are signed via the connected Keplr/Leap wallet:
+- `WEVIBE_MSG_TYPE_URLS` defines WeVibe TypeURLs for registry registration.
+- `buildWevibeRegistry()` registers those TypeURLs with CosmJS.
+- `getSigningClient(signer)` returns a `SigningStargateClient` wired with the WeVibe registry.
+- `directBroadcast(walletAddress, msgs)`:
+  1. Pulls the offline signer from wallet-connect (`getOfflineSigner(chainId)`).
+  2. Builds a signing client via `getSigningClient`.
+  3. Signs `TxRaw` bytes locally in the browser.
+  4. Calls chain RPC `broadcast_tx_commit` directly (no hub relay hop).
+  5. Enforces both `check_tx.code == 0` and `deliver_tx.code == 0`, then returns tx hash + deliver data.
+- `build*Msg` helpers produce encoded chain tx messages (`buildApproveMemoryMsg`, `buildReportMemoryMsg`, `buildRegisterOrgMsg`, `buildAddMemberMsg`, `buildRemoveMemberMsg`, `buildUpdateMemberRoleMsg`, `buildSetOrgConfigMsg`, `buildSetServingKeyMsg`, `buildServeBatchMsg`, `buildDenialBatchMsg`).
 
-- `MsgGrant` / `MsgRevoke` (authz wiring — the grant cannot be self-delegated)
-- `MsgSetOrgConfig` when ONLY `required_approvals` and/or `report_vote_threshold` changed (the two Category A org-config fields)
+### Settings Page Save Flow (single path)
 
-`directBroadcast(walletAddress, msgs)`:
-1. Reads `chainId` from `NEXT_PUBLIC_WEVIBE_CHAIN_ID` and calls `window.keplr.getOfflineSigner(chainId)`.
-2. `SigningStargateClient.connectWithSigner(rpc, signer)`.
-3. `signAndBroadcast(walletAddress, msgs, fee, memo)` — Keplr popup prompts the user for each invocation.
-4. Returns the broadcast tx hash.
+`app/(dashboard)/settings/page.tsx` uses wallet-direct chain writes only:
 
-### Category B — Authz Relay Broadcast (`lib/relay-client.ts :: relayBroadcast`)
+- config updates via `buildSetOrgConfigMsg` + `directBroadcast`
+- serving-key updates via `buildSetServingKeyMsg` + `directBroadcast`
 
-Messages permitted under the active authz grant set are signed by the local delegate key and submitted through the hub relay. No Keplr popup. Covers `MsgApproveMemory`, `MsgReportMemory`, `MsgAddMember`, `MsgRemoveMember`, `MsgUpdateMemberRole`, `MsgSetOrgConfig` (Category B fields only), `MsgSetRepTiers`, and the other authz-eligible TypeURLs.
-
-`relayBroadcast(orgId, walletAddress, innerMsgs)`:
-1. Wraps `innerMsgs` in a Cosmos SDK `authz.MsgExec` where the grantee is the delegate address derived from the local HD wallet (recovered via `getDelegateWallet(walletAddress)`).
-2. Signs the resulting tx with the delegate's secp256k1 key.
-3. Base64-encodes the raw tx bytes.
-4. Builds the WV-RELAY-v1 canonical body via `lib/canonical-body.ts :: buildRelayCanonicalBody(orgId, walletAddress, txBytesBase64)`:
-   ```
-   WV-RELAY-v1\n
-   org_id:<value>\n
-   wallet_address:<value>\n
-   tx_bytes_base64:<value>\n
-   ```
-5. Signs the canonical body string with the delegate key (secp256k1 over sha256 of the body).
-6. `POST ${hubUrl}/v1/relay/broadcast` with `Authorization: Delegate <base64-sig>` and `Content-Type: text/plain; charset=utf-8`. The body is the raw canonical string.
-7. Returns the `tx_hash` field from the relay response.
+Every chain write prompts wallet confirmation because the wallet is the signer.
 
 ### Merkle Root Parity (`lib/merkle.ts`)
 
@@ -79,25 +69,16 @@ Dashboard-side computation of batch Merkle roots maintains byte-for-byte parity 
   - Else → sort RAW leaves by hex encoding; pad odd layers by duplicating the last element; for each pair concatenate raw bytes and `sha256`; subsequent layers operate on hashes.
 - Parity is confirmed against the Go reference by `lib/merkle.test.ts`, runnable via `npx tsx lib/merkle.test.ts`. The fixture validates three vectors: 1 leaf `"abc"`; 2 leaves `"abc","def"`; 3 leaves `"abc","def","ghi"`.
 
-### Settings Page Save Flow (Decision C)
+### Settings Page Save Flow (current)
 
-`app/(dashboard)/settings/page.tsx` exposes a SINGLE **Save Configuration** button whose dispatch depends on which fields the leader changed:
+`app/(dashboard)/settings/page.tsx` uses a single wallet-direct path for chain mutations:
 
-| Field | Category | Path |
-|-------|----------|------|
-| `required_approvals` | A | `directBroadcast` (Keplr popup) wrapping `MsgSetOrgConfig` with only Category A fields |
-| `report_vote_threshold` | A | same as above |
-| `serve_attestation_required` | B | `relayBroadcast` wrapping `MsgSetOrgConfig` with only Category B fields |
-| `min_contributions_per_epoch` | B | same as above |
-| `contest_stake_uvibe` | B | same as above |
-| `rep_tiers` | B | `relayBroadcast` wrapping `MsgSetRepTiers` |
+1. Connect wallet (`connectWallet`).
+2. Build chain message (`buildSetOrgConfigMsg` or `buildSetServingKeyMsg`).
+3. Broadcast via `directBroadcast`.
+4. Report tx hash/status to the user.
 
-Dispatch rules:
-1. If only Category A fields changed → run `directBroadcast` only.
-2. If only Category B fields changed → run `relayBroadcast` only.
-3. If both → run `relayBroadcast` FIRST, then `directBroadcast` (Keplr popup).
-4. Partial success (relay succeeded, Keplr rejected) is reported truthfully to the user. There is no rollback — per R-ONE-PATH, on-chain state stands as broadcast.
-5. As a SEPARATE step after the Category A broadcast succeeds, the dashboard calls `PATCH /v1/orgs/{orgID}/config` to update the hub's off-chain mirror of `required_approvals` / `report_vote_threshold`. The hub does not write to chain on this PATCH — it only updates its own row in the `orgs` table.
+There is no delegate/authz relay fallback.
 
 ## Sprint 27 Gap Blitz (CO-265)
 
@@ -153,11 +134,11 @@ New page `app/(dashboard)/my-submissions/page.tsx` shows contributor submission 
 `app/(dashboard)/settings/page.tsx` includes a read-only display of the org's on-chain configuration:
 
 - Displays current chain config (chain ID, RPC endpoint, gRPC endpoint, bech32 prefix) sourced from the hub's read-only chain query proxy.
-- Editing org-config fields (`required_approvals`, `report_vote_threshold`, `serve_attestation_required`, `min_contributions_per_epoch`, `contest_stake_uvibe`, `rep_tiers`) is handled by the CO-011a.4 split save flow documented above — NOT by a hub PATCH of chain config.
+- Editing org-config fields is handled via wallet-direct chain messages (`buildSetOrgConfigMsg` / `buildSetServingKeyMsg` + `directBroadcast`) — NOT by a hub PATCH of chain config.
 
 **Hub endpoint:** `GET /v1/orgs/{orgID}/chain-config` (leader-only) — read-only proxy to the chain query.
 **Hub handler:** `GetChainConfig(w, r)` in `internal/api/handlers/chain_config.go`.
-**Hub endpoint:** `PATCH /v1/orgs/{orgID}/config` — accepts ONLY Category A fields (`required_approvals`, `report_vote_threshold`). Writes the hub's off-chain mirror in the `orgs` table; does NOT broadcast to chain. The chain-side write for these fields is performed by the dashboard via `directBroadcast`. The hub has no off-chain mirror for Category B fields.
+**Hub endpoint:** `PATCH /v1/orgs/{orgID}/config` — off-chain mirror update endpoint for hub-managed config fields. It does NOT broadcast to chain; chain writes are wallet-direct via `directBroadcast`.
 
 ### Moderation Edit-Before-Approval Fallback (GAP-N2)
 
@@ -191,14 +172,14 @@ New page `app/(dashboard)/my-submissions/page.tsx` shows contributor submission 
 ## Sprint 23 Report Flow Notes (CO-231, CO-232, CO-233; superseded in part by CO-011a.4)
 
 - **Reports page:** Full CRUD with status tabs (pending, upheld_pending_tx, upheld, dismissed, dismissed_malicious). Reporter identity displayed: pubkey, wallet address, account age, dismissed_reports_count. Vote buttons: [Uphold] [Dismiss] [Dismiss as Malicious]. Current vote count shown vs `report_vote_threshold`.
-- **Submit to Chain button:** Leaders see "Submit to Chain" on reports with status `upheld_pending_tx`. The dashboard builds `MsgReportMemory` and broadcasts it via `relayBroadcast` (Category B authz relay path — no Keplr popup). The previous `POST /v1/orgs/{orgID}/reports/{reportID}/commit` hub endpoint was removed in CO-011a.4.
-- **Config saves:** `required_approvals` and `report_vote_threshold` are Category A fields. Changes go through `directBroadcast` (Keplr popup) wrapping `MsgSetOrgConfig`, then a separate `PATCH /v1/orgs/{orgID}/config` updates the hub's off-chain mirror. See the CO-011a.4 settings save flow above. `signArbitrary` is no longer used for config saves.
+- **Submit to Chain button:** Leaders see "Submit to Chain" on reports with status `upheld_pending_tx`. The dashboard builds `MsgReportMemory` and broadcasts it via `directBroadcast` (wallet-direct Keplr/Leap flow).
+- **Config saves:** `MsgSetOrgConfig` updates are sent via `directBroadcast`. `signArbitrary` is no longer used for config saves.
 - **`signArbitraryMessage` in wallet-connect:** `lib/wallet-connect.ts` still exposes `signArbitraryMessage(message: string): Promise<{ signature: Uint8Array; }>` using `window.keplr.signArbitrary` or `window.leap.signArbitrary`. Retained for any non-tx wallet-attestation use cases; no longer used for config saves or report commitment.
 
 ## Sprint 24 Topology Notes
 
 - Reports page (`app/(dashboard)/reports/page.tsx`) consumes hub API and surfaces reporter identity (pubkey, wallet, role), vote buttons (Uphold/Dismiss/Dismiss as Malicious), vote count vs threshold, and reporter's dismissed_reports_count. Vote threshold configurable via `report_vote_threshold` in org config.
-- Settings page (`app/(dashboard)/settings/page.tsx`) exposes `report_vote_threshold` input alongside `required_approvals`. Both are Category A org-config fields — chain-side writes go through `directBroadcast` wrapping `MsgSetOrgConfig`, and the hub's off-chain mirror is updated via `PATCH /v1/orgs/{orgID}/config` as a separate step. See the CO-011a.4 settings save flow above.
+- Settings page (`app/(dashboard)/settings/page.tsx`) exposes org-config controls and submits chain-side changes via `directBroadcast` using `buildSetOrgConfigMsg` / `buildSetServingKeyMsg`.
 - Members page (`app/(dashboard)/members/page.tsx`) displays `dismissed_reports_count` per member with orange highlight when count > 0.
 - Accept / Deny / Report actions: Deny adds memory to local blacklist (never shown again); Report submits to hub for review (remains visible); Accept injects into session.
 
@@ -322,7 +303,7 @@ New page at `app/(dashboard)/chain-submit/page.tsx` provides the batch pipeline 
 2. **Review Keywords** — memories with extracted keywords pending moderator review and hub verification
 3. **Ready for Chain** — memories in `pending_chain` state, ready for batch chain submission
 
-Leader actions: Extract Keywords (calls MCP tool), Submit to Chain (builds `MsgApproveMemory` for the batch and dispatches via `relayBroadcast` — see CO-011a.4), Skip (advance without keywords).
+Leader actions: Extract Keywords (calls MCP tool), Submit to Chain (builds `MsgApproveMemory` for the batch and dispatches via `directBroadcast`), Skip (advance without keywords).
 
 ### Keyword Extraction Flow
 
@@ -345,7 +326,7 @@ New methods for keyword pipeline:
 - `listPendingKeywords(orgId)` — GET `/submissions/keywords/pending`
 - `listPendingChain(orgId)` — GET `/submissions/keywords/pending-chain`
 
-Batch chain submission itself is no longer a hub client method — see "lib/hub-client.ts surface" below for what CO-011a.4 removed. The chain-submit page now builds `MsgApproveMemory` (or the relevant batch message) and dispatches it through `relayBroadcast`.
+Batch chain submission itself is no longer a hub client method — see "lib/hub-client.ts surface" below for what CO-011a.4 removed. The chain-submit page now builds `MsgApproveMemory` (or the relevant batch message) and dispatches it through `directBroadcast`.
 
 ## Sprint 30 — Denial Batch Panel (CO-017)
 
@@ -371,7 +352,7 @@ Ready for Keywords (amber) → Review Keywords (indigo) → Pending Denials (ros
 
 **Chain message:** `MsgSubmitDenialBatch` (typeUrl: `/wevibe.serve.v1.MsgSubmitDenialBatch`)
 - Fields: `signer`, `org_id`, `epoch`, `entries[]` (each: `memory_hash`, `nullifier`, `deny_key`, `reason`)
-- Category A — wallet-direct via Keplr/Leap, NOT relayed through hub
+- Wallet-direct via Keplr/Leap, NOT relayed through hub
 
 **lib/chain-client.ts additions (CO-017):**
 - `WEVIBE_MSG_TYPE_URLS` now includes `/wevibe.serve.v1.MsgSubmitDenialBatch`
@@ -503,7 +484,7 @@ Uses `HubClient`, `encryptMemory`, `signSubmission`, test identities for leader/
 ## Client Modules
 
 - `services/hubClient.ts` — REST + WebSocket wrappers using generated protocol client.
-- `services/chainTx.ts` — optional direct chain submission helpers (fallback when hub relays unavailable).
+- `services/chainTx.ts` — optional direct chain submission helpers.
 - `providers/AuthProvider.tsx` — handles wallet/key session state.
 - `providers/OrgProvider.tsx` — caches org metadata, config, rep tiers.
 - `components/ContestSidebar.tsx` — lists active contests, resolves them.
@@ -512,7 +493,7 @@ Uses `HubClient`, `encryptMemory`, `signSubmission`, test identities for leader/
 
 The dashboard integrates with Keplr and Leap Cosmos wallets via the browser extension injection pattern. No `@keplr-wallet` npm packages are used — only TypeScript type declarations for `window.keplr` and `window.leap`.
 
-**Flow:** User clicks "Connect Keplr" or "Connect Leap" → `experimentalSuggestChain` registers WeVibe chain with the wallet → `enable` requests access → `getKey` returns the bech32 address → wallet address is stored in IndexedDB alongside the Ed25519 delegate key → `linkWallet` call registers the address with the hub.
+**Flow:** User clicks "Connect Keplr" or "Connect Leap" → `experimentalSuggestChain` registers WeVibe chain with the wallet → `enable` requests access → `getKey` returns the bech32 address → wallet address is stored in IndexedDB alongside the Ed25519 identity keypair → `linkWallet` call registers the address with the hub.
 
 **Chain config:** `NEXT_PUBLIC_WEVIBE_CHAIN_ID`, `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, `NEXT_PUBLIC_WEVIBE_CHAIN_REST`, `NEXT_PUBLIC_WEVIBE_BECH32_PREFIX`, `NEXT_PUBLIC_WEVIBE_COIN_DENOM`, `NEXT_PUBLIC_WEVIBE_COIN_MIN_DENOM`. Defaults reflect wevibe-chain values: chain ID `wevibe-local-1`, bech32 prefix `wevibe`, coin base `uvibe` (display `VIBE`).
 
@@ -520,50 +501,33 @@ The dashboard integrates with Keplr and Leap Cosmos wallets via the browser exte
 
 **UI:** `WalletConnectButton` component renders in settings page and topbar. When linked, shows truncated address with green indicator.
 
-## Delegate Key Infrastructure (CO-214)
+## Wallet Link + Chain Signing Architecture (Current)
 
-The dashboard uses a two-tier identity model:
+The dashboard now uses a two-layer model without client delegate keys:
 
-1. **Hub authentication** — Ed25519 keypair in IndexedDB (`lib/wevibe-auth.ts`), used for `WeVibe-Signed` header auth with the hub. This is the legacy path, being phased out.
-2. **Chain authorization** — secp256k1 delegate keypair, authorized via Cosmos SDK `x/authz` MsgGrant from the user's wallet. Used for all chain operations.
+1. **Hub authentication** — Ed25519 keypair in IndexedDB (`lib/wevibe-auth.ts`) for `WeVibe-Signed` hub auth.
+2. **Chain signing** — secp256k1 wallet keys in Keplr/Leap, signing txs directly from the wallet extension.
 
 ### Module Architecture
 
-**`lib/delegate-key.ts`** — secp256k1 delegate key generation and encrypted storage.
-- `generateDelegateKey(walletAddress)` — generates a new secp256k1 keypair via `DirectSecp256k1HdWallet.generate()`, returns `{ address, pubkey, mnemonic }`. Address is bech32-encoded with `wevibe` prefix.
-- `storeDelegateKey(walletAddress, delegateAddress, mnemonic)` — encrypts mnemonic with AES-GCM (key derived from walletAddress via PBKDF2) and stores in IndexedDB under `delegate-keys` store.
-- `getDelegateKey(walletAddress)` — retrieves and decrypts stored delegate key, returns `{ delegateAddress, pubkey }`.
-- `getDelegateWallet(walletAddress)` — reconstructs `DirectSecp256k1HdWallet` from stored mnemonic for signing.
-- `clearDelegateKey(walletAddress)` — removes delegate key from IndexedDB.
+**`lib/chain-client.ts`** — CosmJS signing client + WeVibe message builders.
+- `getChainRpcEndpoint()` — reads `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, normalizes RPC URL for CosmJS.
+- `buildWevibeRegistry()` / `getSigningClient(signer)` — registry + signer client setup for WeVibe type URLs.
+- `directBroadcast(walletAddress, msgs)` — signs locally and sends `broadcast_tx_commit` to chain RPC; validates CheckTx + DeliverTx success.
+- Message builders: `buildSubmitCommitmentMsg`, `buildApproveMemoryMsg`, `buildReportMemoryMsg`, `buildRegisterOrgMsg`, `buildAddMemberMsg`, `buildRemoveMemberMsg`, `buildUpdateMemberRoleMsg`, `buildSetOrgConfigMsg`, `buildSetServingKeyMsg`, `buildServeBatchMsg`, `buildDenialBatchMsg`.
+- `WEVIBE_MSG_TYPE_URLS` — TypeURL registry entries used by `buildWevibeRegistry`.
 
-**`lib/chain-client.ts`** — CosmJS signing client wrapper.
-- `getSigningClient(signer)` — creates `SigningStargateClient` connected to wevibe-chain RPC.
-- `getChainRpcEndpoint()` — reads `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, normalizes `tcp://` to `http://` for CosmJS compatibility.
-- `buildMsgGrant(granter, grantee, msgTypeUrl, expirationDays)` — builds `MsgGrant` with `GenericAuthorization` for a specific message TypeURL.
-- `buildMsgRevoke(granter, grantee, msgTypeUrl)` — builds `MsgRevoke`.
-- `directBroadcast(walletAddress, msgs)` — Category A direct-Keplr broadcast path (CO-011a.4). Calls `window.keplr.getOfflineSigner(chainId)`, then `SigningStargateClient.connectWithSigner(rpc, signer)`, then `signAndBroadcast(walletAddress, msgs, fee, memo)`. Returns the tx hash. Used for `MsgGrant`, `MsgRevoke`, Category A `MsgSetOrgConfig` (`required_approvals` / `report_vote_threshold` only), and `MsgSubmitDenialBatch` (CO-017, denial batch submission).
-- `buildDenialBatchMsg(signer, orgId, epoch, entries)` — CO-017 addition. Builds `EncodeObject` for `MsgSubmitDenialBatch` with manual protobuf binary encoding (Protocol-js does not export this type). Used exclusively with `directBroadcast` for Category A denial batch submission.
-- `WEVIBE_MSG_TYPE_URLS` — array of WeVibe message TypeURLs authorized for delegation. CO-011a.4 removed `/wevibe.memory.v1.MsgRejectMemory` from this list (no corresponding `MsgRejectMemory` exists in the chain protos). CO-017 adds `/wevibe.serve.v1.MsgSubmitDenialBatch`.
+**`lib/wevibe-signing.ts`** — canonical message builders for signed hub payloads.
 
-**`lib/delegation.ts`** — delegation orchestrator.
-- `setupDelegation(walletAddress)` — generates delegate key → signs MsgGrant transactions from wallet (one Keplr popup) for each entry in `WEVIBE_MSG_TYPE_URLS` → stores delegate key locally. Returns `{ delegateAddress, txHash, grantCount }`.
-- `revokeDelegation(walletAddress)` — broadcasts MsgRevoke for all TypeURLs → clears local delegate key.
-- `isDelegationActive(walletAddress)` — checks if delegate key exists in IndexedDB.
-- `renewDelegation(walletAddress)` — revokes existing grant if present, then re-executes full setup flow.
+**`lib/hub-client.ts`** — hub API client; `linkWallet` persists wallet↔identity association (`POST /v1/orgs/{orgID}/members/wallet`).
 
-**`lib/wevibe-signing.ts`** — canonical message builders. Added `registerDelegateKeyCanonical(orgId, walletAddress, delegateAddress, signedBy)` for hub registration signing.
+**`lib/wallet-connect.ts`** — wallet connection + signer access (`getOfflineSigner`).
 
-**`lib/hub-client.ts`** — hub API client. Added `registerDelegateKey(orgId, walletAddress, delegateAddress, grantTxHash)` which POSTs to `/v1/orgs/{orgID}/members/delegate-key` signed with the Ed25519 key.
-
-**`components/delegation-setup.tsx`** — step-by-step wizard component (CO-214).
-- Steps: idle → generating → authorizing → registering → complete/error/revoking
-- Integrates with `WalletConnectButton` — after wallet connection, checks `isDelegationActive()` and renders `DelegationSetup` if not yet delegated.
-
-### CosmJS Dependencies (CO-214)
+### CosmJS Dependencies
 
 Added to `package.json`: `@cosmjs/stargate`, `@cosmjs/proto-signing`, `@cosmjs/amino`, `@cosmjs/crypto`, `@cosmjs/encoding`, `cosmjs-types`.
 
-### TypeURLs Authorized for Delegation
+### WEVIBE_MSG_TYPE_URLS Registry Entries
 
 ```
 /wevibe.memory.v1.MsgSubmitCommitment
@@ -575,34 +539,25 @@ Added to `package.json`: `@cosmjs/stargate`, `@cosmjs/proto-signing`, `@cosmjs/a
 /wevibe.org.v1.MsgRemoveMember
 /wevibe.org.v1.MsgUpdateMemberRole
 /wevibe.org.v1.MsgSetOrgConfig
-/wevibe.org.v1.MsgSetRepTiers
-/wevibe.org.v1.MsgFundTreasury
-/wevibe.org.v1.MsgWithdrawTreasury
+/wevibe.org.v1.MsgSetServingKey
 /wevibe.reputation.v1.MsgIncrementContribution
 /wevibe.reputation.v1.MsgIncrementServe
 /wevibe.reputation.v1.MsgRecordBan
+/wevibe.serve.v1.MsgSubmitDenialBatch
 ```
 
-Grant expiration: 90 days. Gas: 400,000 per transaction batch. Fee: 5,000 uvibe.
+`directBroadcast` signs locally and submits via `broadcast_tx_commit` with wallet-owned authority.
 
-## Relay + Crypto Library Surface (CO-011a.4)
+## Chain + Crypto Library Surface
 
-### `lib/relay-client.ts`
+### `lib/chain-client.ts`
 
-Exports `relayBroadcast(orgId, walletAddress, innerMsgs)`. Builds a Cosmos SDK `authz.MsgExec` wrapping the inner Category B messages, signs the wrapping tx with the delegate's HD wallet retrieved from IndexedDB via `getDelegateWallet(walletAddress)`, base64-encodes the resulting tx bytes, builds the canonical body per Decision F:
+Chain tx construction and broadcast are wallet-direct:
 
-```
-WV-RELAY-v1\n
-org_id:<value>\n
-wallet_address:<value>\n
-tx_bytes_base64:<value>\n
-```
-
-…signs that canonical body string with the delegate key (secp256k1 over sha256 of the body bytes), and `POST`s to `${hubUrl}/v1/relay/broadcast` with `Authorization: Delegate <base64-sig>` and `Content-Type: text/plain; charset=utf-8`. The HTTP body is the raw canonical body string. Returns the `tx_hash` field from the relay response.
-
-### `lib/canonical-body.ts`
-
-Exports `buildRelayCanonicalBody(orgId, walletAddress, txBytesBase64)`. Pure string builder that emits the WV-RELAY-v1 body shown above per Decision F. No I/O, no crypto. Reused by `relay-client.ts` for both signing and POST body.
+- Build `EncodeObject` messages with the `build*Msg` helpers.
+- Sign locally with the connected Keplr/Leap account.
+- Submit directly to chain RPC via `broadcast_tx_commit`.
+- Return tx hash and deliver response metadata to the caller.
 
 ### `lib/merkle.ts`
 
@@ -634,18 +589,18 @@ A failure here means the dashboard would produce a root that disagrees with the 
 Kept (still hub HTTP calls):
 
 - `getOrgChainConfig(orgId)` — hub `GET /v1/orgs/{orgID}/chain-config`. Read-only proxy to the chain query; no chain write.
-- `updateOrgConfig(orgId, patch)` — hub `PATCH /v1/orgs/{orgID}/config`. Accepts ONLY the Category A fields `required_approvals` and `report_vote_threshold`. Writes the hub's off-chain mirror row in the `orgs` table. Does NOT broadcast to chain — the chain-side write is the dashboard's responsibility via `directBroadcast`.
+- `updateOrgConfig(orgId, patch)` — hub `PATCH /v1/orgs/{orgID}/config` for off-chain mirror updates. Does NOT broadcast to chain — chain writes remain dashboard wallet-direct via `directBroadcast`.
 - `topUpCredits`, `transferLeadership`, `closeOrg`, `rotateEpoch` — off-chain hub operations, unchanged.
 - Keyword-pipeline methods listed under "Hub Client Methods (lib/hub-client.ts)" above.
 
-Removed in CO-011a.4 (chain-bound writes now go through `relay-client.ts` or `chain-client.ts :: directBroadcast`):
+Removed in CO-011a.4 + CO-214 cleanup (chain-bound writes are wallet-direct via `chain-client.ts :: directBroadcast`):
 
-- `batchChainSubmit` — chain submission now goes via `relayBroadcast` wrapping `MsgApproveMemory` for the batch.
-- `commitReport` — replaced by `relayBroadcast` wrapping `MsgReportMemory`.
-- `inviteMember` — replaced by `relayBroadcast` wrapping `MsgAddMember`.
-- `removeMember` — replaced by `relayBroadcast` wrapping `MsgRemoveMember`.
-- `updateMemberRole` — replaced by `relayBroadcast` wrapping `MsgUpdateMemberRole`.
-- `updateOrgChainConfig` — removed entirely. Category B org-config fields (`serve_attestation_required`, `min_contributions_per_epoch`, `contest_stake_uvibe`, `rep_tiers`) are now built by the dashboard and broadcast via `relayBroadcast` wrapping `MsgSetOrgConfig` and/or `MsgSetRepTiers`. The hub has no off-chain mirror for Category B fields and no hub endpoint accepts them.
+- `batchChainSubmit` — replaced by dashboard-built `MsgApproveMemory` + `directBroadcast`.
+- `commitReport` — replaced by dashboard-built `MsgReportMemory` + `directBroadcast`.
+- `inviteMember` — replaced by dashboard-built `MsgAddMember` + `directBroadcast`.
+- `removeMember` — replaced by dashboard-built `MsgRemoveMember` + `directBroadcast`.
+- `updateMemberRole` — replaced by dashboard-built `MsgUpdateMemberRole` + `directBroadcast`.
+- `updateOrgChainConfig` — replaced by dashboard-built config messages (`buildSetOrgConfigMsg` / `buildSetServingKeyMsg`) + `directBroadcast`.
 
 ## Storage & Caching
 
