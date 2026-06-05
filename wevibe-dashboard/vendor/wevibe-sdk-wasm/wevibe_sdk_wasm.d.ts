@@ -13,6 +13,8 @@ export function generate_dek(): Uint8Array;
 
 export function generate_identity(): Array<any>;
 
+export function generate_identity_from_seed(ed_seed: Uint8Array): Array<any>;
+
 export function master_key_to_mnemonic(master_key: Uint8Array): string;
 
 export function mnemonic_to_master_key(phrase: string): Uint8Array;
@@ -38,6 +40,7 @@ export interface InitOutput {
     readonly derive_epoch_keys: (a: number, b: number, c: number) => [number, number, number];
     readonly encrypt_symmetric: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly generate_identity: () => any;
+    readonly generate_identity_from_seed: (a: number, b: number) => [number, number, number];
     readonly master_key_to_mnemonic: (a: number, b: number) => [number, number, number, number];
     readonly mnemonic_to_master_key: (a: number, b: number) => [number, number, number];
     readonly open_envelope: (a: number, b: number, c: number, d: number) => [number, number, number];
