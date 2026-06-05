@@ -13,8 +13,8 @@ import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
 import { SLOT_CAP, slotBarHeightPercent, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
 import { useDashboardState } from '@/lib/use-dashboard-state';
-import { connectWallet, getChainConfig } from '@/lib/wallet-connect';
-import { deriveIdentityFromWallet, setWalletAddress } from '@/lib/wevibe-auth';
+import { connectWallet } from '@/lib/wallet-connect';
+import { createGuestIdentity, setWalletAddress } from '@/lib/wevibe-auth';
 import { buildOrgSetup } from '@/lib/wevibe-crypto';
 
 const vibeFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
@@ -208,13 +208,9 @@ export default function BuyOrgPage() {
 
     try {
       const conn = await connectWallet('keplr');
-      const walletApi = window.keplr;
-      if (!walletApi) {
-        throw new Error('keplr wallet not available after connection');
+      if (!identity) {
+        await createGuestIdentity();
       }
-
-      const chainId = getChainConfig().chainId;
-      await deriveIdentityFromWallet(walletApi, chainId, conn.address);
       await setWalletAddress(conn.address);
       refresh();
     } catch (err) {
@@ -222,7 +218,7 @@ export default function BuyOrgPage() {
     } finally {
       setConnecting(false);
     }
-  }, [refresh]);
+  }, [identity, refresh]);
 
   const handleConfirmBuy = useCallback(async () => {
     if (submitting || capReached) {
@@ -262,7 +258,6 @@ export default function BuyOrgPage() {
         orgName: orgNameValue,
         domain: domainValue,
         leaderEd25519PubHex: identity.pubkeyHex,
-        leaderSeedHex: identity.seedHex,
         leaderWallet: walletAddress,
       });
 

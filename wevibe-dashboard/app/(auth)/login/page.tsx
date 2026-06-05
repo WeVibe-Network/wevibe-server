@@ -5,15 +5,12 @@ import { useRouter } from 'next/navigation';
 import {
   detectWallets,
   connectWallet,
-  getChainConfig,
   type WalletProvider,
 } from '@/lib/wallet-connect';
 import {
-  deriveIdentityFromWallet,
+  createGuestIdentity,
   getIdentity,
   setWalletAddress,
-  exportIdentity,
-  importIdentity,
 } from '@/lib/wevibe-auth';
 
 export default function LoginPage() {
@@ -23,8 +20,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [checkingIdentity, setCheckingIdentity] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [importMode, setImportMode] = useState(false);
-  const [importJson, setImportJson] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -58,43 +53,15 @@ export default function LoginPage() {
     setError(null);
     try {
       const conn = await connectWallet(provider);
-      const walletApi = provider === 'keplr' ? window.keplr : window.leap;
-      if (!walletApi) {
-        throw new Error(`${provider} wallet not available after connection`);
-      }
 
-      const chainId = getChainConfig().chainId;
-      const identity = await deriveIdentityFromWallet(walletApi, chainId, conn.address);
+      const existing = await getIdentity();
+      const identity = existing ?? await createGuestIdentity();
       await setWalletAddress(conn.address);
       setPubkeyHex(identity.pubkeyHex);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleExport = async () => {
-    const exported = await exportIdentity();
-    if (!exported) return;
-    const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'wevibe-dashboard-key.json';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleImport = async () => {
-    try {
-      const parsed = JSON.parse(importJson);
-      const newPubkey = await importIdentity(parsed.publicKeyJwk, parsed.privateKeyJwk);
-      setPubkeyHex(newPubkey);
-      setImportMode(false);
-      setImportJson('');
-    } catch (e) {
-      setError(`Import failed: ${(e as Error).message}`);
     }
   };
 
@@ -118,39 +85,6 @@ export default function LoginPage() {
               </code>
             </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={handleExport}
-                className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-4 py-2 text-sm text-wv-text transition hover:bg-wv-line"
-              >
-                Export Key (for backup/migration)
-              </button>
-              <button
-                onClick={() => setImportMode(!importMode)}
-                className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-4 py-2 text-sm text-wv-text transition hover:bg-wv-line"
-              >
-                Import Key
-              </button>
-            </div>
-
-            {importMode && (
-              <div className="space-y-2">
-                <textarea
-                  value={importJson}
-                  onChange={(e) => setImportJson(e.target.value)}
-                  placeholder="Paste exported key JSON here..."
-                  className="w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm font-mono text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
-                  rows={6}
-                />
-                <button
-                  onClick={handleImport}
-                  className="rounded-lg bg-wv-grad-btn px-4 py-2 text-sm text-white shadow-wv-sm transition hover:opacity-95"
-                >
-                  Import
-                </button>
-              </div>
-            )}
-
             <button
               onClick={() => router.push('/')}
               className="mt-4 block rounded-lg bg-wv-grad-btn px-4 py-2 text-center text-sm text-white shadow-wv-sm transition hover:opacity-95"
@@ -160,7 +94,7 @@ export default function LoginPage() {
           </div>
         ) : (
           <div className="mt-4 space-y-4">
-            <p className="text-wv-dim">Connect your wallet to derive your dashboard identity.</p>
+            <p className="text-wv-dim">Connect your wallet to create your dashboard identity.</p>
 
             {checkingIdentity ? (
               <p className="text-wv-dim">Checking existing identity...</p>

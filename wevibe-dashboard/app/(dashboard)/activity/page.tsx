@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getIdentity, signEd25519WithSeed } from '@/lib/wevibe-auth';
+import { getIdentity, signWithIdentity } from '@/lib/wevibe-auth';
 import {
   Notification,
   listNotifications,
@@ -33,7 +33,7 @@ export default function ActivityPage() {
     const timestamp = new Date().toISOString();
     const encoder = new TextEncoder();
     const data = encoder.encode(timestamp);
-    const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
+    const signatureHex = await signWithIdentity(data);
 
     const ws = new WebSocket(hubWsUrl('/v1/notifications/ws'));
     wsRef.current = ws;

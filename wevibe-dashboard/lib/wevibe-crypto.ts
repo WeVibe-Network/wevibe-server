@@ -1,7 +1,4 @@
-import { x25519 } from '@noble/curves/ed25519.js';
-import { hkdf } from '@noble/hashes/hkdf';
-import { sha256 } from '@noble/hashes/sha256';
-import { signEd25519WithSeed } from './wevibe-auth';
+import { deriveIdentityX25519Keypair, signWithIdentity } from './wevibe-auth';
 import { createOrgCanonical } from './wevibe-signing';
 
 // Browser-only helper module. This file depends on browser APIs (btoa + WebCrypto via createOrgCanonical).
@@ -27,7 +24,6 @@ export interface BuildOrgSetupArgs {
   orgName: string;
   domain: string;
   leaderEd25519PubHex: string;
-  leaderSeedHex: string;
   leaderWallet: string;
 }
 
@@ -54,23 +50,6 @@ function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const normalized = hex.trim().toLowerCase();
-  if (normalized.length % 2 !== 0) {
-    throw new Error('Invalid hex length');
-  }
-
-  const bytes = new Uint8Array(normalized.length / 2);
-  for (let i = 0; i < normalized.length; i += 2) {
-    const byte = Number.parseInt(normalized.slice(i, i + 2), 16);
-    if (Number.isNaN(byte)) {
-      throw new Error('Invalid hex value');
-    }
-    bytes[i / 2] = byte;
-  }
-  return bytes;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -152,22 +131,8 @@ export async function signRaw(priv: Uint8Array, data: Uint8Array): Promise<Uint8
   return wasm.sign(priv, data);
 }
 
-export function deriveX25519FromSeed(seedHex: string): { priv: Uint8Array; pub: Uint8Array } {
-  const seed = hexToBytes(seedHex);
-  if (seed.length !== 32) {
-    throw new Error('leaderSeedHex must decode to 32 bytes');
-  }
-
-  const info = new TextEncoder().encode('wevibe-x25519-v1');
-  const priv = hkdf(sha256, seed, new Uint8Array(0), info, 32);
-  const pub = x25519.getPublicKey(priv);
-
-  seed.fill(0);
-  return { priv, pub };
-}
-
 export async function buildOrgSetup(args: BuildOrgSetupArgs): Promise<BuildOrgSetupResult> {
-  const x25519Keys = deriveX25519FromSeed(args.leaderSeedHex);
+  const x25519Keys = await deriveIdentityX25519Keypair();
 
   let masterKey: Uint8Array | null = null;
   let epoch0: EpochKeys | null = null;
@@ -198,7 +163,7 @@ export async function buildOrgSetup(args: BuildOrgSetupArgs): Promise<BuildOrgSe
       null,
     );
 
-    const signature = await signEd25519WithSeed(args.leaderSeedHex, canonical);
+    const signature = await signWithIdentity(canonical);
     const recoveryPhrase = await masterKeyToMnemonic(masterKey);
 
     return {

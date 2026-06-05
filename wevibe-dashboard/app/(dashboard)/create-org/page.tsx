@@ -11,8 +11,8 @@ import { classifyError } from '@/lib/errors';
 import { createOrg } from '@/lib/hub-client';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 import { useOrgContext } from '@/lib/org-context';
-import { connectWallet, getChainConfig } from '@/lib/wallet-connect';
-import { deriveIdentityFromWallet, setWalletAddress } from '@/lib/wevibe-auth';
+import { connectWallet } from '@/lib/wallet-connect';
+import { createGuestIdentity, setWalletAddress } from '@/lib/wevibe-auth';
 import { buildOrgSetup } from '@/lib/wevibe-crypto';
 
 const ONE_ORG_GATE_COPY = 'Only one organization per account is allowed.';
@@ -68,13 +68,9 @@ export default function CreateOrgPage() {
 
     try {
       const conn = await connectWallet('keplr');
-      const walletApi = window.keplr;
-      if (!walletApi) {
-        throw new Error('keplr wallet not available after connection');
+      if (!identity) {
+        await createGuestIdentity();
       }
-
-      const chainId = getChainConfig().chainId;
-      await deriveIdentityFromWallet(walletApi, chainId, conn.address);
       await setWalletAddress(conn.address);
       refresh();
     } catch (err) {
@@ -82,7 +78,7 @@ export default function CreateOrgPage() {
     } finally {
       setConnecting(false);
     }
-  }, [refresh]);
+  }, [identity, refresh]);
 
   const handleSubmit = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -115,7 +111,6 @@ export default function CreateOrgPage() {
         orgName: orgNameValue,
         domain: domainValue,
         leaderEd25519PubHex: identity.pubkeyHex,
-        leaderSeedHex: identity.seedHex,
         leaderWallet: walletAddress,
       });
       const created = await createOrg(setup.payload);

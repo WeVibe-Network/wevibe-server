@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getUnreadCount } from '@/lib/hub-client';
-import { getIdentity, signEd25519WithSeed } from '@/lib/wevibe-auth';
+import { getIdentity, signWithIdentity } from '@/lib/wevibe-auth';
 import { hubWsUrl } from '@/lib/config';
 
 export default function NotificationBell() {
@@ -29,7 +29,7 @@ export default function NotificationBell() {
       const timestamp = new Date().toISOString();
       const encoder = new TextEncoder();
       const data = encoder.encode(timestamp);
-      const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
+      const signatureHex = await signWithIdentity(data);
 
       ws = new WebSocket(hubWsUrl('/v1/notifications/ws'));
 

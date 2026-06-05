@@ -1,29 +1,43 @@
 import * as ed from '@noble/ed25519';
+import { x25519 } from '@noble/curves/ed25519.js';
+import { hkdf } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha256';
 import { sha512 } from '@noble/hashes/sha512';
+import {
+  type WrappedSeed,
+  createIdentityPasskey,
+  derivePrfKey,
+  isPasskeySupported,
+  unwrapSeed,
+  wrapSeed,
+} from './passkey';
 
 const DB_NAME = 'wevibe-dashboard';
 const DB_VERSION = 1;
 const STORE_NAME = 'keys';
 const KEY_ID = 'dashboard-identity';
 
-const IDENTITY_CHALLENGE_VERSION = 'v1';
-const SEED_DOMAIN_TAG = 'wevibe-ed25519-v1';
+const X25519_DOMAIN_TAG = 'wevibe-x25519-v1';
 
 const textEncoder = new TextEncoder();
 
 ed.etc.sha512Sync = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages));
 
-interface StoredIdentity {
-  id: string;
+let unlockedSeed: Uint8Array | null = null;
+
+interface StoredIdentityRecord {
+  id: typeof KEY_ID;
   pubkeyHex: string;
-  seedHex: string;
+  credentialIdB64: string;
+  wrapped: WrappedSeed;
   createdAt: string;
   walletAddress?: string;
 }
 
-function identityChallenge(address: string): string {
-  return `WeVibe Dashboard Identity ${IDENTITY_CHALLENGE_VERSION}\nDerive my Ed25519 hub authentication key.\nWallet: ${address}`;
+export interface IdentityMetadata {
+  pubkeyHex: string;
+  walletAddress?: string;
+  createdAt: string;
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -46,37 +60,16 @@ function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
-function bufToHex(buf: ArrayBuffer): string {
-  return bytesToHex(new Uint8Array(buf));
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0) {
-    throw new Error('Invalid hex length');
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
   }
-
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    const byte = Number.parseInt(hex.slice(i, i + 2), 16);
-    if (Number.isNaN(byte)) {
-      throw new Error('Invalid hex value');
-    }
-    bytes[i / 2] = byte;
-  }
-  return bytes;
-}
-
-function hexToBuf(hex: string): ArrayBuffer {
-  const bytes = hexToBytes(hex);
-  const buffer = new ArrayBuffer(bytes.length);
-  new Uint8Array(buffer).set(bytes);
-  return buffer;
+  return btoa(binary);
 }
 
 function base64ToBytes(base64: string): Uint8Array {
-  const normalized = base64.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-  const binary = atob(padded);
+  const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
 
   for (let i = 0; i < binary.length; i += 1) {
@@ -86,38 +79,45 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+function isWrappedSeed(value: unknown): value is WrappedSeed {
+  return typeof value === 'object'
+    && value !== null
+    && 'v' in value
+    && 'ivB64' in value
+    && 'ctB64' in value
+    && (value as WrappedSeed).v === 1
+    && typeof (value as WrappedSeed).ivB64 === 'string'
+    && typeof (value as WrappedSeed).ctB64 === 'string';
 }
 
-function deriveSeedFromSignature(signatureBase64: string): Uint8Array {
-  const signatureBytes = base64ToBytes(signatureBase64);
-  return sha256(ed.etc.concatBytes(textEncoder.encode(SEED_DOMAIN_TAG), signatureBytes));
-}
-
-async function loadIdentityRecord(): Promise<StoredIdentity | null> {
+async function loadIdentityRecord(): Promise<StoredIdentityRecord | null> {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
     const req = store.get(KEY_ID);
     req.onsuccess = () => {
-      const result = req.result as Partial<StoredIdentity> | undefined;
-      if (!result || typeof result.pubkeyHex !== 'string' || typeof result.seedHex !== 'string') {
+      const result = req.result as Partial<StoredIdentityRecord> | undefined;
+      if (
+        !result
+        || result.id !== KEY_ID
+        || typeof result.pubkeyHex !== 'string'
+        || typeof result.credentialIdB64 !== 'string'
+        || typeof result.createdAt !== 'string'
+        || !isWrappedSeed(result.wrapped)
+        || (typeof result.walletAddress !== 'undefined' && typeof result.walletAddress !== 'string')
+      ) {
         resolve(null);
         return;
       }
-      resolve(result as StoredIdentity);
+
+      resolve(result as StoredIdentityRecord);
     };
     req.onerror = () => reject(req.error);
   });
 }
 
-async function saveIdentityRecord(identity: StoredIdentity): Promise<void> {
+async function saveIdentityRecord(identity: StoredIdentityRecord): Promise<void> {
   const db = await openDB();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
@@ -128,40 +128,129 @@ async function saveIdentityRecord(identity: StoredIdentity): Promise<void> {
   });
 }
 
-export async function deriveIdentityFromWallet(
-  walletApi: {
-    signArbitrary(
-      chainId: string,
-      address: string,
-      message: string,
-    ): Promise<{ signature: string }>;
-  },
-  chainId: string,
-  address: string,
-): Promise<StoredIdentity> {
-  const challenge = identityChallenge(address);
-  const signed = await walletApi.signArbitrary(chainId, address, challenge);
-  const seed = deriveSeedFromSignature(signed.signature);
-  const pubkey = await ed.getPublicKeyAsync(seed);
+async function ensureUnlockedSeed(): Promise<Uint8Array> {
+  if (!unlockedSeed) {
+    await unlockIdentity();
+  }
 
-  const identity: StoredIdentity = {
-    id: KEY_ID,
-    pubkeyHex: bytesToHex(pubkey),
-    seedHex: bytesToHex(seed),
-    createdAt: new Date().toISOString(),
-    walletAddress: address,
+  if (!unlockedSeed) {
+    throw new Error('No dashboard identity seed is unlocked.');
+  }
+
+  return unlockedSeed;
+}
+
+export async function unlockIdentity(): Promise<void> {
+  if (unlockedSeed) {
+    return;
+  }
+
+  const record = await loadIdentityRecord();
+  if (!record) {
+    throw new Error('No dashboard identity. Generate one first.');
+  }
+
+  const credentialId = base64ToBytes(record.credentialIdB64);
+  const key = await derivePrfKey(credentialId);
+  const seed = await unwrapSeed(key, record.wrapped);
+
+  if (seed.length !== 32) {
+    throw new Error(`Invalid Ed25519 seed length in wrapped identity record: ${seed.length}`);
+  }
+
+  unlockedSeed = seed;
+}
+
+export function lockIdentity(): void {
+  if (unlockedSeed) {
+    unlockedSeed.fill(0);
+    unlockedSeed = null;
+  }
+}
+
+export function isUnlocked(): boolean {
+  return unlockedSeed !== null;
+}
+
+export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
+  if (!isPasskeySupported()) {
+    throw new Error('Passkeys are not supported in this browser. A WebAuthn + PRF-capable passkey is required.');
+  }
+
+  const existing = await loadIdentityRecord();
+  const { generateIdentity } = await import('./wevibe-crypto');
+  const id = await generateIdentity();
+
+  const seed = new Uint8Array(id.edPriv);
+  if (seed.length !== 32) {
+    seed.fill(0);
+    id.edPriv.fill(0);
+    id.xPriv.fill(0);
+    throw new Error(`generateIdentity returned invalid Ed25519 seed length: ${seed.length}`);
+  }
+
+  const pubkeyHex = bytesToHex(id.edPub);
+
+  try {
+    const { credentialId, prfSupported } = await createIdentityPasskey({
+      userId: id.edPub,
+      userName: 'wevibe',
+      displayName: 'WeVibe Identity',
+    });
+
+    if (!prfSupported) {
+      throw new Error('Passkey PRF extension is required to protect your WeVibe identity seed.');
+    }
+
+    const key = await derivePrfKey(credentialId);
+    const wrapped = await wrapSeed(key, seed);
+
+    const identity: StoredIdentityRecord = {
+      id: KEY_ID,
+      pubkeyHex,
+      credentialIdB64: bytesToBase64(credentialId),
+      wrapped,
+      createdAt: new Date().toISOString(),
+      ...(existing?.walletAddress ? { walletAddress: existing.walletAddress } : {}),
+    };
+
+    await saveIdentityRecord(identity);
+    lockIdentity();
+    unlockedSeed = seed;
+    return { pubkeyHex };
+  } catch (error) {
+    seed.fill(0);
+    throw error;
+  } finally {
+    id.edPriv.fill(0);
+    id.xPriv.fill(0);
+  }
+}
+
+export async function deriveIdentityX25519Keypair(): Promise<{ priv: Uint8Array; pub: Uint8Array }> {
+  const seed = await ensureUnlockedSeed();
+  const info = textEncoder.encode(X25519_DOMAIN_TAG);
+  const priv = hkdf(sha256, seed, new Uint8Array(0), info, 32);
+  const pub = x25519.getPublicKey(priv);
+  return { priv, pub };
+}
+
+export async function getIdentity(): Promise<IdentityMetadata | null> {
+  const record = await loadIdentityRecord();
+  if (!record) {
+    return null;
+  }
+
+  return {
+    pubkeyHex: record.pubkeyHex,
+    walletAddress: record.walletAddress,
+    createdAt: record.createdAt,
   };
-
-  await saveIdentityRecord(identity);
-  return identity;
 }
 
-export async function getIdentity(): Promise<StoredIdentity | null> {
-  return loadIdentityRecord();
-}
-
-export async function signEd25519WithSeed(seedHex: string, data: Uint8Array): Promise<string> {
-  const sig = await ed.signAsync(data, hexToBytes(seedHex));
+export async function signWithIdentity(data: Uint8Array): Promise<string> {
+  const seed = await ensureUnlockedSeed();
+  const sig = await ed.signAsync(data, seed);
   return bytesToHex(sig);
 }
 
@@ -176,7 +265,7 @@ export async function signTimestamp(): Promise<{
 
   const timestamp = new Date().toISOString();
   const data = textEncoder.encode(timestamp);
-  const signatureHex = await signEd25519WithSeed(identity.seedHex, data);
+  const signatureHex = await signWithIdentity(data);
 
   const authHeader = `WeVibe-Signed pubkey=${identity.pubkeyHex},timestamp=${timestamp},signature=${signatureHex}`;
 
@@ -198,61 +287,8 @@ export async function buildAuthHeaders(): Promise<Record<string, string>> {
   };
 }
 
-export async function exportIdentity(): Promise<{
-  publicKeyJwk: JsonWebKey;
-  privateKeyJwk: JsonWebKey;
-  pubkeyHex: string;
-} | null> {
-  const identity = await getIdentity();
-  if (!identity) return null;
-
-  const pubkeyBytes = hexToBytes(identity.pubkeyHex);
-
-  const publicKeyJwk: JsonWebKey = {
-    kty: 'OKP',
-    crv: 'Ed25519',
-    x: bytesToBase64Url(pubkeyBytes),
-  };
-
-  const privateKeyJwk: JsonWebKey = {
-    kty: 'OKP',
-    crv: 'Ed25519',
-    x: bytesToBase64Url(pubkeyBytes),
-    d: identity.seedHex,
-  };
-
-  return { publicKeyJwk, privateKeyJwk, pubkeyHex: identity.pubkeyHex };
-}
-
-export async function importIdentity(publicKeyJwk: JsonWebKey, privateKeyJwk: JsonWebKey): Promise<string> {
-  const seedHexCandidate =
-    typeof privateKeyJwk.d === 'string'
-      ? privateKeyJwk.d
-      : typeof privateKeyJwk.k === 'string'
-        ? privateKeyJwk.k
-        : null;
-
-  if (!seedHexCandidate || !/^[0-9a-fA-F]{64}$/.test(seedHexCandidate)) {
-    throw new Error('Invalid identity import. Expected 32-byte seed hex.');
-  }
-
-  const seedHex = seedHexCandidate.toLowerCase();
-  const seed = hexToBytes(seedHex);
-  const pubkey = await ed.getPublicKeyAsync(seed);
-  const pubkeyHex = bytesToHex(pubkey);
-
-  const identity: StoredIdentity = {
-    id: KEY_ID,
-    pubkeyHex,
-    seedHex,
-    createdAt: new Date().toISOString(),
-  };
-
-  await saveIdentityRecord(identity);
-  return pubkeyHex;
-}
-
 export async function clearIdentity(): Promise<void> {
+  lockIdentity();
   const db = await openDB();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
