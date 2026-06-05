@@ -1,0 +1,133 @@
+export type SubTab = { label: string; href: string };
+
+export type MainSection = { label: string; key: string; sub: SubTab[] };
+
+export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
+  CONNECTED_LEADER: [
+    {
+      label: 'My Org',
+      key: 'my-org',
+      sub: [
+        { label: 'Overview', href: '/my-org' },
+        { label: 'Epochs', href: '/epoch' },
+        { label: 'Billing', href: '/billing' },
+        { label: 'Recovery', href: '/recovery' },
+      ],
+    },
+    {
+      label: 'Moderation',
+      key: 'moderation',
+      sub: [
+        { label: 'Queue', href: '/moderation' },
+        { label: 'Reports', href: '/reports' },
+      ],
+    },
+    {
+      label: 'Memories',
+      key: 'memories',
+      sub: [
+        { label: 'Pipeline', href: '/chain-submit' },
+        { label: 'Browse', href: '/memories' },
+        { label: 'Keywords', href: '/keywords' },
+      ],
+    },
+    {
+      label: 'Requests',
+      key: 'requests',
+      sub: [{ label: 'Join Requests', href: '/join-requests' }],
+    },
+    {
+      label: 'Members',
+      key: 'members',
+      sub: [{ label: 'Members', href: '/members' }],
+    },
+    {
+      label: 'Settings',
+      key: 'settings',
+      sub: [{ label: 'Settings', href: '/settings' }],
+    },
+  ],
+  CONNECTED_MODERATOR: [
+    {
+      label: 'My Org',
+      key: 'my-org',
+      sub: [{ label: 'Overview', href: '/my-org' }],
+    },
+    {
+      label: 'Moderation',
+      key: 'moderation',
+      sub: [
+        { label: 'Queue', href: '/moderation' },
+        { label: 'Reports', href: '/reports' },
+      ],
+    },
+    {
+      label: 'Memories',
+      key: 'memories',
+      sub: [{ label: 'Browse', href: '/memories' }],
+    },
+    {
+      label: 'Requests',
+      key: 'requests',
+      sub: [{ label: 'Join Requests', href: '/join-requests' }],
+    },
+  ],
+  CONNECTED_CONTRIBUTOR: [
+    {
+      label: 'My Org',
+      key: 'my-org',
+      sub: [{ label: 'Overview', href: '/my-org' }],
+    },
+    {
+      label: 'Sessions',
+      key: 'sessions',
+      sub: [{ label: 'Extract', href: '/sessions' }],
+    },
+    {
+      label: 'Memories',
+      key: 'memories',
+      sub: [{ label: 'Browse', href: '/memories' }],
+    },
+    {
+      label: 'My Submissions',
+      key: 'my-submissions',
+      sub: [{ label: 'Submissions', href: '/my-submissions' }],
+    },
+  ],
+  CONNECTED_MEMBER: [
+    {
+      label: 'My Org',
+      key: 'my-org',
+      sub: [{ label: 'Overview', href: '/my-org' }],
+    },
+    {
+      label: 'Memories',
+      key: 'memories',
+      sub: [{ label: 'Browse', href: '/memories' }],
+    },
+    {
+      label: 'Discover',
+      key: 'discover',
+      sub: [{ label: 'Discover', href: '/discover' }],
+    },
+  ],
+};
+
+export const GENERAL_NAV: SubTab[] = [
+  { label: 'Discover', href: '/discover' },
+  { label: 'Activity', href: '/activity' },
+  { label: 'Notifications', href: '/notifications' },
+  { label: 'Faucet', href: '/faucet' },
+  { label: 'Profile', href: '/profile' },
+  { label: 'Pipeline Health', href: '/health' },
+];
+
+const EMPTY_SECTIONS: MainSection[] = [];
+
+export function mainSectionsForState(state: string): MainSection[] {
+  return MAIN_NAV_BY_STATE[state] ?? EMPTY_SECTIONS;
+}
+
+export function activeSectionForPath(sections: MainSection[], pathname: string): MainSection | null {
+  return sections.find(section => section.sub.some(tab => pathname === tab.href || pathname.startsWith(`${tab.href}/`))) ?? null;
+}
