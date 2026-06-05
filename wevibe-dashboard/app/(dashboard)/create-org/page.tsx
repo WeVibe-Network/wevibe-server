@@ -42,11 +42,13 @@ function isLeaderOwnershipConflict(err: unknown): boolean {
 
 export default function CreateOrgPage() {
   const router = useRouter();
-  const { state, walletAddress, identity, refresh } = useDashboardState();
+  const { state, walletAddress, walletLinked, identity, refresh } = useDashboardState();
   const { orgs } = useOrgContext();
   const [orgName, setOrgName] = useState('');
   const [domain, setDomain] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [creatingIdentity, setCreatingIdentity] = useState(false);
+  const [identityError, setIdentityError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -59,18 +61,29 @@ export default function CreateOrgPage() {
     () => orgs.find((org) => org.role === 'leader') ?? null,
     [orgs],
   );
-  const isConnectedState = state !== 'INITIALIZING' && state !== 'NO_WALLET';
-  const showJoinCreateChooser = state === 'CONNECTED_NO_ORG' && !success && !leaderOrg;
+  const canUseOrgFlow = state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && walletLinked;
+  const showJoinCreateChooser = state === 'IDENTITY_NO_ORG' && walletLinked && !success && !leaderOrg;
 
-  const handleConnectWallet = useCallback(async () => {
+  const handleCreateIdentity = useCallback(async () => {
+    setCreatingIdentity(true);
+    setIdentityError(null);
+
+    try {
+      await createGuestIdentity();
+      refresh();
+    } catch (err) {
+      setIdentityError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingIdentity(false);
+    }
+  }, [refresh]);
+
+  const handleLinkWallet = useCallback(async () => {
     setConnecting(true);
     setConnectError(null);
 
     try {
       const conn = await connectWallet('keplr');
-      if (!identity) {
-        await createGuestIdentity();
-      }
       await setWalletAddress(conn.address);
       refresh();
     } catch (err) {
@@ -78,7 +91,7 @@ export default function CreateOrgPage() {
     } finally {
       setConnecting(false);
     }
-  }, [identity, refresh]);
+  }, [refresh]);
 
   const handleSubmit = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -166,23 +179,40 @@ export default function CreateOrgPage() {
         <LoadingState label="Loading…" />
       )}
 
-      {state === 'NO_WALLET' && (
+      {state === 'NO_IDENTITY' && (
         <Card className="p-6">
           <div className="flex flex-col gap-4">
             <p className="text-sm text-wv-dim">
-              Connect your wallet to derive your dashboard identity before creating an organization.
+              Create a guest identity first to access dashboard organization flows.
             </p>
-            {connectError && <ErrorBanner>{connectError}</ErrorBanner>}
+            {identityError && <ErrorBanner>{identityError}</ErrorBanner>}
             <div className="flex items-center gap-3">
-              <Button type="button" onClick={handleConnectWallet} disabled={connecting}>
-                {connecting ? 'Connecting…' : 'Connect Wallet'}
+              <Button type="button" onClick={handleCreateIdentity} disabled={creatingIdentity}>
+                {creatingIdentity ? 'Creating…' : 'Create Identity'}
               </Button>
             </div>
           </div>
         </Card>
       )}
 
-      {isConnectedState && success && (
+      {state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && !walletLinked && (
+        <Card className="p-6">
+          <div className="flex flex-col gap-4">
+            <h2 className="text-lg font-semibold text-wv-text">Link a wallet to create an org</h2>
+            <p className="text-sm text-wv-dim">
+              Org leaders sign on-chain, so a linked wallet is required.
+            </p>
+            {connectError && <ErrorBanner>{connectError}</ErrorBanner>}
+            <div className="flex items-center gap-3">
+              <Button type="button" onClick={handleLinkWallet} disabled={connecting}>
+                {connecting ? 'Linking…' : 'Link Wallet'}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {canUseOrgFlow && success && (
         <Card className="p-6">
           <div className="flex flex-col gap-5">
             <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-4">
@@ -226,7 +256,7 @@ export default function CreateOrgPage() {
         </Card>
       )}
 
-      {isConnectedState && !success && leaderOrg && (
+      {canUseOrgFlow && !success && leaderOrg && (
         <Card className="p-6">
           <GuardCard title={`You already own an organization: ${leaderOrg.org_name}`}>
             <p className="mt-2 text-sm text-wv-text">{ONE_ORG_GATE_COPY}</p>
@@ -282,7 +312,7 @@ export default function CreateOrgPage() {
         </div>
       )}
 
-      {isConnectedState && state !== 'CONNECTED_NO_ORG' && !success && !leaderOrg && (
+      {canUseOrgFlow && state !== 'IDENTITY_NO_ORG' && !success && !leaderOrg && (
         <form onSubmit={handleSubmit} data-testid="create-org-form" className="flex flex-col gap-5">
           <Card className="p-6">
             <div className="flex flex-col gap-4">

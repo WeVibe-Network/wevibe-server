@@ -139,8 +139,10 @@ function barStyles(state: ChartBarState): string {
 
 export default function BuyOrgPage() {
   const router = useRouter();
-  const { state, walletAddress, identity, refresh } = useDashboardState();
+  const { state, walletAddress, walletLinked, identity, refresh } = useDashboardState();
 
+  const [creatingIdentity, setCreatingIdentity] = useState(false);
+  const [identityError, setIdentityError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
@@ -153,7 +155,7 @@ export default function BuyOrgPage() {
   const [showFaucetPrompt, setShowFaucetPrompt] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const isConnectedState = state !== 'INITIALIZING' && state !== 'NO_WALLET';
+  const canBuyOrgFlow = state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && walletLinked;
 
   const loadCurrentSlot = useCallback(async () => {
     setSlotLoading(true);
@@ -173,11 +175,11 @@ export default function BuyOrgPage() {
   }, []);
 
   useEffect(() => {
-    if (!isConnectedState) {
+    if (!canBuyOrgFlow) {
       return;
     }
     void loadCurrentSlot();
-  }, [isConnectedState, loadCurrentSlot]);
+  }, [canBuyOrgFlow, loadCurrentSlot]);
 
   const capReached = currentSlot >= SLOT_CAP;
   const currentPriceUvibe = capReached ? null : slotPriceUvibe(currentSlot);
@@ -202,15 +204,26 @@ export default function BuyOrgPage() {
     });
   }, [capReached, chartSlots, currentSlot]);
 
-  const handleConnectWallet = useCallback(async () => {
+  const handleCreateIdentity = useCallback(async () => {
+    setCreatingIdentity(true);
+    setIdentityError(null);
+
+    try {
+      await createGuestIdentity();
+      refresh();
+    } catch (err) {
+      setIdentityError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingIdentity(false);
+    }
+  }, [refresh]);
+
+  const handleLinkWallet = useCallback(async () => {
     setConnecting(true);
     setConnectError(null);
 
     try {
       const conn = await connectWallet('keplr');
-      if (!identity) {
-        await createGuestIdentity();
-      }
       await setWalletAddress(conn.address);
       refresh();
     } catch (err) {
@@ -218,7 +231,7 @@ export default function BuyOrgPage() {
     } finally {
       setConnecting(false);
     }
-  }, [identity, refresh]);
+  }, [refresh]);
 
   const handleConfirmBuy = useCallback(async () => {
     if (submitting || capReached) {
@@ -353,23 +366,40 @@ export default function BuyOrgPage() {
         <LoadingState label="Loading org purchase flow…" rows={4} />
       )}
 
-      {state === 'NO_WALLET' && (
+      {state === 'NO_IDENTITY' && (
         <Card className="p-6">
           <div className="flex flex-col gap-4">
             <p className="text-sm text-wv-dim">
-              Connect your wallet to view slot pricing and buy an organization.
+              Create a guest identity first to access organization purchase flows.
             </p>
-            {connectError && <ErrorBanner>{connectError}</ErrorBanner>}
+            {identityError && <ErrorBanner>{identityError}</ErrorBanner>}
             <div className="flex items-center gap-3">
-              <Button type="button" onClick={handleConnectWallet} disabled={connecting}>
-                {connecting ? 'Connecting…' : 'Connect Wallet'}
+              <Button type="button" onClick={handleCreateIdentity} disabled={creatingIdentity}>
+                {creatingIdentity ? 'Creating…' : 'Create Identity'}
               </Button>
             </div>
           </div>
         </Card>
       )}
 
-      {isConnectedState && (
+      {state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && !walletLinked && (
+        <Card className="p-6">
+          <div className="flex flex-col gap-4">
+            <h2 className="text-lg font-semibold text-wv-text">Link a wallet to create an org</h2>
+            <p className="text-sm text-wv-dim">
+              Org leaders sign on-chain, so a linked wallet is required.
+            </p>
+            {connectError && <ErrorBanner>{connectError}</ErrorBanner>}
+            <div className="flex items-center gap-3">
+              <Button type="button" onClick={handleLinkWallet} disabled={connecting}>
+                {connecting ? 'Linking…' : 'Link Wallet'}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {canBuyOrgFlow && (
         <>
           <Card className="p-6">
             <div className="flex flex-col gap-4">
@@ -483,7 +513,7 @@ export default function BuyOrgPage() {
         </>
       )}
 
-      {confirmOpen && (
+      {canBuyOrgFlow && confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-wv-bg/80 px-4 py-6">
           <Card className="max-h-[92vh] w-full max-w-2xl overflow-y-auto p-6">
             <div className="flex flex-col gap-5">

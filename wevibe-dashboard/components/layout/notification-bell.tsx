@@ -3,12 +3,15 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getUnreadCount } from '@/lib/hub-client';
-import { getIdentity, signWithIdentity } from '@/lib/wevibe-auth';
+import { useIdentity } from '@/lib/identity-context';
+import { signWithIdentity } from '@/lib/wevibe-auth';
 import { hubWsUrl } from '@/lib/config';
 
 export default function NotificationBell() {
   const [count, setCount] = useState(0);
   const router = useRouter();
+  const { identity } = useIdentity();
+  const identityPubkey = identity?.pubkeyHex ?? null;
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -22,9 +25,8 @@ export default function NotificationBell() {
       }
     }
 
-    async function connectWS() {
-      const identity = await getIdentity();
-      if (!identity) return;
+    async function connectWS(pubkeyHex: string) {
+      if (!pubkeyHex) return;
 
       const timestamp = new Date().toISOString();
       const encoder = new TextEncoder();
@@ -37,7 +39,7 @@ export default function NotificationBell() {
         ws?.send(JSON.stringify({
           type: 'auth',
           data: {
-            pubkey: identity.pubkeyHex,
+            pubkey: pubkeyHex,
             timestamp,
             signature: signatureHex,
           },
@@ -60,13 +62,20 @@ export default function NotificationBell() {
       };
     }
 
-    fetchCount();
-    connectWS();
+    if (!identityPubkey) {
+      setCount(0);
+      return () => {
+        ws?.close();
+      };
+    }
+
+    void fetchCount();
+    void connectWS(identityPubkey);
 
     return () => {
       ws?.close();
     };
-  }, []);
+  }, [identityPubkey]);
 
   return (
     <button

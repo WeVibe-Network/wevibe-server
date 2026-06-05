@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { getBalance } from '@/lib/hub-client';
 import { ConnectionState, getMcpClient } from '@/lib/mcp-client';
 import { formatVibe } from '@/lib/format';
-import { getWalletAddress } from '@/lib/wevibe-auth';
+import { useIdentity } from '@/lib/identity-context';
 import OrgSwitcher from './org-switcher';
 import NotificationBell from './notification-bell';
 
@@ -30,15 +30,13 @@ function truncateAddress(addr: string): string {
 
 export default function Topbar() {
   const [state, setState] = useState<ConnectionState>('disconnected');
-  const [walletAddr, setWalletAddr] = useState<string | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
+  const { walletAddress } = useIdentity();
 
   useEffect(() => {
     const client = getMcpClient();
     setState(client.state);
     const unsubscribe = client.addStateListener(setState);
-
-    getWalletAddress().then(addr => setWalletAddr(addr));
 
     return () => {
       unsubscribe();
@@ -46,7 +44,7 @@ export default function Topbar() {
   }, []);
 
   useEffect(() => {
-    if (!walletAddr) {
+    if (!walletAddress) {
       setBalance(null);
       return;
     }
@@ -56,7 +54,7 @@ export default function Topbar() {
 
     const refreshBalance = async () => {
       try {
-        const res = await getBalance(walletAddr);
+        const res = await getBalance(walletAddress);
         if (!active) return;
         setBalance(formatVibe(res.amount));
       } catch {
@@ -74,7 +72,7 @@ export default function Topbar() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [walletAddr]);
+  }, [walletAddress]);
 
   return (
     <header className="flex h-14 items-center justify-between border-b border-wv-line bg-wv-panel px-6">
@@ -82,7 +80,7 @@ export default function Topbar() {
       <span className="ml-3 border-l border-wv-line pl-3 text-sm text-wv-dim">WeVibe</span>
 
       <div className="flex items-center gap-4 text-sm text-wv-dim">
-        {walletAddr ? (
+        {walletAddress ? (
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-full bg-wv-green" />
             {balance !== null ? (
@@ -94,7 +92,7 @@ export default function Topbar() {
                 <span className="text-xs text-wv-dim">·</span>
               </>
             ) : null}
-            <span className="font-mono text-xs text-wv-dim">{truncateAddress(walletAddr)}</span>
+            <span className="font-mono text-xs text-wv-dim">{truncateAddress(walletAddress)}</span>
           </div>
         ) : (
           <Link

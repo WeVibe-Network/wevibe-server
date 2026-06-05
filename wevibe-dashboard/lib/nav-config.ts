@@ -3,6 +3,19 @@ export type SubTab = { label: string; href: string };
 export type MainSection = { label: string; key: string; sub: SubTab[] };
 
 export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
+  NO_IDENTITY: [],
+  IDENTITY_NO_ORG: [
+    {
+      label: 'My Org',
+      key: 'my-org',
+      sub: [{ label: 'Overview', href: '/my-org' }],
+    },
+    {
+      label: 'Discover',
+      key: 'discover',
+      sub: [{ label: 'Discover', href: '/discover' }],
+    },
+  ],
   CONNECTED_LEADER: [
     {
       label: 'My Org',

@@ -8,8 +8,8 @@ import type { IdentityMetadata } from '@/lib/wevibe-auth';
 
 export type ViewState =
   | 'INITIALIZING'
-  | 'NO_WALLET'
-  | 'CONNECTED_NO_ORG'
+  | 'NO_IDENTITY'
+  | 'IDENTITY_NO_ORG'
   | 'CONNECTED_LEADER'
   | 'CONNECTED_MODERATOR'
   | 'CONNECTED_CONTRIBUTOR'
@@ -19,6 +19,7 @@ export interface DashboardState {
   state: ViewState;
   loading: boolean;
   walletAddress: string | null;
+  walletLinked: boolean;
   identity: IdentityMetadata | null;
   activeOrg: MemberOrgEntry | null;
   role: OrgRole | null;
@@ -30,7 +31,6 @@ export function useDashboardState(): DashboardState {
   const {
     identity,
     walletAddress,
-    unlocked,
     loading: identityLoading,
     refresh: refreshIdentity,
   } = useIdentity();
@@ -44,21 +44,22 @@ export function useDashboardState(): DashboardState {
       return 'INITIALIZING';
     }
 
-    if (!walletAddress) {
-      return 'NO_WALLET';
+    if (!identity) {
+      return 'NO_IDENTITY';
     }
 
     if (!activeOrg) {
-      return 'CONNECTED_NO_ORG';
+      return 'IDENTITY_NO_ORG';
     }
 
     return (`CONNECTED_${activeOrg.role.toUpperCase()}` as ViewState);
-  }, [activeOrg, identityLoading, orgsLoading, unlocked, walletAddress]);
+  }, [activeOrg, identity, identityLoading, orgsLoading]);
 
   return {
     state,
     loading: state === 'INITIALIZING',
     walletAddress,
+    walletLinked: Boolean(walletAddress),
     identity,
     activeOrg,
     role: activeOrg?.role ?? null,

@@ -3,14 +3,13 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { useIdentity } from '@/lib/identity-context';
 import { useOrgContext } from '@/lib/org-context';
 import { formatVibe } from '@/lib/format';
 import { getBalance, getOrg, getOrgFinances, type OrgFinances, type OrgSummary } from '@/lib/hub-client';
 import type { OrgRole } from '@/lib/org-role';
 import { getContributorStats, type ContributorStats } from '@/lib/social-graph-client';
-import { getIdentity } from '@/lib/wevibe-auth';
 
-type IdentityRecord = NonNullable<Awaited<ReturnType<typeof getIdentity>>>;
 type OrgSummaryWithMemberCount = OrgSummary & { member_count?: number };
 
 function rolePillClass(role: OrgRole): string {
@@ -52,9 +51,8 @@ function LeaderTile({ label, value, loading }: { label: string; value: string; l
 
 export default function MyOrgPage() {
   const router = useRouter();
-  const { activeOrg, loading } = useOrgContext();
-
-  const [identity, setIdentity] = useState<IdentityRecord | null | undefined>(undefined);
+  const { activeOrg, loading: orgLoading } = useOrgContext();
+  const { identity, walletAddress, loading: identityLoading } = useIdentity();
 
   const [stats, setStats] = useState<ContributorStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
@@ -69,34 +67,17 @@ export default function MyOrgPage() {
   const [orgFinancesLoading, setOrgFinancesLoading] = useState(false);
 
   useEffect(() => {
-    let active = true;
+    if (!identityLoading && !identity) {
+      router.push('/login');
+    }
+  }, [identityLoading, identity, router]);
 
-    const loadIdentity = async () => {
-      try {
-        const record = await getIdentity();
-        if (!active) return;
-        if (!record) {
-          setIdentity(null);
-          router.push('/login');
-          return;
-        }
-        setIdentity(record);
-      } catch {
-        if (!active) return;
-        setIdentity(null);
-        router.push('/login');
-      }
-    };
-
-    void loadIdentity();
-
-    return () => {
-      active = false;
-    };
-  }, [router]);
+  const identityPubkey = identity?.pubkeyHex ?? null;
+  const activeOrgId = activeOrg?.org_id ?? null;
+  const activeOrgRole = activeOrg?.role ?? null;
 
   useEffect(() => {
-    if (!identity || loading || !activeOrg) {
+    if (!identityPubkey || orgLoading || !activeOrgId || !activeOrgRole) {
       return;
     }
 
@@ -104,7 +85,7 @@ export default function MyOrgPage() {
 
     setStatsLoading(true);
     setStats(null);
-    void getContributorStats(identity.pubkeyHex)
+    void getContributorStats(identityPubkey)
       .then(result => {
         if (!active) return;
         setStats(result);
@@ -118,10 +99,10 @@ export default function MyOrgPage() {
         setStatsLoading(false);
       });
 
-    if (identity.walletAddress) {
+    if (walletAddress) {
       setBalanceLoading(true);
       setVibeBalance(null);
-      void getBalance(identity.walletAddress)
+      void getBalance(walletAddress)
         .then(result => {
           if (!active) return;
           setVibeBalance(formatVibe(result.amount));
@@ -141,7 +122,7 @@ export default function MyOrgPage() {
 
     setOrgSummaryLoading(true);
     setOrgSummary(null);
-    void getOrg(activeOrg.org_id)
+    void getOrg(activeOrgId)
       .then(result => {
         if (!active) return;
         setOrgSummary(result as OrgSummaryWithMemberCount);
@@ -155,10 +136,10 @@ export default function MyOrgPage() {
         setOrgSummaryLoading(false);
       });
 
-    if (activeOrg.role === 'leader') {
+    if (activeOrgRole === 'leader') {
       setOrgFinancesLoading(true);
       setOrgFinances(null);
-      void getOrgFinances(activeOrg.org_id)
+      void getOrgFinances(activeOrgId)
         .then(result => {
           if (!active) return;
           setOrgFinances(result);
@@ -179,9 +160,9 @@ export default function MyOrgPage() {
     return () => {
       active = false;
     };
-  }, [identity, loading, activeOrg]);
+  }, [identityPubkey, walletAddress, orgLoading, activeOrgId, activeOrgRole]);
 
-  if (identity === undefined) {
+  if (identityLoading) {
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
         <div className="space-y-2">
@@ -202,11 +183,11 @@ export default function MyOrgPage() {
     );
   }
 
-  if (identity === null) {
+  if (!identity) {
     return null;
   }
 
-  if (loading) {
+  if (orgLoading) {
     return (
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
         <div className="space-y-2">
