@@ -29,6 +29,7 @@ ENV NODE_ENV=production
 ENV WEVIBE_HTTP_HOST=0.0.0.0
 ENV WEVIBE_HTTP_PORT=4450
 ENV WEVIBE_KEYSTORE_PATH=/root/.wevibe/keys
+ENV WEVIBE_SEED_BACKEND=file
 ENV WEVIBE_UMBRAL_SIDECAR_BIN=/usr/local/bin/wevibe-umbral
 
 COPY --from=build /app/package.json /app/package-lock.json ./
