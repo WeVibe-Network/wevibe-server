@@ -2,11 +2,12 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectionState, WeVibeMcpClient, getMcpClient, resetMcpClient } from '@/lib/mcp-client';
-import { getHubServingAddress, getOrg, getOrgChainConfig } from '@/lib/hub-client';
+import { getHubResponsePubkey, getHubServingAddress, getOrg, getOrgChainConfig } from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
+import { PairPlugin } from '@/components/pairing/pair-plugin';
 import { WalletConnectButton } from '@/components/wallet-connect-button';
 import { connectWallet } from '@/lib/wallet-connect';
-import { buildSetOrgConfigMsg, buildSetServingKeyMsg, directBroadcast } from '@/lib/chain-client';
+import { buildSetOrgConfigMsg, buildSetServingInfoMsg, buildSetServingKeyMsg, directBroadcast } from '@/lib/chain-client';
 import { getConfig } from '@/lib/config';
 import { useOrgContext } from '@/lib/org-context';
 
@@ -39,6 +40,29 @@ const stateColors: Record<ConnectionState, string> = {
   error: 'bg-wv-red',
 };
 
+const HUB_RESPONSE_PUBKEY_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
+
+function normalizeHubEndpoints(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((endpoint): endpoint is string => typeof endpoint === 'string')
+    .map((endpoint) => endpoint.trim())
+    .filter((endpoint) => endpoint.length > 0)
+    .slice(0, 3);
+}
+
+function isValidHttpOrHttpsUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export default function SettingsPage() {
   const { activeOrg } = useOrgContext();
   const [url, setUrl] = useState(getConfig().mcpUrl);
@@ -59,11 +83,20 @@ export default function SettingsPage() {
   const [savingChainConfig, setSavingChainConfig] = useState(false);
   const [serveAttestationRequired, setServeAttestationRequired] = useState(false);
   const [hubServingAddress, setHubServingAddress] = useState('');
+  const [hubEndpoints, setHubEndpoints] = useState<string[]>([]);
+  const [hubResponsePubkey, setHubResponsePubkey] = useState('');
+  const [hubAdvertisedResponsePubkey, setHubAdvertisedResponsePubkey] = useState('');
   const [showServingKeyEditor, setShowServingKeyEditor] = useState(false);
   const [newServingKey, setNewServingKey] = useState('');
   const [hubInfraError, setHubInfraError] = useState<string | null>(null);
   const [hubInfraSuccess, setHubInfraSuccess] = useState<string | null>(null);
   const [savingServingKey, setSavingServingKey] = useState(false);
+  const [showServingInfoEditor, setShowServingInfoEditor] = useState(false);
+  const [newHubEndpoints, setNewHubEndpoints] = useState<string[]>(['']);
+  const [newHubResponsePubkey, setNewHubResponsePubkey] = useState('');
+  const [hubServingInfoError, setHubServingInfoError] = useState<string | null>(null);
+  const [hubServingInfoSuccess, setHubServingInfoSuccess] = useState<string | null>(null);
+  const [savingServingInfo, setSavingServingInfo] = useState(false);
 
   const attachListener = useCallback((client: WeVibeMcpClient) => {
     listenerRef.current?.();
@@ -172,13 +205,17 @@ export default function SettingsPage() {
     let cancelled = false;
     setConfigLoading(true);
     setConfigError(null);
-    void Promise.all([getOrg(orgInfo.org_id), getHubServingAddress()])
-      .then(([summary, fallbackServingAddress]) => {
+    void Promise.all([getOrg(orgInfo.org_id), getHubServingAddress(), getHubResponsePubkey()])
+      .then(([summary, fallbackServingAddress, fallbackResponsePubkey]) => {
         if (cancelled) return;
         setRequiredApprovals(summary.required_approvals ?? 1);
         setReportVoteThreshold(summary.report_vote_threshold ?? 1);
 
-        const activeOrgServingAddress = (activeOrg as unknown as Record<string, unknown> | null)?.hub_serving_address;
+        const activeOrgRecord = activeOrg as unknown as Record<string, unknown> | null;
+        const activeOrgServingAddress = activeOrgRecord?.hub_serving_address;
+        const activeOrgEndpoints = normalizeHubEndpoints(activeOrgRecord?.hub_endpoints);
+        const activeOrgResponsePubkey = activeOrgRecord?.hub_response_pubkey;
+
         const summaryServingAddress = summary.hub_serving_address ?? summary.hub_serving_key_address;
         const resolvedServingAddress = [
           typeof summaryServingAddress === 'string' ? summaryServingAddress : '',
@@ -186,6 +223,19 @@ export default function SettingsPage() {
           fallbackServingAddress,
         ].find((value) => value.trim().length > 0) ?? '';
         setHubServingAddress(resolvedServingAddress);
+
+        const summaryEndpoints = normalizeHubEndpoints(summary.hub_endpoints);
+        const resolvedHubEndpoints = summaryEndpoints.length > 0 ? summaryEndpoints : activeOrgEndpoints;
+        setHubEndpoints(resolvedHubEndpoints);
+
+        const normalizedFallbackResponsePubkey = fallbackResponsePubkey.trim();
+        const resolvedResponsePubkey = [
+          typeof summary.hub_response_pubkey === 'string' ? summary.hub_response_pubkey : '',
+          typeof activeOrgResponsePubkey === 'string' ? activeOrgResponsePubkey : '',
+          normalizedFallbackResponsePubkey,
+        ].find((value) => value.trim().length > 0) ?? '';
+        setHubResponsePubkey(resolvedResponsePubkey.trim());
+        setHubAdvertisedResponsePubkey(normalizedFallbackResponsePubkey);
       })
       .catch(err => {
         if (cancelled) return;
@@ -325,6 +375,82 @@ export default function SettingsPage() {
     }
   }, [newServingKey, orgLoaded, orgInfo]);
 
+  const handleHubEndpointChange = useCallback((index: number, value: string) => {
+    setNewHubEndpoints((previous) => previous.map((endpoint, endpointIndex) => (
+      endpointIndex === index ? value : endpoint
+    )));
+  }, []);
+
+  const handleAddHubEndpointRow = useCallback(() => {
+    setNewHubEndpoints((previous) => {
+      if (previous.length >= 3) {
+        return previous;
+      }
+      return [...previous, ''];
+    });
+  }, []);
+
+  const handleRemoveHubEndpointRow = useCallback((index: number) => {
+    setNewHubEndpoints((previous) => {
+      if (previous.length <= 1) {
+        return previous;
+      }
+      return previous.filter((_, endpointIndex) => endpointIndex !== index);
+    });
+  }, []);
+
+  const handleServingInfoSave = useCallback(async () => {
+    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
+      return;
+    }
+
+    const normalizedEndpoints = newHubEndpoints.map((endpoint) => endpoint.trim());
+    if (normalizedEndpoints.length < 1 || normalizedEndpoints.length > 3) {
+      setHubServingInfoError('Provide between 1 and 3 hub endpoints.');
+      return;
+    }
+    if (normalizedEndpoints.some((endpoint) => endpoint.length === 0)) {
+      setHubServingInfoError('Each hub endpoint row must be non-empty. Remove extra empty rows before broadcast.');
+      return;
+    }
+    if (normalizedEndpoints.some((endpoint) => !isValidHttpOrHttpsUrl(endpoint))) {
+      setHubServingInfoError('Hub endpoints must be valid http:// or https:// URLs.');
+      return;
+    }
+
+    const normalizedResponsePubkey = newHubResponsePubkey.trim();
+    if (normalizedResponsePubkey.length > 0 && !HUB_RESPONSE_PUBKEY_HEX_PATTERN.test(normalizedResponsePubkey)) {
+      setHubServingInfoError('hub_response_pubkey must be empty or a 64-character hex string.');
+      return;
+    }
+
+    setSavingServingInfo(true);
+    setHubServingInfoError(null);
+    setHubServingInfoSuccess(null);
+
+    try {
+      const walletConn = await connectWallet();
+      const msgSetServingInfo = buildSetServingInfoMsg(
+        walletConn.address,
+        orgInfo.org_id,
+        normalizedEndpoints,
+        normalizedResponsePubkey,
+      );
+
+      const result = await directBroadcast(walletConn.address, [msgSetServingInfo]);
+      setHubEndpoints(normalizedEndpoints);
+      setHubResponsePubkey(normalizedResponsePubkey);
+      setShowServingInfoEditor(false);
+      setNewHubEndpoints(normalizedEndpoints);
+      setNewHubResponsePubkey(normalizedResponsePubkey);
+      setHubServingInfoSuccess(`Serving info updated. Tx: ${result.txHash.slice(0, 16)}...`);
+    } catch (err) {
+      setHubServingInfoError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingServingInfo(false);
+    }
+  }, [newHubEndpoints, newHubResponsePubkey, orgLoaded, orgInfo]);
+
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <header className="flex flex-col gap-2">
@@ -449,6 +575,16 @@ export default function SettingsPage() {
           ) : (
             <p className="text-sm text-wv-dim">Connect to an MCP server and org first.</p>
           )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+        <h2 className="text-lg font-semibold text-wv-text">Pair your plugin</h2>
+        <p className="mt-1 text-sm text-wv-dim">
+          Generate a one-time pairing code and run it in the plugin CLI to pair your existing identity.
+        </p>
+        <div className="mt-4">
+          <PairPlugin />
         </div>
       </section>
 
@@ -666,6 +802,160 @@ export default function SettingsPage() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="mt-6 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-wv-dim">Hub endpoints &amp; response key</h3>
+            <p className="mt-2 text-xs text-wv-dim">
+              Configure ordered hub endpoint failover (1–3 URLs) and the hub response signature key for clients.
+            </p>
+
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current hub_endpoints</p>
+                {hubEndpoints.length > 0 ? (
+                  <ol className="mt-2 list-decimal space-y-1 pl-4 text-sm text-wv-text">
+                    {hubEndpoints.map((endpoint, index) => (
+                      <li key={`${endpoint}-${index}`} className="break-all font-mono text-xs">{endpoint}</li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="mt-1 text-sm text-wv-text">—</p>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current hub_response_pubkey</p>
+                <p className="mt-1 break-all font-mono text-xs text-wv-text">{hubResponsePubkey || '—'}</p>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">This hub&apos;s advertised response_pubkey</p>
+              <p className="mt-1 break-all font-mono text-xs text-wv-text">{hubAdvertisedResponsePubkey || '—'}</p>
+            </div>
+
+            {hubServingInfoError && (
+              <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                {hubServingInfoError}
+              </div>
+            )}
+
+            {hubServingInfoSuccess && (
+              <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
+                {hubServingInfoSuccess}
+              </div>
+            )}
+
+            <div className="mt-4">
+              {!showServingInfoEditor ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHubServingInfoError(null);
+                    setHubServingInfoSuccess(null);
+                    setNewHubEndpoints(hubEndpoints.length > 0 ? [...hubEndpoints] : ['']);
+                    setNewHubResponsePubkey(hubResponsePubkey || hubAdvertisedResponsePubkey);
+                    setShowServingInfoEditor(true);
+                  }}
+                  className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet"
+                >
+                  Edit endpoints &amp; response key
+                </button>
+              ) : (
+                <div className="rounded-lg border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.08)] p-4">
+                  <p className="text-sm font-medium text-wv-text">Ordered hub endpoints (1–3)</p>
+                  <div className="mt-3 flex flex-col gap-3">
+                    {newHubEndpoints.map((endpoint, index) => (
+                      <div key={`new-hub-endpoint-${index}`} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <label htmlFor={`new-hub-endpoint-${index}`} className="text-xs font-medium uppercase tracking-wide text-wv-dim sm:w-28">
+                          Endpoint {index + 1}
+                        </label>
+                        <input
+                          id={`new-hub-endpoint-${index}`}
+                          type="url"
+                          value={endpoint}
+                          onChange={(event) => handleHubEndpointChange(index, event.target.value)}
+                          placeholder="https://hub.example.com"
+                          disabled={savingServingInfo}
+                          className="w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveHubEndpointRow(index)}
+                          disabled={savingServingInfo || newHubEndpoints.length <= 1}
+                          className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleAddHubEndpointRow}
+                      disabled={savingServingInfo || newHubEndpoints.length >= 3}
+                      className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Add endpoint
+                    </button>
+                    <span className="text-xs text-wv-dim">{newHubEndpoints.length}/3 configured</span>
+                  </div>
+
+                  <div className="mt-4">
+                    <label htmlFor="new-hub-response-pubkey" className="block text-sm font-medium text-wv-text">
+                      hub_response_pubkey (hex ed25519)
+                    </label>
+                    <input
+                      id="new-hub-response-pubkey"
+                      type="text"
+                      value={newHubResponsePubkey}
+                      onChange={(event) => setNewHubResponsePubkey(event.target.value)}
+                      placeholder="64 hex chars (optional)"
+                      disabled={savingServingInfo}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 font-mono text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewHubResponsePubkey(hubAdvertisedResponsePubkey)}
+                        disabled={savingServingInfo || !hubAdvertisedResponsePubkey}
+                        className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Use this hub&apos;s key
+                      </button>
+                      {!hubAdvertisedResponsePubkey && (
+                        <span className="text-xs text-wv-dim">No advertised response key was returned by this hub.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleServingInfoSave}
+                      disabled={savingServingInfo || !orgLoaded}
+                      className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    >
+                      {savingServingInfo ? 'Broadcasting…' : 'Broadcast MsgSetServingInfo'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowServingInfoEditor(false);
+                        setHubServingInfoError(null);
+                      }}
+                      disabled={savingServingInfo}
+                      className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </section>
       )}

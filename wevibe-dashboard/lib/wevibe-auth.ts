@@ -22,6 +22,8 @@ const KEY_ID = 'dashboard-identity';
 const X25519_DOMAIN_TAG = 'wevibe-x25519-v1';
 
 const textEncoder = new TextEncoder();
+const PAIRING_KEK_INFO = textEncoder.encode('wevibe-pair-v1');
+const BASE32_RFC4648_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 ed.etc.sha512Sync = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages));
 
@@ -70,6 +72,12 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const out = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(out).set(bytes);
+  return out;
+}
+
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -79,6 +87,88 @@ function base64ToBytes(base64: string): Uint8Array {
   }
 
   return bytes;
+}
+
+function bytesToBase32Rfc4648NoPaddingUppercase(bytes: Uint8Array): string {
+  let output = '';
+  let bitBuffer = 0;
+  let bitCount = 0;
+
+  for (const byte of bytes) {
+    bitBuffer = (bitBuffer << 8) | byte;
+    bitCount += 8;
+
+    while (bitCount >= 5) {
+      const index = (bitBuffer >>> (bitCount - 5)) & 0x1f;
+      output += BASE32_RFC4648_ALPHABET[index];
+      bitCount -= 5;
+    }
+
+    bitBuffer &= (1 << bitCount) - 1;
+  }
+
+  if (bitCount > 0) {
+    const index = (bitBuffer << (5 - bitCount)) & 0x1f;
+    output += BASE32_RFC4648_ALPHABET[index];
+  }
+
+  return output;
+}
+
+function base32Rfc4648NoPaddingUppercaseToBytes(value: string): Uint8Array {
+  const normalized = value.trim().toUpperCase();
+  if (!normalized) {
+    return new Uint8Array(0);
+  }
+
+  const bytes: number[] = [];
+  let bitBuffer = 0;
+  let bitCount = 0;
+
+  for (const char of normalized) {
+    const index = BASE32_RFC4648_ALPHABET.indexOf(char);
+    if (index < 0) {
+      throw new Error('Invalid pairing code.');
+    }
+
+    bitBuffer = (bitBuffer << 5) | index;
+    bitCount += 5;
+
+    while (bitCount >= 8) {
+      bytes.push((bitBuffer >>> (bitCount - 8)) & 0xff);
+      bitCount -= 8;
+      bitBuffer &= (1 << bitCount) - 1;
+    }
+  }
+
+  if (bitCount > 0 && (bitBuffer & ((1 << bitCount) - 1)) !== 0) {
+    throw new Error('Invalid pairing code.');
+  }
+
+  return new Uint8Array(bytes);
+}
+
+async function derivePairingKek(secret: Uint8Array, hkdfSalt: Uint8Array): Promise<CryptoKey> {
+  const secretKeyMaterial = await crypto.subtle.importKey(
+    'raw',
+    bytesToArrayBuffer(secret),
+    'HKDF',
+    false,
+    ['deriveKey'],
+  );
+
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: bytesToArrayBuffer(hkdfSalt),
+      info: bytesToArrayBuffer(PAIRING_KEK_INFO),
+    },
+    secretKeyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
 async function deriveEd25519PubkeyHex(seed: Uint8Array): Promise<string> {
@@ -180,6 +270,48 @@ export function isUnlocked(): boolean {
   return unlockedSeed !== null;
 }
 
+export async function exportIdentityPhrase(): Promise<string> {
+  if (!isUnlocked()) {
+    await unlockIdentity();
+  }
+
+  if (!unlockedSeed) {
+    throw new Error('Identity is locked');
+  }
+
+  const { seedToMnemonic } = await import('./wevibe-crypto');
+  return seedToMnemonic(unlockedSeed);
+}
+
+export async function createPairingToken(): Promise<{ token: string }> {
+  const seed = await ensureUnlockedSeed();
+  const secret = crypto.getRandomValues(new Uint8Array(16));
+  const hkdfSalt = crypto.getRandomValues(new Uint8Array(32));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  try {
+    const pairingId = bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', secret)));
+    const kek = await derivePairingKek(secret, hkdfSalt);
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
+      kek,
+      bytesToArrayBuffer(seed),
+    ));
+
+    await import('./hub-client').then((m) => m.uploadPairingBlob({
+      pairing_id: pairingId,
+      hkdf_salt: bytesToBase64(hkdfSalt),
+      iv: bytesToBase64(iv),
+      ciphertext: bytesToBase64(ciphertext),
+    }));
+
+    const token = bytesToBase32Rfc4648NoPaddingUppercase(secret);
+    return { token };
+  } finally {
+    secret.fill(0);
+  }
+}
+
 export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
   if (!isPasskeySupported()) {
     throw new Error('Passkeys are not supported in this browser. A WebAuthn + PRF-capable passkey is required.');
@@ -244,6 +376,98 @@ export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
   } finally {
     id.edPriv.fill(0);
     id.xPriv.fill(0);
+  }
+}
+
+async function adoptImportedSeed(seed: Uint8Array): Promise<{ pubkeyHex: string }> {
+  try {
+    const existing = await loadIdentityRecord();
+    const pubkeyHex = await deriveEd25519PubkeyHex(seed);
+    const userId = await ed.getPublicKeyAsync(seed);
+
+    const { credentialId, prfSupported } = await createIdentityPasskey({
+      userId,
+      userName: 'wevibe',
+      displayName: 'WeVibe Identity',
+    });
+
+    if (!prfSupported) {
+      throw new Error('Passkey PRF extension is required to protect your WeVibe identity seed.');
+    }
+
+    const wrapped = await wrapSeed(credentialId, seed);
+
+    const record: StoredIdentityRecord = {
+      id: KEY_ID,
+      pubkeyHex,
+      credentialIdB64: bytesToBase64(credentialId),
+      wrapped,
+      createdAt: new Date().toISOString(),
+      ...(existing?.walletAddress ? { walletAddress: existing.walletAddress } : {}),
+    };
+
+    await saveIdentityRecord(record);
+    lockIdentity();
+    unlockedSeed = seed;
+
+    try {
+      const { uploadIdentityBlob } = await import('./hub-client');
+      await uploadIdentityBlob({
+        credential_id: record.credentialIdB64,
+        hkdf_salt: wrapped.hkdfSaltB64,
+        iv: wrapped.ivB64,
+        ciphertext: wrapped.ctB64,
+      });
+    } catch (e) {
+      console.warn('WeVibe: identity blob upload to hub failed (identity still created locally):', e);
+    }
+
+    return { pubkeyHex };
+  } catch (error) {
+    seed.fill(0);
+    throw error;
+  }
+}
+
+export async function importIdentityFromPhrase(phrase: string): Promise<{ pubkeyHex: string }> {
+  const { mnemonicToSeed } = await import('./wevibe-crypto');
+  const seed = await mnemonicToSeed(phrase);
+
+  return adoptImportedSeed(seed);
+}
+
+export async function adoptIdentityFromCode(token: string): Promise<{ pubkeyHex: string }> {
+  const secret = base32Rfc4648NoPaddingUppercaseToBytes(token.trim().toUpperCase());
+  if (secret.length !== 16) {
+    secret.fill(0);
+    throw new Error('Invalid pairing code.');
+  }
+
+  try {
+    const pairingId = bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytesToArrayBuffer(secret))));
+    const blob = await import('./hub-client').then((m) => m.fetchPairingBlob(pairingId));
+    if (!blob) {
+      throw new Error('Pairing code not found or expired. Generate a new one in your plugin.');
+    }
+
+    const hkdfSalt = base64ToBytes(blob.hkdf_salt);
+    const iv = base64ToBytes(blob.iv);
+    const ciphertext = base64ToBytes(blob.ciphertext);
+    const kek = await derivePairingKek(secret, hkdfSalt);
+    const seed = new Uint8Array(await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
+      kek,
+      bytesToArrayBuffer(ciphertext),
+    ));
+
+    if (seed.length !== 32) {
+      seed.fill(0);
+      throw new Error(`Invalid Ed25519 seed length in adopted identity record: ${seed.length}`);
+    }
+
+    return adoptImportedSeed(seed);
+  } finally {
+    secret.fill(0);
   }
 }
 

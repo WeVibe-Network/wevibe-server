@@ -20,6 +20,7 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.org.v1.MsgSetOrgConfig',
   '/wevibe.org.v1.MsgUpdateMemberRole',
   '/wevibe.org.v1.MsgSetServingKey',
+  '/wevibe.org.v1.MsgSetServingInfo',
   '/wevibe.reputation.v1.MsgIncrementContribution',
   '/wevibe.reputation.v1.MsgIncrementServe',
   '/wevibe.reputation.v1.MsgRecordBan',
@@ -369,6 +370,29 @@ export function buildSetServingKeyMsg(
 
   return {
     typeUrl: '/wevibe.org.v1.MsgSetServingKey',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildSetServingInfoMsg(
+  signer: string,
+  orgId: string,
+  hubEndpoints: string[],
+  hubResponsePubkey: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeRepeatedStringField(0x1a, hubEndpoints),
+  ];
+
+  const responsePubkey = hubResponsePubkey.trim();
+  if (responsePubkey.length > 0) {
+    fields.push(...encodeStringField(0x22, responsePubkey));
+  }
+
+  return {
+    typeUrl: '/wevibe.org.v1.MsgSetServingInfo',
     value: Uint8Array.from(fields),
   };
 }

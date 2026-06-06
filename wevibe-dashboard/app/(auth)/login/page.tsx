@@ -2,22 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  detectWallets,
-  connectWallet,
-  type WalletProvider,
-} from '@/lib/wallet-connect';
-import {
-  createGuestIdentity,
-  getIdentity,
-  setWalletAddress,
-} from '@/lib/wevibe-auth';
+import { IdentityOnboarding } from '@/components/onboarding/identity-onboarding';
+import { getIdentity } from '@/lib/wevibe-auth';
 
 export default function LoginPage() {
   const router = useRouter();
   const [pubkeyHex, setPubkeyHex] = useState<string | null>(null);
-  const [availableWallets, setAvailableWallets] = useState<WalletProvider[]>([]);
-  const [loading, setLoading] = useState(false);
   const [checkingIdentity, setCheckingIdentity] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,8 +20,6 @@ export default function LoginPage() {
 
         if (identity) {
           setPubkeyHex(identity.pubkeyHex);
-        } else {
-          setAvailableWallets(detectWallets());
         }
       } catch (e) {
         if (!mounted) return;
@@ -48,20 +36,10 @@ export default function LoginPage() {
     };
   }, []);
 
-  const handleConnect = async (provider: WalletProvider) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const conn = await connectWallet(provider);
-
-      const existing = await getIdentity();
-      const identity = existing ?? await createGuestIdentity();
-      await setWalletAddress(conn.address);
+  const handleReady = async () => {
+    const identity = await getIdentity();
+    if (identity) {
       setPubkeyHex(identity.pubkeyHex);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -94,29 +72,10 @@ export default function LoginPage() {
           </div>
         ) : (
           <div className="mt-4 space-y-4">
-            <p className="text-wv-dim">Connect your wallet to create your dashboard identity.</p>
-
             {checkingIdentity ? (
               <p className="text-wv-dim">Checking existing identity...</p>
-            ) : availableWallets.length === 0 ? (
-              <p className="text-wv-dim">Install Keplr or Leap wallet to continue</p>
             ) : (
-              <div className="flex gap-2">
-                {availableWallets.map((provider) => (
-                  <button
-                    key={provider}
-                    onClick={() => handleConnect(provider)}
-                    disabled={loading}
-                    className="rounded-lg bg-wv-grad-btn px-4 py-2 text-sm text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                  >
-                    {loading
-                      ? 'Connecting...'
-                      : provider === 'keplr'
-                        ? 'Connect Keplr'
-                        : 'Connect Leap'}
-                  </button>
-                ))}
-              </div>
+              <IdentityOnboarding onReady={handleReady} />
             )}
           </div>
         )}

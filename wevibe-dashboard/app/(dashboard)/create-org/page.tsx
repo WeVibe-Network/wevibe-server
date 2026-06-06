@@ -7,12 +7,13 @@ import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
 import { ErrorBanner, GuardCard, LoadingState } from '@/components/ui/states';
 import InfoTooltip from '@/components/ui/tooltip';
+import { IdentityOnboarding } from '@/components/onboarding/identity-onboarding';
 import { classifyError } from '@/lib/errors';
 import { createOrg } from '@/lib/hub-client';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 import { useOrgContext } from '@/lib/org-context';
 import { connectWallet } from '@/lib/wallet-connect';
-import { createGuestIdentity, setWalletAddress } from '@/lib/wevibe-auth';
+import { setWalletAddress } from '@/lib/wevibe-auth';
 import { buildOrgSetup } from '@/lib/wevibe-crypto';
 
 const ONE_ORG_GATE_COPY = 'Only one organization per account is allowed.';
@@ -47,8 +48,6 @@ export default function CreateOrgPage() {
   const [orgName, setOrgName] = useState('');
   const [domain, setDomain] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [creatingIdentity, setCreatingIdentity] = useState(false);
-  const [identityError, setIdentityError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -63,20 +62,6 @@ export default function CreateOrgPage() {
   );
   const canUseOrgFlow = state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && walletLinked;
   const showJoinCreateChooser = state === 'IDENTITY_NO_ORG' && walletLinked && !success && !leaderOrg;
-
-  const handleCreateIdentity = useCallback(async () => {
-    setCreatingIdentity(true);
-    setIdentityError(null);
-
-    try {
-      await createGuestIdentity();
-      refresh();
-    } catch (err) {
-      setIdentityError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCreatingIdentity(false);
-    }
-  }, [refresh]);
 
   const handleLinkWallet = useCallback(async () => {
     setConnecting(true);
@@ -180,19 +165,7 @@ export default function CreateOrgPage() {
       )}
 
       {state === 'NO_IDENTITY' && (
-        <Card className="p-6">
-          <div className="flex flex-col gap-4">
-            <p className="text-sm text-wv-dim">
-              Create a guest identity first to access dashboard organization flows.
-            </p>
-            {identityError && <ErrorBanner>{identityError}</ErrorBanner>}
-            <div className="flex items-center gap-3">
-              <Button type="button" onClick={handleCreateIdentity} disabled={creatingIdentity}>
-                {creatingIdentity ? 'Creating…' : 'Create Identity'}
-              </Button>
-            </div>
-          </div>
-        </Card>
+        <IdentityOnboarding onReady={refresh} />
       )}
 
       {state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && !walletLinked && (

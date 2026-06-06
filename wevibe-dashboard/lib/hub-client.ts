@@ -33,6 +33,18 @@ export async function uploadIdentityBlob(blob: {
   });
 }
 
+export async function uploadPairingBlob(blob: {
+  pairing_id: string;
+  hkdf_salt: string;
+  iv: string;
+  ciphertext: string;
+}): Promise<void> {
+  await hubFetch<{ status?: string }>('/v1/pair', {
+    method: 'POST',
+    body: JSON.stringify(blob),
+  });
+}
+
 export async function fetchIdentityBlob(credentialId: string): Promise<{
   pubkey: string;
   hkdf_salt: string;
@@ -40,6 +52,24 @@ export async function fetchIdentityBlob(credentialId: string): Promise<{
   ciphertext: string;
 } | null> {
   const resp = await fetch(`${getHubUrl()}/v1/identity/blob/${encodeURIComponent(credentialId)}`);
+
+  if (resp.status === 404) {
+    return null;
+  }
+
+  if (!resp.ok) {
+    throw new Error(`Hub error ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
+export async function fetchPairingBlob(pairingId: string): Promise<{
+  hkdf_salt: string;
+  iv: string;
+  ciphertext: string;
+} | null> {
+  const resp = await fetch(`${getHubUrl()}/v1/pair/${encodeURIComponent(pairingId)}`);
 
   if (resp.status === 404) {
     return null;
@@ -173,6 +203,8 @@ export interface OrgSummary {
   leader_wallet_address?: string;
   hub_serving_address?: string;
   hub_serving_key_address?: string;
+  hub_endpoints?: string[];
+  hub_response_pubkey?: string;
   current_epoch: number;
   egress_mode: string;
   allowed_providers: string[];
@@ -324,6 +356,7 @@ export interface CreateOrgResponse extends OrgSummary {
 
 export interface HubServingAddressResponse {
   serving_address: string;
+  response_pubkey?: string;
 }
 
 export interface RecordOrgRequest extends CreateOrgRequest {
@@ -332,13 +365,22 @@ export interface RecordOrgRequest extends CreateOrgRequest {
   hub_serving_key: string;
 }
 
+async function fetchHubServingAddressResponse(): Promise<HubServingAddressResponse> {
+  return hubFetch<HubServingAddressResponse>('/v1/hub/serving-address');
+}
+
 export async function getHubServingAddress(): Promise<string> {
-  const response = await hubFetch<HubServingAddressResponse>('/v1/hub/serving-address');
+  const response = await fetchHubServingAddressResponse();
   const servingAddress = response.serving_address?.trim();
   if (!servingAddress) {
     throw new Error('Hub serving address missing from /v1/hub/serving-address response');
   }
   return servingAddress;
+}
+
+export async function getHubResponsePubkey(): Promise<string> {
+  const response = await fetchHubServingAddressResponse();
+  return response.response_pubkey?.trim() ?? '';
 }
 
 export async function createOrg(body: CreateOrgRequest): Promise<CreateOrgResponse> {

@@ -126,6 +126,27 @@ export async function masterKeyToMnemonic(master: Uint8Array): Promise<string> {
   return wasm.master_key_to_mnemonic(master);
 }
 
+export async function seedToMnemonic(seed: Uint8Array): Promise<string> {
+  if (seed.length !== 32) {
+    throw new Error(`Identity seed must be 32 bytes; received ${seed.length}`);
+  }
+
+  const wasm = await ensureWasm();
+  return wasm.master_key_to_mnemonic(seed);
+}
+
+export async function mnemonicToSeed(phrase: string): Promise<Uint8Array> {
+  const wasm = await ensureWasm();
+  const seed = wasm.mnemonic_to_master_key(phrase.trim());
+  const seedBytes = new Uint8Array(seed);
+
+  if (seedBytes.length !== 32) {
+    throw new Error(`mnemonic_to_master_key returned invalid seed length: ${seedBytes.length}`);
+  }
+
+  return seedBytes;
+}
+
 export async function signRaw(priv: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
   const wasm = await ensureWasm();
   return wasm.sign(priv, data);
