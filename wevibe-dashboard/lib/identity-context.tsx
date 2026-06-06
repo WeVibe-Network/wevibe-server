@@ -15,9 +15,11 @@ import {
   getWalletAddress,
   isUnlocked,
   lockIdentity,
+  setWalletAddress as persistWalletAddress,
   type IdentityMetadata,
   unlockIdentity,
 } from './wevibe-auth';
+import { getActiveWalletAddress } from './wallet-connect';
 
 interface IdentityContextValue {
   identity: IdentityMetadata | null;
@@ -33,11 +35,16 @@ const IdentityContext = createContext<IdentityContextValue | null>(null);
 
 export function IdentityProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<IdentityMetadata | null>(null);
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
+  const [walletAddress, setWalletAddressState] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState<boolean>(() => isUnlocked());
   const [loading, setLoading] = useState(true);
 
   const mountedRef = useRef(true);
+  const walletAddressRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    walletAddressRef.current = walletAddress;
+  }, [walletAddress]);
 
   const refresh = useCallback(async () => {
     if (!mountedRef.current) {
@@ -53,7 +60,7 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
       }
 
       setIdentity(nextIdentity);
-      setWalletAddress(nextWalletAddress);
+      setWalletAddressState(nextWalletAddress);
       setUnlocked(isUnlocked());
     } catch {
       if (!mountedRef.current) {
@@ -61,7 +68,7 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
       }
 
       setIdentity(null);
-      setWalletAddress(null);
+      setWalletAddressState(null);
       setUnlocked(isUnlocked());
     } finally {
       if (mountedRef.current) {
@@ -97,7 +104,19 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleKeplrKeystoreChange = () => {
-      void refresh();
+      void (async () => {
+        try {
+          const storedWalletAddress = walletAddressRef.current;
+          if (storedWalletAddress) {
+            const activeWalletAddress = await getActiveWalletAddress();
+            if (activeWalletAddress && activeWalletAddress !== storedWalletAddress) {
+              await persistWalletAddress(activeWalletAddress);
+            }
+          }
+        } finally {
+          await refresh();
+        }
+      })();
     };
 
     window.addEventListener('keplr_keystorechange', handleKeplrKeystoreChange);

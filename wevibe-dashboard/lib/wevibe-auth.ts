@@ -18,6 +18,7 @@ const DB_NAME = 'wevibe-dashboard';
 const DB_VERSION = 1;
 const STORE_NAME = 'keys';
 const KEY_ID = 'dashboard-identity';
+const SESSION_SEED_KEY = 'wevibe.session.seed.v1';
 
 const X25519_DOMAIN_TAG = 'wevibe-x25519-v1';
 
@@ -87,6 +88,59 @@ function base64ToBytes(base64: string): Uint8Array {
   }
 
   return bytes;
+}
+
+// Seed cached in sessionStorage (cleared on tab close) to avoid a biometric
+// prompt on every refresh. This exposes the raw seed to XSS for the tab
+// session — an accepted product tradeoff (Walter).
+function persistSeedToSession(pubkeyHex: string, seed: Uint8Array): void {
+  if (typeof sessionStorage === 'undefined') {
+    return;
+  }
+
+  try {
+    sessionStorage.setItem(
+      SESSION_SEED_KEY,
+      JSON.stringify({ pubkeyHex, seedB64: bytesToBase64(seed) }),
+    );
+  } catch {
+    // Ignore sessionStorage failures.
+  }
+}
+
+function loadSeedFromSession(expectedPubkeyHex: string): Uint8Array | null {
+  if (typeof sessionStorage === 'undefined') {
+    return null;
+  }
+
+  try {
+    const raw = sessionStorage.getItem(SESSION_SEED_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as { pubkeyHex?: unknown; seedB64?: unknown };
+    if (parsed.pubkeyHex !== expectedPubkeyHex || typeof parsed.seedB64 !== 'string') {
+      return null;
+    }
+
+    const seed = base64ToBytes(parsed.seedB64);
+    return seed.length === 32 ? seed : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearSessionSeed(): void {
+  if (typeof sessionStorage === 'undefined') {
+    return;
+  }
+
+  try {
+    sessionStorage.removeItem(SESSION_SEED_KEY);
+  } catch {
+    // Ignore sessionStorage failures.
+  }
 }
 
 function bytesToBase32Rfc4648NoPaddingUppercase(bytes: Uint8Array): string {
@@ -249,6 +303,12 @@ export async function unlockIdentity(): Promise<void> {
     throw new Error('No dashboard identity. Generate one first.');
   }
 
+  const cached = loadSeedFromSession(record.pubkeyHex);
+  if (cached) {
+    unlockedSeed = cached;
+    return;
+  }
+
   const credentialId = base64ToBytes(record.credentialIdB64);
   const seed = await unwrapSeed(credentialId, record.wrapped);
 
@@ -257,6 +317,7 @@ export async function unlockIdentity(): Promise<void> {
   }
 
   unlockedSeed = seed;
+  persistSeedToSession(record.pubkeyHex, seed);
 }
 
 export function lockIdentity(): void {
@@ -264,6 +325,8 @@ export function lockIdentity(): void {
     unlockedSeed.fill(0);
     unlockedSeed = null;
   }
+
+  clearSessionSeed();
 }
 
 export function isUnlocked(): boolean {
@@ -598,6 +661,13 @@ export async function setWalletAddress(address: string): Promise<void> {
   const existing = await loadIdentityRecord();
   if (!existing) return;
   existing.walletAddress = address;
+  await saveIdentityRecord(existing);
+}
+
+export async function clearWalletAddress(): Promise<void> {
+  const existing = await loadIdentityRecord();
+  if (!existing) return;
+  existing.walletAddress = undefined;
   await saveIdentityRecord(existing);
 }
 

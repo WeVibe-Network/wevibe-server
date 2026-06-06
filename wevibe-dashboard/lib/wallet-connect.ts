@@ -47,6 +47,7 @@ interface Keplr {
   enable(chainId: string): Promise<void>;
   getKey(chainId: string): Promise<KeplrKey>;
   experimentalSuggestChain(chainInfo: KeplrChainInfo): Promise<void>;
+  disable?(chainId: string): Promise<void>;
   getOfflineSigner(chainId: string): OfflineSigner;
   signArbitrary(chainId: string, address: string, message: string): Promise<{
     pub_key: { value: string };
@@ -164,6 +165,35 @@ export async function connectWallet(
     pubKey: key.pubKey,
     name: key.name,
   };
+}
+
+// Best-effort site disconnect: revoke the dApp's enable permission so the next
+// connect re-prompts. Keplr has no hard per-site logout; clearing local
+// connection state (done by the caller) is the canonical disconnect.
+export async function disconnectWallet(provider: WalletProvider = 'keplr'): Promise<void> {
+  const wallet = provider === 'keplr' ? window.keplr : window.leap;
+  if (!wallet?.disable) return;
+
+  try {
+    await wallet.disable(getChainConfig().chainId);
+  } catch {
+    // best-effort; ignore
+  }
+}
+
+// Re-fetch the CURRENT live account from the wallet WITHOUT re-suggesting the
+// chain or forcing an enable prompt (used on keplr_keystorechange). Returns null
+// if unavailable.
+export async function getActiveWalletAddress(provider: WalletProvider = 'keplr'): Promise<string | null> {
+  const wallet = provider === 'keplr' ? window.keplr : window.leap;
+  if (!wallet) return null;
+
+  try {
+    const key = await wallet.getKey(getChainConfig().chainId);
+    return key.bech32Address;
+  } catch {
+    return null;
+  }
 }
 
 export async function signArbitraryMessage(
