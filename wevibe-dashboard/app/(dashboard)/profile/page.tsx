@@ -1,14 +1,56 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { getIdentity } from '@/lib/wevibe-auth';
+import { useCallback, useEffect, useState } from 'react';
+import { PairPlugin } from '@/components/pairing/pair-plugin';
+import InfoTooltip from '@/components/ui/tooltip';
+import { getConfig } from '@/lib/config';
 import { getProfile, type ProfileResponse } from '@/lib/hub-client';
+import { useIdentity } from '@/lib/identity-context';
+import type { DashboardSettings } from '@/lib/settings';
+import { txError, txSuccess, txToast } from '@/lib/toast';
+import { clearWalletAddress, getIdentity, setWalletAddress } from '@/lib/wevibe-auth';
+import { connectWallet, disconnectWallet } from '@/lib/wallet-connect';
 import ClientTime from '@/components/ui/client-time';
 
+const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
+  llm_provider: 'ollama',
+  ollama_url: 'http://localhost:11434',
+  ollama_model: 'qwen2.5:14b',
+  openrouter_api_key: '',
+  openrouter_model: 'anthropic/claude-sonnet-4',
+  org_id: '',
+  mod_pubkey: '',
+};
+
+function normalizeDashboardSettings(value: Partial<DashboardSettings>): DashboardSettings {
+  return {
+    llm_provider: value.llm_provider === 'openrouter' ? 'openrouter' : 'ollama',
+    ollama_url: value.ollama_url ?? DEFAULT_DASHBOARD_SETTINGS.ollama_url,
+    ollama_model: value.ollama_model ?? DEFAULT_DASHBOARD_SETTINGS.ollama_model,
+    openrouter_api_key: value.openrouter_api_key ?? DEFAULT_DASHBOARD_SETTINGS.openrouter_api_key,
+    openrouter_model: value.openrouter_model ?? DEFAULT_DASHBOARD_SETTINGS.openrouter_model,
+    org_id: value.org_id ?? DEFAULT_DASHBOARD_SETTINGS.org_id,
+    mod_pubkey: value.mod_pubkey ?? DEFAULT_DASHBOARD_SETTINGS.mod_pubkey,
+  };
+}
+
 export default function ProfilePage() {
+  const { walletAddress, refresh } = useIdentity();
+
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [connectingWallet, setConnectingWallet] = useState(false);
+  const [disconnectingWallet, setDisconnectingWallet] = useState(false);
+  const [walletActionError, setWalletActionError] = useState<string | null>(null);
+
+  const [mcpUrl, setMcpUrl] = useState(() => getConfig().mcpUrl);
+  const [settings, setSettings] = useState<DashboardSettings | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [localSaveMessage, setLocalSaveMessage] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadProfile() {
@@ -30,6 +72,120 @@ export default function ProfilePage() {
     }
     void loadProfile();
   }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedUrl = window.localStorage.getItem('wevibe-mcp-url') ?? getConfig().mcpUrl;
+      setMcpUrl(savedUrl);
+    }
+
+    let cancelled = false;
+    setSettingsLoading(true);
+    setSettingsError(null);
+
+    fetch('/api/settings')
+      .then(async response => {
+        if (!response.ok) {
+          throw new Error(`Failed to load settings (${response.status}).`);
+        }
+        return response.json() as Promise<Partial<DashboardSettings>>;
+      })
+      .then(data => {
+        if (cancelled) {
+          return;
+        }
+        setSettings(normalizeDashboardSettings(data));
+      })
+      .catch((err: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        const message = err instanceof Error ? err.message : 'Failed to load settings.';
+        setSettingsError(message);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSettingsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleWalletConnect = useCallback(async () => {
+    setWalletActionError(null);
+    setConnectingWallet(true);
+
+    try {
+      const conn = await connectWallet('keplr');
+      await setWalletAddress(conn.address);
+      await refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to connect wallet.';
+      setWalletActionError(message);
+    } finally {
+      setConnectingWallet(false);
+    }
+  }, [refresh]);
+
+  const handleWalletDisconnect = useCallback(async () => {
+    setWalletActionError(null);
+    setDisconnectingWallet(true);
+
+    try {
+      await disconnectWallet('keplr');
+      await clearWalletAddress();
+      await refresh();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to disconnect wallet.';
+      setWalletActionError(message);
+    } finally {
+      setDisconnectingWallet(false);
+    }
+  }, [refresh]);
+
+  const handleSaveAppAndModelSettings = useCallback(async () => {
+    const normalizedMcpUrl = mcpUrl.trim() || getConfig().mcpUrl;
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('wevibe-mcp-url', normalizedMcpUrl);
+    }
+    setMcpUrl(normalizedMcpUrl);
+    setLocalSaveMessage('MCP URL saved on this device.');
+
+    if (!settings) {
+      return;
+    }
+
+    setSettingsSaving(true);
+    setSettingsError(null);
+
+    const toastId = txToast('Settings');
+
+    try {
+      const response = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to save settings (${response.status}).`);
+      }
+
+      const data = await response.json() as Partial<DashboardSettings>;
+      setSettings(normalizeDashboardSettings(data));
+      txSuccess(toastId, 'Settings saved.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save settings.';
+      txError(toastId, message);
+      setSettingsError(message);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }, [mcpUrl, settings]);
 
   if (loading) {
     return (
@@ -222,6 +378,233 @@ export default function ProfilePage() {
           No on-chain activity yet.
         </div>
       )}
+
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h2 className="text-2xl font-semibold tracking-tight text-wv-text">Settings</h2>
+          <p className="text-sm text-wv-dim">Personal settings for this browser identity.</p>
+        </header>
+
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-lg font-semibold text-wv-text">Wallet</h3>
+            <InfoTooltip label="Wallet">
+              Your Cosmos wallet. Required to create or lead an org and to claim rewards — not needed to join or contribute.
+            </InfoTooltip>
+          </div>
+
+          <p className="mt-1 text-sm text-wv-dim">
+            {walletAddress ? 'Connected wallet for this identity:' : 'No wallet connected for this identity.'}
+          </p>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            {walletAddress ? (
+              <>
+                <code className="rounded bg-wv-panel-2 px-2 py-1 text-sm font-mono text-wv-text">
+                  {truncateAddress(walletAddress)}
+                </code>
+                <button
+                  type="button"
+                  onClick={handleWalletDisconnect}
+                  disabled={disconnectingWallet || connectingWallet}
+                  className="rounded-md border border-wv-line px-3 py-1 text-xs font-medium text-wv-dim transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {disconnectingWallet ? 'Disconnecting…' : 'Disconnect'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={handleWalletConnect}
+                disabled={connectingWallet || disconnectingWallet}
+                className="rounded-md bg-wv-grad-btn px-3 py-1 text-xs font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {connectingWallet ? 'Connecting…' : 'Connect Wallet'}
+              </button>
+            )}
+          </div>
+
+          {walletActionError ? (
+            <p className="mt-3 text-sm text-wv-red">{walletActionError}</p>
+          ) : null}
+        </div>
+
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-lg font-semibold text-wv-text">Plugin pairing</h3>
+            <InfoTooltip label="Plugin pairing">
+              Generate a one-time code to link your local WeVibe plugin to this browser identity.
+            </InfoTooltip>
+          </div>
+          <div className="mt-4">
+            <PairPlugin />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-lg font-semibold text-wv-text">App &amp; Model settings</h3>
+            <InfoTooltip label="App & Model settings">
+              Local app preferences: your MCP server URL and the language model used for extraction. Stored on this device.
+            </InfoTooltip>
+          </div>
+
+          <div className="mt-4 space-y-4">
+            <div>
+              <label htmlFor="profile-mcp-url" className="block text-sm font-medium text-wv-text">
+                MCP Server URL
+              </label>
+              <input
+                id="profile-mcp-url"
+                type="url"
+                value={mcpUrl}
+                onChange={event => {
+                  setMcpUrl(event.target.value);
+                  setLocalSaveMessage(null);
+                }}
+                placeholder={getConfig().mcpUrl}
+                className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+              />
+              <p className="mt-2 text-xs text-wv-dim">Used by this browser only.</p>
+            </div>
+
+            {settingsLoading ? (
+              <p className="text-xs text-wv-dim">Loading model settings…</p>
+            ) : settings ? (
+              <>
+                <div>
+                  <label htmlFor="profile-llm-provider" className="block text-sm font-medium text-wv-text">
+                    LLM Provider
+                  </label>
+                  <select
+                    id="profile-llm-provider"
+                    value={settings.llm_provider}
+                    onChange={event => setSettings(current => (
+                      current
+                        ? {
+                          ...current,
+                          llm_provider: event.target.value as 'ollama' | 'openrouter',
+                        }
+                        : current
+                    ))}
+                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                  >
+                    <option value="ollama">Ollama</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </select>
+                </div>
+
+                {settings.llm_provider === 'ollama' ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="profile-ollama-url" className="block text-sm font-medium text-wv-text">
+                        Ollama URL
+                      </label>
+                      <input
+                        id="profile-ollama-url"
+                        type="url"
+                        value={settings.ollama_url}
+                        onChange={event => setSettings(current => (
+                          current
+                            ? {
+                              ...current,
+                              ollama_url: event.target.value,
+                            }
+                            : current
+                        ))}
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="profile-ollama-model" className="block text-sm font-medium text-wv-text">
+                        Ollama Model
+                      </label>
+                      <input
+                        id="profile-ollama-model"
+                        type="text"
+                        value={settings.ollama_model}
+                        onChange={event => setSettings(current => (
+                          current
+                            ? {
+                              ...current,
+                              ollama_model: event.target.value,
+                            }
+                            : current
+                        ))}
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="profile-openrouter-key" className="block text-sm font-medium text-wv-text">
+                        OpenRouter API Key
+                      </label>
+                      <input
+                        id="profile-openrouter-key"
+                        type="password"
+                        value={settings.openrouter_api_key}
+                        onChange={event => setSettings(current => (
+                          current
+                            ? {
+                              ...current,
+                              openrouter_api_key: event.target.value,
+                            }
+                            : current
+                        ))}
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="profile-openrouter-model" className="block text-sm font-medium text-wv-text">
+                        OpenRouter Model
+                      </label>
+                      <input
+                        id="profile-openrouter-model"
+                        type="text"
+                        value={settings.openrouter_model}
+                        onChange={event => setSettings(current => (
+                          current
+                            ? {
+                              ...current,
+                              openrouter_model: event.target.value,
+                            }
+                            : current
+                        ))}
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                      />
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-wv-dim">
+                Model settings are unavailable right now.
+              </p>
+            )}
+
+            {settingsError ? (
+              <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                {settingsError}
+              </div>
+            ) : null}
+
+            {localSaveMessage ? (
+              <p className="text-xs text-wv-green">{localSaveMessage}</p>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={handleSaveAppAndModelSettings}
+              disabled={settingsSaving || settingsLoading}
+              className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+            >
+              {settingsSaving ? 'Saving…' : 'Save Settings'}
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

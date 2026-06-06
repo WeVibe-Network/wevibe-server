@@ -4,14 +4,15 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { TxMsgData } from 'cosmjs-types/cosmos/base/abci/v1beta1/abci';
-import { toast } from 'sonner';
 import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
 import { ErrorBanner, LoadingState } from '@/components/ui/states';
 import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
+import { getConfig } from '@/lib/config';
 import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
 import { SLOT_CAP, slotBarHeightPercent, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
+import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 import { connectWallet } from '@/lib/wallet-connect';
 import { createGuestIdentity, setWalletAddress } from '@/lib/wevibe-auth';
@@ -21,6 +22,8 @@ const vibeFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 
 const REGISTER_ORG_STORAGE_QUOTA = 1000;
 const REGISTER_ORG_RETRIEVAL_BUDGET = 500;
 const MSG_REGISTER_ORG_RESPONSE_TYPE_URL = '/wevibe.org.v1.MsgRegisterOrgResponse';
+const CREATE_CONFIRM_POLL_ATTEMPTS = 30;
+const CREATE_CONFIRM_POLL_INTERVAL_MS = 1000;
 
 type ChartBarState = 'sold' | 'current' | 'future';
 
@@ -109,6 +112,10 @@ function extractOrgIdFromDeliverTxData(deliverTxData?: Uint8Array): string {
 
 function formatVibe(uvibe: number): string {
   return `${vibeFormatter.format(uvibeToVibe(uvibe))} VIBE`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function errorToastMessage(kind: ErrorKind, fallbackMessage: string): string {
@@ -242,19 +249,24 @@ export default function BuyOrgPage() {
     const domainValue = domain.trim();
 
     if (!orgNameValue) {
-      toast.error('Org Name is required.', { position: 'top-right' });
+      const validationToastId = txToast('Create org');
+      txError(validationToastId, 'Org Name is required.');
       return;
     }
 
     if (!domainValue) {
-      toast.error('Domain of Expertise is required.', { position: 'top-right' });
+      const validationToastId = txToast('Create org');
+      txError(validationToastId, 'Domain of Expertise is required.');
       return;
     }
 
     if (!identity || !walletAddress) {
-      toast.error('No dashboard identity/wallet found. Connect wallet and try again.', { position: 'top-right' });
+      const validationToastId = txToast('Create org');
+      txError(validationToastId, 'No dashboard identity/wallet found. Connect wallet and try again.');
       return;
     }
+
+    const toastId = txToast('Create org');
 
     setSubmitting(true);
     setShowFaucetPrompt(false);
@@ -308,20 +320,47 @@ export default function BuyOrgPage() {
         hub_serving_key: hubServingKey,
       });
 
-      toast.success(`Organization purchased: ${orgId}`, { position: 'top-right' });
+      txConfirming(toastId, 'Create org');
+
+      const chainRest = getConfig().chainRest;
+      let confirmed = false;
+
+      for (let attempt = 0; attempt < CREATE_CONFIRM_POLL_ATTEMPTS; attempt += 1) {
+        if (attempt > 0) {
+          await sleep(CREATE_CONFIRM_POLL_INTERVAL_MS);
+        }
+
+        try {
+          const res = await fetch(`${chainRest}/wevibe/org/v1/org/${encodeURIComponent(orgId)}`);
+          if (res.ok) {
+            confirmed = true;
+            break;
+          }
+        } catch {
+          // Keep polling; chain confirmation may still arrive.
+        }
+      }
+
       setConfirmOpen(false);
       setOrgName('');
       setDomain('');
       void loadCurrentSlot();
-      router.push(`/discover/${orgId}`);
+
+      if (confirmed) {
+        txSuccess(toastId, `Organization created: ${orgId}`);
+        router.push('/my-org');
+      } else {
+        txError(toastId, 'Created, but on-chain confirmation is taking longer than expected — refresh shortly.');
+      }
     } catch (err) {
       const kind = classifyError(err);
+      const fallbackMessage = err instanceof Error ? err.message : String(err);
+
       if (kind === 'needs_gas') {
         setShowFaucetPrompt(true);
-      } else {
-        const fallbackMessage = err instanceof Error ? err.message : String(err);
-        toast.error(errorToastMessage(kind, fallbackMessage), { position: 'top-right' });
       }
+
+      txError(toastId, errorToastMessage(kind, fallbackMessage));
     } finally {
       setSubmitting(false);
     }
@@ -475,7 +514,7 @@ export default function BuyOrgPage() {
                 <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-wv-amber">What you&apos;re buying</h3>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-wv-dim">
                   <li>
-                    Identity: a permanent, leader-independent slot (org_id like <span className="font-mono">weorg-7</span>). It survives leadership transfer and resale.
+                    Identity: a permanent, leader-independent slot (org_id like <span className="font-mono">wevibe-org-7</span>). It survives leadership transfer and resale.
                   </li>
                   <li>
                     Scarcity: hard cap (32 in alpha, 320 testnet, 3200 mainnet) — slots are deliberately scarce.

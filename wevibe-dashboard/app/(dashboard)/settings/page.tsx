@@ -1,44 +1,14 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ConnectionState, WeVibeMcpClient, getMcpClient, resetMcpClient } from '@/lib/mcp-client';
+import { useCallback, useEffect, useState } from 'react';
 import { getHubResponsePubkey, getHubServingAddress, getOrg, getOrgChainConfig } from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
-import { PairPlugin } from '@/components/pairing/pair-plugin';
-import { WalletConnectButton } from '@/components/wallet-connect-button';
 import { connectWallet } from '@/lib/wallet-connect';
 import { buildSetOrgConfigMsg, buildSetServingInfoMsg, buildSetServingKeyMsg, directBroadcast } from '@/lib/chain-client';
-import { getConfig } from '@/lib/config';
+import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useOrgContext } from '@/lib/org-context';
-
-type OrgInfoResponse =
-  | { error: string; identity?: string }
-  | {
-      org_id: string;
-      org_name: string;
-      role: string;
-      current_epoch: number;
-      egress_mode: string;
-      identity: string;
-      hub_url: string;
-      mod_key_available: boolean;
-      enc_key_count: number;
-      required_approvals?: number;
-    };
-
-const stateLabels: Record<ConnectionState, string> = {
-  disconnected: 'Disconnected',
-  connecting: 'Connecting…',
-  connected: 'Connected',
-  error: 'Error',
-};
-
-const stateColors: Record<ConnectionState, string> = {
-  disconnected: 'bg-wv-panel-3',
-  connecting: 'bg-wv-amber animate-pulse',
-  connected: 'bg-wv-green',
-  error: 'bg-wv-red',
-};
+import { GuardCard } from '@/components/ui/states';
+import InfoTooltip from '@/components/ui/tooltip';
 
 const HUB_RESPONSE_PUBKEY_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
 
@@ -65,12 +35,8 @@ function isValidHttpOrHttpsUrl(value: string): boolean {
 
 export default function SettingsPage() {
   const { activeOrg } = useOrgContext();
-  const [url, setUrl] = useState(getConfig().mcpUrl);
-  const [state, setState] = useState<ConnectionState>('disconnected');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [orgInfo, setOrgInfo] = useState<OrgInfoResponse | null>(null);
-  const listenerRef = useRef<(() => void) | null>(null);
+  const orgLoaded = activeOrg !== null;
+  const isLeader = activeOrg?.role === 'leader';
   const [requiredApprovals, setRequiredApprovals] = useState<number>(1);
   const [reportVoteThreshold, setReportVoteThreshold] = useState<number>(1);
   const [configLoading, setConfigLoading] = useState(false);
@@ -79,7 +45,6 @@ export default function SettingsPage() {
   const [savingConfig, setSavingConfig] = useState(false);
   const [chainConfigLoading, setChainConfigLoading] = useState(false);
   const [chainConfigError, setChainConfigError] = useState<string | null>(null);
-  const [chainConfigSuccess, setChainConfigSuccess] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);
   const [serveAttestationRequired, setServeAttestationRequired] = useState(false);
   const [hubServingAddress, setHubServingAddress] = useState('');
@@ -98,142 +63,38 @@ export default function SettingsPage() {
   const [hubServingInfoSuccess, setHubServingInfoSuccess] = useState<string | null>(null);
   const [savingServingInfo, setSavingServingInfo] = useState(false);
 
-  const attachListener = useCallback((client: WeVibeMcpClient) => {
-    listenerRef.current?.();
-    listenerRef.current = client.addStateListener(setState);
-    setState(client.state);
-  }, []);
-
-  const updateOrgInfo = useCallback(async (client: WeVibeMcpClient) => {
-    try {
-      const info = await client.callTool<OrgInfoResponse>('wevibe_org_info');
-      setOrgInfo(info);
-      if ('error' in info) {
-        setError(info.error);
-      } else {
-        setError(null);
-      }
-    } catch (err) {
-      setOrgInfo(null);
-      setError((err as Error).message);
-    }
-  }, []);
-
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (!activeOrg) {
       return;
     }
 
-    const savedUrl = window.localStorage.getItem('wevibe-mcp-url') ?? getConfig().mcpUrl;
-    setUrl(savedUrl);
-
-    const client = getMcpClient();
-    attachListener(client);
-
-    let cancelled = false;
-    const connectIfNeeded = async () => {
-      if (client.state === 'connected') {
-        await updateOrgInfo(client);
-        return;
-      }
-
-      // Only auto-connect from disconnected, not from error state.
-      // User must click Connect to recover from errors.
-      if (client.state !== 'disconnected') {
-        return;
-      }
-
-      setLoading(true);
-      setError(null);
-      try {
-        await client.connect();
-        if (!cancelled) {
-          await updateOrgInfo(client);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError((err as Error).message);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-
-    connectIfNeeded();
-
-    return () => {
-      cancelled = true;
-      listenerRef.current?.();
-      listenerRef.current = null;
-    };
-  }, [attachListener, updateOrgInfo]);
-
-  const handleConnect = useCallback(async (event?: FormEvent) => {
-    event?.preventDefault();
-    setLoading(true);
-    setError(null);
-    setOrgInfo(null);
-
-    const targetUrl = url.trim() || getConfig().mcpUrl;
-
-    try {
-      const client = resetMcpClient(targetUrl);
-      attachListener(client);
-      await client.connect();
-      await updateOrgInfo(client);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [attachListener, updateOrgInfo, url]);
-
-  const statusBadge = useMemo(() => (
-    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm font-medium text-white ${stateColors[state]}`}>
-      <span className="h-2 w-2 rounded-full bg-wv-text" />
-      {stateLabels[state]}
-    </span>
-  ), [state]);
-  const orgLoaded = useMemo(() => orgInfo !== null && !('error' in orgInfo), [orgInfo]);
-
-  useEffect(() => {
-    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
-      return;
-    }
     let cancelled = false;
     setConfigLoading(true);
     setConfigError(null);
-    void Promise.all([getOrg(orgInfo.org_id), getHubServingAddress(), getHubResponsePubkey()])
+    setConfigSuccess(null);
+
+    void Promise.all([getOrg(activeOrg.org_id), getHubServingAddress(), getHubResponsePubkey()])
       .then(([summary, fallbackServingAddress, fallbackResponsePubkey]) => {
         if (cancelled) return;
+
         setRequiredApprovals(summary.required_approvals ?? 1);
         setReportVoteThreshold(summary.report_vote_threshold ?? 1);
-
-        const activeOrgRecord = activeOrg as unknown as Record<string, unknown> | null;
-        const activeOrgServingAddress = activeOrgRecord?.hub_serving_address;
-        const activeOrgEndpoints = normalizeHubEndpoints(activeOrgRecord?.hub_endpoints);
-        const activeOrgResponsePubkey = activeOrgRecord?.hub_response_pubkey;
 
         const summaryServingAddress = summary.hub_serving_address ?? summary.hub_serving_key_address;
         const resolvedServingAddress = [
           typeof summaryServingAddress === 'string' ? summaryServingAddress : '',
-          typeof activeOrgServingAddress === 'string' ? activeOrgServingAddress : '',
           fallbackServingAddress,
         ].find((value) => value.trim().length > 0) ?? '';
         setHubServingAddress(resolvedServingAddress);
 
-        const summaryEndpoints = normalizeHubEndpoints(summary.hub_endpoints);
-        const resolvedHubEndpoints = summaryEndpoints.length > 0 ? summaryEndpoints : activeOrgEndpoints;
-        setHubEndpoints(resolvedHubEndpoints);
+        setHubEndpoints(normalizeHubEndpoints(summary.hub_endpoints));
 
         const normalizedFallbackResponsePubkey = fallbackResponsePubkey.trim();
         const resolvedResponsePubkey = [
           typeof summary.hub_response_pubkey === 'string' ? summary.hub_response_pubkey : '',
-          typeof activeOrgResponsePubkey === 'string' ? activeOrgResponsePubkey : '',
           normalizedFallbackResponsePubkey,
         ].find((value) => value.trim().length > 0) ?? '';
+
         setHubResponsePubkey(resolvedResponsePubkey.trim());
         setHubAdvertisedResponsePubkey(normalizedFallbackResponsePubkey);
       })
@@ -249,16 +110,18 @@ export default function SettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeOrg, orgLoaded, orgInfo]);
+  }, [activeOrg]);
 
   useEffect(() => {
-    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
+    if (!activeOrg) {
       return;
     }
+
     let cancelled = false;
     setChainConfigLoading(true);
     setChainConfigError(null);
-    void getOrgChainConfig(orgInfo.org_id)
+
+    void getOrgChainConfig(activeOrg.org_id)
       .then(config => {
         if (cancelled) return;
         setServeAttestationRequired(config.serve_attestation_required);
@@ -276,12 +139,13 @@ export default function SettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [orgLoaded, orgInfo]);
+  }, [activeOrg]);
 
   const handleConfigSave = useCallback(async () => {
-    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
+    if (!activeOrg) {
       return;
     }
+
     if (requiredApprovals < 1) {
       setConfigError('Required approvals must be at least 1');
       return;
@@ -297,7 +161,7 @@ export default function SettingsPage() {
       const walletConn = await connectWallet();
       const msgSetOrgConfig = buildSetOrgConfigMsg(
         walletConn.address,
-        orgInfo.org_id,
+        activeOrg.org_id,
         false,
         0,
         0,
@@ -310,38 +174,45 @@ export default function SettingsPage() {
     } finally {
       setSavingConfig(false);
     }
-  }, [orgLoaded, orgInfo, requiredApprovals, reportVoteThreshold]);
+  }, [activeOrg, reportVoteThreshold, requiredApprovals]);
 
-  const handleChainConfigSave = useCallback(async () => {
-    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
+  const handleChainConfigSave = useCallback(async (nextServeAttestationRequired: boolean) => {
+    if (!activeOrg) {
       return;
     }
 
+    const toastId = txToast('Chain config');
+
     setSavingChainConfig(true);
     setChainConfigError(null);
-    setChainConfigSuccess(null);
 
     try {
       const walletConn = await connectWallet();
+      txConfirming(toastId, 'Chain config');
+
       const msgSetOrgConfig = buildSetOrgConfigMsg(
         walletConn.address,
-        orgInfo.org_id,
-        serveAttestationRequired,
+        activeOrg.org_id,
+        nextServeAttestationRequired,
         0,
         0,
       );
 
       const result = await directBroadcast(walletConn.address, [msgSetOrgConfig]);
-      setChainConfigSuccess(`Chain config updated. Tx: ${result.txHash.slice(0, 16)}...`);
+      setServeAttestationRequired(nextServeAttestationRequired);
+      txSuccess(
+        toastId,
+        `${nextServeAttestationRequired ? 'Serve attestations enabled' : 'Serve attestations disabled'}. Tx: ${result.txHash.slice(0, 16)}...`,
+      );
     } catch (err) {
-      setChainConfigError(err instanceof Error ? err.message : String(err));
+      txError(toastId, err instanceof Error ? err.message : String(err));
     } finally {
       setSavingChainConfig(false);
     }
-  }, [orgLoaded, orgInfo, serveAttestationRequired]);
+  }, [activeOrg]);
 
   const handleServingKeySave = useCallback(async () => {
-    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
+    if (!activeOrg) {
       return;
     }
 
@@ -359,7 +230,7 @@ export default function SettingsPage() {
       const walletConn = await connectWallet();
       const msgSetServingKey = buildSetServingKeyMsg(
         walletConn.address,
-        orgInfo.org_id,
+        activeOrg.org_id,
         nextServingKey,
       );
 
@@ -373,7 +244,7 @@ export default function SettingsPage() {
     } finally {
       setSavingServingKey(false);
     }
-  }, [newServingKey, orgLoaded, orgInfo]);
+  }, [activeOrg, newServingKey]);
 
   const handleHubEndpointChange = useCallback((index: number, value: string) => {
     setNewHubEndpoints((previous) => previous.map((endpoint, endpointIndex) => (
@@ -400,7 +271,7 @@ export default function SettingsPage() {
   }, []);
 
   const handleServingInfoSave = useCallback(async () => {
-    if (!orgLoaded || !orgInfo || 'error' in orgInfo) {
+    if (!activeOrg) {
       return;
     }
 
@@ -432,7 +303,7 @@ export default function SettingsPage() {
       const walletConn = await connectWallet();
       const msgSetServingInfo = buildSetServingInfoMsg(
         walletConn.address,
-        orgInfo.org_id,
+        activeOrg.org_id,
         normalizedEndpoints,
         normalizedResponsePubkey,
       );
@@ -449,534 +320,455 @@ export default function SettingsPage() {
     } finally {
       setSavingServingInfo(false);
     }
-  }, [newHubEndpoints, newHubResponsePubkey, orgLoaded, orgInfo]);
+  }, [activeOrg, newHubEndpoints, newHubResponsePubkey]);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-4">
-          <h1 className="text-3xl font-semibold tracking-tight">Dashboard Settings</h1>
-          {statusBadge}
-        </div>
+        <h1 className="text-3xl font-semibold tracking-tight">Org Settings</h1>
         <p className="text-sm text-wv-dim">
-          Configure the MCP dashboard connector. Set the server URL, establish a session, and view the active org context.
+          {activeOrg ? `Leader controls for ${activeOrg.org_name}.` : 'Select or create an org to manage its settings.'}
         </p>
       </header>
 
-      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-        <form onSubmit={handleConnect} className="flex flex-col gap-4">
-          <div>
-            <label htmlFor="mcp-url" className="block text-sm font-medium text-wv-text">
-              MCP Server URL
-            </label>
-            <input
-              id="mcp-url"
-              type="url"
-              value={url}
-              onChange={event => setUrl(event.target.value)}
-              placeholder="http://localhost:4451"
-              className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-            />
-            <p className="mt-2 text-xs text-wv-dim">
-              This should point to the running `wevibe-mcp --dashboard` instance. Use a reachable URL from your browser.
+      {!activeOrg ? (
+        <GuardCard title="Select or create an org to manage its settings." />
+      ) : (
+        <>
+          <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-wv-text">Moderation Configuration</h2>
+              <InfoTooltip label="About moderation configuration">
+                How many moderator approvals a memory needs, and the votes needed to action a report.
+              </InfoTooltip>
+            </div>
+            <p className="mt-1 text-sm text-wv-dim">
+              Control how many moderator votes are required before a memory moves to the approval batch.
+              Org leaders can always approve immediately.
             </p>
-            <div className="mt-3 rounded-lg border border-wv-line bg-wv-panel-2 px-3 py-3">
-              <p className="text-xs text-wv-dim">
-                Moderation runs from a server on YOUR machine (it holds your moderation key). Start it before connecting.
-              </p>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-wv-dim">
-                <li>
-                  Run <code className="rounded bg-wv-panel px-1.5 py-0.5 font-mono text-wv-text">{'cd wevibe-mcp && npm run dashboard'}</code> (it listens on http://localhost:4451 by default).
-                </li>
-                <li>Then enter http://localhost:4451 above and click Connect.</li>
-              </ul>
+
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+              <span>🔐</span>
+              <span>Changes to Required Approvals and Report Vote Threshold require wallet signature.</span>
             </div>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="submit"
-              className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.35)] focus:ring-offset-1"
-              disabled={loading}
-            >
-              {loading ? 'Connecting…' : 'Connect'}
-            </button>
+            {configError && (
+              <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                {configError}
+              </div>
+            )}
 
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:bg-wv-line focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.28)] focus:ring-offset-1"
-              onClick={() => handleConnect()}
-              disabled={loading}
-            >
-              Retry
-            </button>
+            {configSuccess && (
+              <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green">
+                {configSuccess}
+              </div>
+            )}
 
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:bg-wv-line focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.28)] focus:ring-offset-1"
-              onClick={() => setOrgInfo(null)}
-            >
-              Clear Org Info
-            </button>
-          </div>
-
-          {error && (
-            <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
-              {error}
-            </div>
-          )}
-        </form>
-      </section>
-
-      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-        <h2 className="text-lg font-semibold text-wv-text">Current Org Context</h2>
-        <p className="mt-1 text-sm text-wv-dim">
-          The dashboard requests org details from the MCP server once a connection is established. If fields are missing, reconnect or confirm membership.
-        </p>
-
-        <dl className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <InfoCell label="Org Name" value={orgInfo && 'error' in orgInfo ? '—' : orgInfo?.org_name ?? '—'} />
-          <InfoCell label="Org ID" value={orgInfo && 'error' in orgInfo ? '—' : orgInfo?.org_id ?? '—'} />
-          <InfoCell label="Role" value={orgInfo && 'error' in orgInfo ? '—' : orgInfo?.role ?? '—'} />
-          <InfoCell label="Current Epoch" value={orgInfo && 'error' in orgInfo ? '—' : (orgInfo?.current_epoch?.toString() ?? '—')} />
-          <InfoCell label="Identity" value={orgInfo?.identity ?? '—'} />
-          <InfoCell label="Hub URL" value={orgInfo && 'error' in orgInfo ? '—' : orgInfo?.hub_url ?? '—'} />
-          <InfoCell label="Egress Mode" value={orgInfo && 'error' in orgInfo ? '—' : orgInfo?.egress_mode ?? '—'} />
-          <InfoCell
-            label="Encryption Keys"
-            value={orgInfo && 'error' in orgInfo ? '—' : (orgInfo?.enc_key_count?.toString() ?? '—')}
-          />
-          <InfoCell
-            label="Moderation Key"
-            value={orgInfo && 'error' in orgInfo ? '—' : (orgInfo?.mod_key_available ? 'Available' : 'Missing')}
-          />
-          <InfoCell
-            label="Required Approvals"
-            value={configLoading ? 'Loading…' : requiredApprovals.toString()}
-          />
-        </dl>
-
-        {orgInfo && 'error' in orgInfo && (
-          <div className="mt-4 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
-            {orgInfo.error}
-          </div>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-        <h2 className="text-lg font-semibold text-wv-text">Wallet</h2>
-        <p className="mt-1 text-sm text-wv-dim">
-          Connect your Cosmos wallet to link your on-chain identity with your dashboard identity.
-          Your wallet address will be associated with your org membership for reputation tracking.
-        </p>
-        <div className="mt-4">
-          {orgInfo && orgLoaded && 'org_id' in orgInfo ? (
-            <WalletConnectButton orgID={orgInfo.org_id} />
-          ) : (
-            <p className="text-sm text-wv-dim">Connect to an MCP server and org first.</p>
-          )}
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-        <h2 className="text-lg font-semibold text-wv-text">Pair your plugin</h2>
-        <p className="mt-1 text-sm text-wv-dim">
-          Generate a one-time pairing code and run it in the plugin CLI to pair your existing identity.
-        </p>
-        <div className="mt-4">
-          <PairPlugin />
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-        <h2 className="text-lg font-semibold text-wv-text">Moderation Configuration</h2>
-        <p className="mt-1 text-sm text-wv-dim">
-          Control how many moderator votes are required before a memory moves to the approval batch.
-          Org leaders can always approve immediately.
-        </p>
-
-        <div className="mt-3 flex items-center gap-2 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
-          <span>🔐</span>
-          <span>Changes to Required Approvals and Report Vote Threshold require wallet signature.</span>
-        </div>
-
-        {configError && (
-          <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
-            {configError}
-          </div>
-        )}
-
-        {configSuccess && (
-          <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green">
-            {configSuccess}
-          </div>
-        )}
-
-        <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
-          <div className="sm:max-w-xs">
-            <label htmlFor="required-approvals" className="block text-sm font-medium text-wv-text">
-              Moderator Approvals Required
-            </label>
-            <input
-              id="required-approvals"
-              data-testid="required-approvals-input"
-              type="number"
-              min={1}
-              max={10}
-              value={requiredApprovals}
-              onChange={event => {
-                const next = Number(event.target.value);
-                if (Number.isNaN(next)) {
-                  setRequiredApprovals(1);
-                  return;
-                }
-                setRequiredApprovals(Math.min(10, Math.max(1, next)));
-              }}
-              disabled={configLoading || savingConfig || !orgLoaded}
-              className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-            />
-            <p className="mt-2 text-xs text-wv-dim">
-              Set between 1 and 10. Moderator votes are tracked off-chain in the hub.
-            </p>
-          </div>
-
-          <div className="sm:max-w-xs">
-            <label htmlFor="report-vote-threshold" className="block text-sm font-medium text-wv-text">
-              Report Vote Threshold
-            </label>
-            <input
-              id="report-vote-threshold"
-              data-testid="report-vote-threshold-input"
-              type="number"
-              min={1}
-              max={10}
-              value={reportVoteThreshold}
-              onChange={event => {
-                const next = Number(event.target.value);
-                if (Number.isNaN(next)) {
-                  setReportVoteThreshold(1);
-                  return;
-                }
-                setReportVoteThreshold(Math.min(10, Math.max(1, next)));
-              }}
-              disabled={configLoading || savingConfig || !orgLoaded}
-              className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-            />
-            <p className="mt-2 text-xs text-wv-dim">
-              Votes needed to uphold or dismiss a report.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.35)] focus:ring-offset-1 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-            onClick={handleConfigSave}
-            disabled={configLoading || savingConfig || !orgLoaded}
-          >
-            {savingConfig ? 'Saving…' : 'Save' }
-          </button>
-        </div>
-
-        {configLoading && (
-          <p className="mt-4 text-xs text-wv-dim">Loading current moderation settings…</p>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-        <h2 className="text-lg font-semibold text-wv-text">Chain Configuration</h2>
-        <p className="mt-1 text-sm text-wv-dim">
-          Manage on-chain org settings via direct wallet-signed transaction broadcast.
-        </p>
-
-        {chainConfigError && (
-          <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
-            {chainConfigError}
-          </div>
-        )}
-
-        {chainConfigSuccess && (
-          <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
-            {chainConfigSuccess}
-          </div>
-        )}
-
-        <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
-          <label className="inline-flex items-center gap-2 text-sm text-wv-text">
-            <input
-              type="checkbox"
-              checked={serveAttestationRequired}
-              onChange={event => setServeAttestationRequired(event.target.checked)}
-              disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
-              className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2 text-wv-violet focus:ring-2 focus:ring-[rgba(124,92,255,0.35)]"
-            />
-            Require serve attestations
-          </label>
-        </div>
-
-        <div className="mt-4 flex items-center gap-3">
-          <button
-            type="button"
-            onClick={handleChainConfigSave}
-            disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
-            className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-          >
-            {savingChainConfig ? 'Broadcasting…' : 'Save Chain Config'}
-          </button>
-          {chainConfigLoading && <span className="text-xs text-wv-dim">Loading chain config…</span>}
-        </div>
-      </section>
-
-      {orgLoaded && orgInfo && !('error' in orgInfo) && orgInfo.role === 'leader' && (
-        <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-          <h2 className="text-lg font-semibold text-wv-text">Hub Infrastructure</h2>
-          <p className="mt-1 text-sm text-wv-dim">
-            Control the serving key address used for on-chain serve/denial submissions.
-          </p>
-
-          <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current HubServingAddress</p>
-            <p className="mt-1 break-all font-mono text-sm text-wv-text">{hubServingAddress || '—'}</p>
-          </div>
-
-          {hubInfraError && (
-            <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
-              {hubInfraError}
-            </div>
-          )}
-
-          {hubInfraSuccess && (
-            <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
-              {hubInfraSuccess}
-            </div>
-          )}
-
-          <div className="mt-4">
-            {!showServingKeyEditor ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setHubInfraError(null);
-                  setHubInfraSuccess(null);
-                  setNewServingKey(hubServingAddress);
-                  setShowServingKeyEditor(true);
-                }}
-                className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet"
-              >
-                Change serving key (self-host)
-              </button>
-            ) : (
-              <div className="rounded-lg border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.08)] p-4">
-                <label htmlFor="new-serving-key" className="block text-sm font-medium text-wv-text">
-                  New serving key address
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
+              <div className="sm:max-w-xs">
+                <label htmlFor="required-approvals" className="flex items-center gap-2 text-sm font-medium text-wv-text">
+                  <span>Moderator Approvals Required</span>
+                  <InfoTooltip label="About approval requirements">
+                    How many moderator approvals a memory needs before it can advance.
+                  </InfoTooltip>
                 </label>
                 <input
-                  id="new-serving-key"
-                  type="text"
-                  value={newServingKey}
-                  onChange={(event) => setNewServingKey(event.target.value)}
-                  placeholder="wevibe1..."
-                  disabled={savingServingKey}
-                  className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 font-mono text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  id="required-approvals"
+                  data-testid="required-approvals-input"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={requiredApprovals}
+                  onChange={event => {
+                    const next = Number(event.target.value);
+                    if (Number.isNaN(next)) {
+                      setRequiredApprovals(1);
+                      return;
+                    }
+                    setRequiredApprovals(Math.min(10, Math.max(1, next)));
+                  }}
+                  disabled={configLoading || savingConfig || !orgLoaded}
+                  className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
                 />
-                <div className="mt-3 flex items-center gap-2">
+                <p className="mt-2 text-xs text-wv-dim">
+                  Set between 1 and 10. Moderator votes are tracked off-chain in the hub.
+                </p>
+              </div>
+
+              <div className="sm:max-w-xs">
+                <label htmlFor="report-vote-threshold" className="flex items-center gap-2 text-sm font-medium text-wv-text">
+                  <span>Report Vote Threshold</span>
+                  <InfoTooltip label="About report vote threshold">
+                    Votes needed to action a report.
+                  </InfoTooltip>
+                </label>
+                <input
+                  id="report-vote-threshold"
+                  data-testid="report-vote-threshold-input"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={reportVoteThreshold}
+                  onChange={event => {
+                    const next = Number(event.target.value);
+                    if (Number.isNaN(next)) {
+                      setReportVoteThreshold(1);
+                      return;
+                    }
+                    setReportVoteThreshold(Math.min(10, Math.max(1, next)));
+                  }}
+                  disabled={configLoading || savingConfig || !orgLoaded}
+                  className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                />
+                <p className="mt-2 text-xs text-wv-dim">
+                  Votes needed to uphold or dismiss a report.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.35)] focus:ring-offset-1 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                onClick={handleConfigSave}
+                disabled={configLoading || savingConfig || !orgLoaded}
+              >
+                {savingConfig ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+
+            {configLoading && (
+              <p className="mt-4 text-xs text-wv-dim">Loading current moderation settings…</p>
+            )}
+          </section>
+
+          <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-wv-text">Chain Configuration</h2>
+              <InfoTooltip label="About chain configuration">
+                On-chain org settings enforced by the WeVibe chain. Each change is a wallet-signed transaction.
+              </InfoTooltip>
+            </div>
+            <p className="mt-1 text-sm text-wv-dim">
+              Manage on-chain org settings via direct wallet-signed transaction broadcast.
+            </p>
+
+            {chainConfigError && (
+              <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                {chainConfigError}
+              </div>
+            )}
+
+            <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-wv-text">Serve attestations</p>
+                      <InfoTooltip label="About serve attestations">
+                        Require cryptographic serve attestations before a memory can be served.
+                      </InfoTooltip>
+                    </div>
+                    <p className="mt-1 text-xs text-wv-dim">
+                      Current on-chain state:{' '}
+                      <span className="font-medium text-wv-text">
+                        {serveAttestationRequired ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </p>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={handleServingKeySave}
-                    disabled={savingServingKey || !orgLoaded}
+                    onClick={() => handleChainConfigSave(!serveAttestationRequired)}
+                    disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
                     className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
                   >
-                    {savingServingKey ? 'Broadcasting…' : 'Broadcast MsgSetServingKey'}
+                    {savingChainConfig
+                      ? 'Broadcasting…'
+                      : serveAttestationRequired
+                        ? 'Disable serve attestations'
+                        : 'Enable serve attestations'}
                   </button>
+                </div>
+
+                <div className="border-t border-wv-line pt-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-wv-text">Auto-renewal</p>
+                      <p className="mt-1 text-xs text-wv-dim">Reserved for future chain configuration options.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-wv-line-2 bg-wv-panel-3 px-2.5 py-1 text-xs font-medium text-wv-dim">
+                        Unavailable
+                      </span>
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-1.5 text-xs font-medium text-wv-dim disabled:cursor-not-allowed"
+                      >
+                        Unavailable
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {chainConfigLoading && <p className="mt-4 text-xs text-wv-dim">Loading chain config…</p>}
+          </section>
+
+          {isLeader && (
+            <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-semibold text-wv-text">Hub Infrastructure</h2>
+                <InfoTooltip label="About hub infrastructure">
+                  Advanced: the network endpoints and signing keys your org&apos;s hub uses. Most orgs never change these.
+                </InfoTooltip>
+              </div>
+              <p className="mt-1 text-sm text-wv-dim">
+                Control the serving key address used for on-chain serve/denial submissions.
+              </p>
+
+              <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current HubServingAddress</p>
+                <p className="mt-1 break-all font-mono text-sm text-wv-text">{hubServingAddress || '—'}</p>
+              </div>
+
+              {hubInfraError && (
+                <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                  {hubInfraError}
+                </div>
+              )}
+
+              {hubInfraSuccess && (
+                <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
+                  {hubInfraSuccess}
+                </div>
+              )}
+
+              <div className="mt-4">
+                {!showServingKeyEditor ? (
                   <button
                     type="button"
                     onClick={() => {
-                      setShowServingKeyEditor(false);
-                      setNewServingKey('');
                       setHubInfraError(null);
+                      setHubInfraSuccess(null);
+                      setNewServingKey(hubServingAddress);
+                      setShowServingKeyEditor(true);
                     }}
-                    disabled={savingServingKey}
-                    className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet"
                   >
-                    Cancel
+                    Change serving key (self-host)
                   </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-6 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-wv-dim">Hub endpoints &amp; response key</h3>
-            <p className="mt-2 text-xs text-wv-dim">
-              Configure ordered hub endpoint failover (1–3 URLs) and the hub response signature key for clients.
-            </p>
-
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current hub_endpoints</p>
-                {hubEndpoints.length > 0 ? (
-                  <ol className="mt-2 list-decimal space-y-1 pl-4 text-sm text-wv-text">
-                    {hubEndpoints.map((endpoint, index) => (
-                      <li key={`${endpoint}-${index}`} className="break-all font-mono text-xs">{endpoint}</li>
-                    ))}
-                  </ol>
                 ) : (
-                  <p className="mt-1 text-sm text-wv-text">—</p>
+                  <div className="rounded-lg border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.08)] p-4">
+                    <label htmlFor="new-serving-key" className="block text-sm font-medium text-wv-text">
+                      New serving key address
+                    </label>
+                    <input
+                      id="new-serving-key"
+                      type="text"
+                      value={newServingKey}
+                      onChange={(event) => setNewServingKey(event.target.value)}
+                      placeholder="wevibe1..."
+                      disabled={savingServingKey}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 font-mono text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleServingKeySave}
+                        disabled={savingServingKey || !orgLoaded}
+                        className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                      >
+                        {savingServingKey ? 'Broadcasting…' : 'Broadcast MsgSetServingKey'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowServingKeyEditor(false);
+                          setNewServingKey('');
+                          setHubInfraError(null);
+                        }}
+                        disabled={savingServingKey}
+                        className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
 
-              <div className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current hub_response_pubkey</p>
-                <p className="mt-1 break-all font-mono text-xs text-wv-text">{hubResponsePubkey || '—'}</p>
-              </div>
-            </div>
+              <div className="mt-6 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-wv-dim">Hub endpoints &amp; response key</h3>
+                <p className="mt-2 text-xs text-wv-dim">
+                  Configure ordered hub endpoint failover (1–3 URLs) and the hub response signature key for clients.
+                </p>
 
-            <div className="mt-3 rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">This hub&apos;s advertised response_pubkey</p>
-              <p className="mt-1 break-all font-mono text-xs text-wv-text">{hubAdvertisedResponsePubkey || '—'}</p>
-            </div>
-
-            {hubServingInfoError && (
-              <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
-                {hubServingInfoError}
-              </div>
-            )}
-
-            {hubServingInfoSuccess && (
-              <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
-                {hubServingInfoSuccess}
-              </div>
-            )}
-
-            <div className="mt-4">
-              {!showServingInfoEditor ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setHubServingInfoError(null);
-                    setHubServingInfoSuccess(null);
-                    setNewHubEndpoints(hubEndpoints.length > 0 ? [...hubEndpoints] : ['']);
-                    setNewHubResponsePubkey(hubResponsePubkey || hubAdvertisedResponsePubkey);
-                    setShowServingInfoEditor(true);
-                  }}
-                  className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet"
-                >
-                  Edit endpoints &amp; response key
-                </button>
-              ) : (
-                <div className="rounded-lg border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.08)] p-4">
-                  <p className="text-sm font-medium text-wv-text">Ordered hub endpoints (1–3)</p>
-                  <div className="mt-3 flex flex-col gap-3">
-                    {newHubEndpoints.map((endpoint, index) => (
-                      <div key={`new-hub-endpoint-${index}`} className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        <label htmlFor={`new-hub-endpoint-${index}`} className="text-xs font-medium uppercase tracking-wide text-wv-dim sm:w-28">
-                          Endpoint {index + 1}
-                        </label>
-                        <input
-                          id={`new-hub-endpoint-${index}`}
-                          type="url"
-                          value={endpoint}
-                          onChange={(event) => handleHubEndpointChange(index, event.target.value)}
-                          placeholder="https://hub.example.com"
-                          disabled={savingServingInfo}
-                          className="w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveHubEndpointRow(index)}
-                          disabled={savingServingInfo || newHubEndpoints.length <= 1}
-                          className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current hub_endpoints</p>
+                    {hubEndpoints.length > 0 ? (
+                      <ol className="mt-2 list-decimal space-y-1 pl-4 text-sm text-wv-text">
+                        {hubEndpoints.map((endpoint, index) => (
+                          <li key={`${endpoint}-${index}`} className="break-all font-mono text-xs">{endpoint}</li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="mt-1 text-sm text-wv-text">—</p>
+                    )}
                   </div>
 
-                  <div className="mt-3 flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={handleAddHubEndpointRow}
-                      disabled={savingServingInfo || newHubEndpoints.length >= 3}
-                      className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Add endpoint
-                    </button>
-                    <span className="text-xs text-wv-dim">{newHubEndpoints.length}/3 configured</span>
+                  <div className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current hub_response_pubkey</p>
+                    <p className="mt-1 break-all font-mono text-xs text-wv-text">{hubResponsePubkey || '—'}</p>
                   </div>
+                </div>
 
-                  <div className="mt-4">
-                    <label htmlFor="new-hub-response-pubkey" className="block text-sm font-medium text-wv-text">
-                      hub_response_pubkey (hex ed25519)
-                    </label>
-                    <input
-                      id="new-hub-response-pubkey"
-                      type="text"
-                      value={newHubResponsePubkey}
-                      onChange={(event) => setNewHubResponsePubkey(event.target.value)}
-                      placeholder="64 hex chars (optional)"
-                      disabled={savingServingInfo}
-                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 font-mono text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                    />
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setNewHubResponsePubkey(hubAdvertisedResponsePubkey)}
-                        disabled={savingServingInfo || !hubAdvertisedResponsePubkey}
-                        className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Use this hub&apos;s key
-                      </button>
-                      {!hubAdvertisedResponsePubkey && (
-                        <span className="text-xs text-wv-dim">No advertised response key was returned by this hub.</span>
-                      )}
-                    </div>
+                <div className="mt-3 rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">This hub&apos;s advertised response_pubkey</p>
+                  <p className="mt-1 break-all font-mono text-xs text-wv-text">{hubAdvertisedResponsePubkey || '—'}</p>
+                </div>
+
+                {hubServingInfoError && (
+                  <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                    {hubServingInfoError}
                   </div>
+                )}
 
-                  <div className="mt-4 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleServingInfoSave}
-                      disabled={savingServingInfo || !orgLoaded}
-                      className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                    >
-                      {savingServingInfo ? 'Broadcasting…' : 'Broadcast MsgSetServingInfo'}
-                    </button>
+                {hubServingInfoSuccess && (
+                  <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
+                    {hubServingInfoSuccess}
+                  </div>
+                )}
+
+                <div className="mt-4">
+                  {!showServingInfoEditor ? (
                     <button
                       type="button"
                       onClick={() => {
-                        setShowServingInfoEditor(false);
                         setHubServingInfoError(null);
+                        setHubServingInfoSuccess(null);
+                        setNewHubEndpoints(hubEndpoints.length > 0 ? [...hubEndpoints] : ['']);
+                        setNewHubResponsePubkey(hubResponsePubkey || hubAdvertisedResponsePubkey);
+                        setShowServingInfoEditor(true);
                       }}
-                      disabled={savingServingInfo}
-                      className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet"
                     >
-                      Cancel
+                      Edit endpoints &amp; response key
                     </button>
-                  </div>
+                  ) : (
+                    <div className="rounded-lg border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.08)] p-4">
+                      <p className="text-sm font-medium text-wv-text">Ordered hub endpoints (1–3)</p>
+                      <div className="mt-3 flex flex-col gap-3">
+                        {newHubEndpoints.map((endpoint, index) => (
+                          <div key={`new-hub-endpoint-${index}`} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                            <label htmlFor={`new-hub-endpoint-${index}`} className="text-xs font-medium uppercase tracking-wide text-wv-dim sm:w-28">
+                              Endpoint {index + 1}
+                            </label>
+                            <input
+                              id={`new-hub-endpoint-${index}`}
+                              type="url"
+                              value={endpoint}
+                              onChange={(event) => handleHubEndpointChange(index, event.target.value)}
+                              placeholder="https://hub.example.com"
+                              disabled={savingServingInfo}
+                              className="w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveHubEndpointRow(index)}
+                              disabled={savingServingInfo || newHubEndpoints.length <= 1}
+                              className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-3 flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={handleAddHubEndpointRow}
+                          disabled={savingServingInfo || newHubEndpoints.length >= 3}
+                          className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Add endpoint
+                        </button>
+                        <span className="text-xs text-wv-dim">{newHubEndpoints.length}/3 configured</span>
+                      </div>
+
+                      <div className="mt-4">
+                        <label htmlFor="new-hub-response-pubkey" className="block text-sm font-medium text-wv-text">
+                          hub_response_pubkey (hex ed25519)
+                        </label>
+                        <input
+                          id="new-hub-response-pubkey"
+                          type="text"
+                          value={newHubResponsePubkey}
+                          onChange={(event) => setNewHubResponsePubkey(event.target.value)}
+                          placeholder="64 hex chars (optional)"
+                          disabled={savingServingInfo}
+                          className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 font-mono text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                        />
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setNewHubResponsePubkey(hubAdvertisedResponsePubkey)}
+                            disabled={savingServingInfo || !hubAdvertisedResponsePubkey}
+                            className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Use this hub&apos;s key
+                          </button>
+                          {!hubAdvertisedResponsePubkey && (
+                            <span className="text-xs text-wv-dim">No advertised response key was returned by this hub.</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleServingInfoSave}
+                          disabled={savingServingInfo || !orgLoaded}
+                          className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                        >
+                          {savingServingInfo ? 'Broadcasting…' : 'Broadcast MsgSetServingInfo'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowServingInfoEditor(false);
+                            setHubServingInfoError(null);
+                          }}
+                          disabled={savingServingInfo}
+                          className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+            </section>
+          )}
+
+          <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-wv-text">Org &amp; LLM Configuration</h2>
+              <InfoTooltip label="About org and LLM configuration">
+                Default language-model provider and credentials used for this org.
+              </InfoTooltip>
             </div>
-          </div>
-        </section>
+            <p className="mt-1 text-sm text-wv-dim">
+              Configure your organization ID, moderator pubkey, and LLM provider for memory extraction.
+            </p>
+
+            <OrgLlamaConfig />
+          </section>
+        </>
       )}
-
-      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-        <h2 className="text-lg font-semibold text-wv-text">Org & LLM Configuration</h2>
-        <p className="mt-1 text-sm text-wv-dim">
-          Configure your organization ID, moderator pubkey, and LLM provider for memory extraction.
-        </p>
-
-        <OrgLlamaConfig />
-      </section>
-    </div>
-  );
-}
-
-function InfoCell({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3">
-      <dt className="text-xs font-semibold uppercase tracking-wide text-wv-dim">{label}</dt>
-      <dd className="mt-1 text-sm font-medium text-wv-text break-all">{value}</dd>
     </div>
   );
 }

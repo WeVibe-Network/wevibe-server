@@ -22,9 +22,12 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       key: 'my-org',
       sub: [
         { label: 'Overview', href: '/my-org' },
+        { label: 'Members', href: '/members' },
+        { label: 'Requests', href: '/join-requests' },
         { label: 'Epochs', href: '/epoch' },
         { label: 'Billing', href: '/billing' },
         { label: 'Recovery', href: '/recovery' },
+        { label: 'Org Settings', href: '/settings' },
       ],
     },
     {
@@ -44,27 +47,15 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'Keywords', href: '/keywords' },
       ],
     },
-    {
-      label: 'Requests',
-      key: 'requests',
-      sub: [{ label: 'Join Requests', href: '/join-requests' }],
-    },
-    {
-      label: 'Members',
-      key: 'members',
-      sub: [{ label: 'Members', href: '/members' }],
-    },
-    {
-      label: 'Settings',
-      key: 'settings',
-      sub: [{ label: 'Settings', href: '/settings' }],
-    },
   ],
   CONNECTED_MODERATOR: [
     {
       label: 'My Org',
       key: 'my-org',
-      sub: [{ label: 'Overview', href: '/my-org' }],
+      sub: [
+        { label: 'Overview', href: '/my-org' },
+        { label: 'Requests', href: '/join-requests' },
+      ],
     },
     {
       label: 'Moderation',
@@ -79,17 +70,15 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       key: 'memories',
       sub: [{ label: 'Browse', href: '/memories' }],
     },
-    {
-      label: 'Requests',
-      key: 'requests',
-      sub: [{ label: 'Join Requests', href: '/join-requests' }],
-    },
   ],
   CONNECTED_CONTRIBUTOR: [
     {
       label: 'My Org',
       key: 'my-org',
-      sub: [{ label: 'Overview', href: '/my-org' }],
+      sub: [
+        { label: 'Overview', href: '/my-org' },
+        { label: 'My Submissions', href: '/my-submissions' },
+      ],
     },
     {
       label: 'Sessions',
@@ -100,11 +89,6 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       label: 'Memories',
       key: 'memories',
       sub: [{ label: 'Browse', href: '/memories' }],
-    },
-    {
-      label: 'My Submissions',
-      key: 'my-submissions',
-      sub: [{ label: 'Submissions', href: '/my-submissions' }],
     },
   ],
   CONNECTED_MEMBER: [
