@@ -290,6 +290,18 @@ CREATE TABLE IF NOT EXISTS key_envelopes (
 
 CREATE INDEX IF NOT EXISTS idx_envelopes_org ON key_envelopes(org_id);
 
+CREATE TABLE IF NOT EXISTS identity_blobs (
+    pubkey        TEXT        NOT NULL,
+    credential_id TEXT        NOT NULL,
+    hkdf_salt     TEXT        NOT NULL,
+    iv            TEXT        NOT NULL,
+    ciphertext    TEXT        NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (pubkey, credential_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_identity_blobs_credential ON identity_blobs(credential_id);
+
 -- ── Recovery shares ─────────────────────────────────────────────────────────
 -- Sealed Shamir shares for threshold recovery of K_master.
 -- Hub stores opaque sealed blobs — cannot read share content.

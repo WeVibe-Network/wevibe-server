@@ -1,4 +1,5 @@
-const PRF_SALT = new TextEncoder().encode('wevibe-identity-wrap-v1');
+const SEED_KEK_INFO = new TextEncoder().encode('wevibe-seed-kek-v1');
+const PRF_EVAL_SALT = new TextEncoder().encode('wevibe-prf-eval-v1');
 
 type PrfCreateExtensionResults = AuthenticationExtensionsClientOutputs & {
   prf?: {
@@ -56,6 +57,7 @@ function requirePublicKeyCredential(
 /** Wrapped seed payload persisted after AES-GCM encryption. */
 export type WrappedSeed = {
   v: 1;
+  hkdfSaltB64: string;
   ivB64: string;
   ctB64: string;
 };
@@ -106,8 +108,8 @@ export async function createIdentityPasskey(opts: {
   };
 }
 
-/** Derives the deterministic PRF secret from a passkey credential and imports it as AES-GCM key material. */
-export async function derivePrfKey(credentialId: Uint8Array): Promise<CryptoKey> {
+/** Obtains the deterministic PRF output for a credential with fixed evaluation salt. */
+async function getPrfOutput(credentialId: Uint8Array): Promise<Uint8Array> {
   const publicKey: PublicKeyCredentialRequestOptions = {
     challenge: bytesToArrayBuffer(randomBytes(32)),
     allowCredentials: [
@@ -120,7 +122,7 @@ export async function derivePrfKey(credentialId: Uint8Array): Promise<CryptoKey>
     extensions: {
       prf: {
         eval: {
-          first: bytesToArrayBuffer(PRF_SALT),
+          first: bytesToArrayBuffer(PRF_EVAL_SALT),
         },
       },
     } as AuthenticationExtensionsClientInputs,
@@ -135,38 +137,82 @@ export async function derivePrfKey(credentialId: Uint8Array): Promise<CryptoKey>
     throw new Error('Passkey PRF result missing: expected prf.results.first ArrayBuffer');
   }
 
-  return crypto.subtle.importKey('raw', first, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return new Uint8Array(first.slice(0));
 }
 
-/** Encrypts a 32-byte Ed25519 seed with AES-GCM using a fresh random IV. */
-export async function wrapSeed(key: CryptoKey, seed: Uint8Array): Promise<WrappedSeed> {
-  const iv = randomBytes(12);
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
-    key,
-    bytesToArrayBuffer(seed),
+/** Derives an AES-256-GCM key-encryption-key from PRF output via HKDF. */
+async function deriveSeedKek(prfOutput: Uint8Array, hkdfSalt: Uint8Array): Promise<CryptoKey> {
+  const prfKey = await crypto.subtle.importKey(
+    'raw',
+    bytesToArrayBuffer(prfOutput),
+    'HKDF',
+    false,
+    ['deriveKey'],
   );
 
-  return {
-    v: 1,
-    ivB64: bytesToBase64(iv),
-    ctB64: bytesToBase64(new Uint8Array(ciphertext)),
-  };
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: bytesToArrayBuffer(hkdfSalt),
+      info: bytesToArrayBuffer(SEED_KEK_INFO),
+    },
+    prfKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  );
 }
 
-/** Decrypts a wrapped seed payload with the passkey-derived AES-GCM key. */
-export async function unwrapSeed(key: CryptoKey, wrapped: WrappedSeed): Promise<Uint8Array> {
+/** Encrypts a 32-byte Ed25519 seed using PRF → HKDF derived KEK and AES-GCM. */
+export async function wrapSeed(credentialId: Uint8Array, seed: Uint8Array): Promise<WrappedSeed> {
+  const hkdfSalt = randomBytes(32);
+  const iv = randomBytes(12);
+  const prfOutput = await getPrfOutput(credentialId);
+
+  try {
+    const kek = await deriveSeedKek(prfOutput, hkdfSalt);
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
+      kek,
+      bytesToArrayBuffer(seed),
+    );
+
+    return {
+      v: 1,
+      hkdfSaltB64: bytesToBase64(hkdfSalt),
+      ivB64: bytesToBase64(iv),
+      ctB64: bytesToBase64(new Uint8Array(ciphertext)),
+    };
+  } finally {
+    prfOutput.fill(0);
+  }
+}
+
+/** Decrypts a wrapped seed payload using PRF → HKDF derived KEK and AES-GCM. */
+export async function unwrapSeed(
+  credentialId: Uint8Array,
+  wrapped: WrappedSeed,
+): Promise<Uint8Array> {
   if (wrapped.v !== 1) {
     throw new Error(`Unsupported wrapped seed version: ${wrapped.v}`);
   }
 
+  const hkdfSalt = base64ToBytes(wrapped.hkdfSaltB64);
   const iv = base64ToBytes(wrapped.ivB64);
   const ciphertext = base64ToBytes(wrapped.ctB64);
-  const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
-    key,
-    bytesToArrayBuffer(ciphertext),
-  );
+  const prfOutput = await getPrfOutput(credentialId);
 
-  return new Uint8Array(plaintext);
+  try {
+    const kek = await deriveSeedKek(prfOutput, hkdfSalt);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
+      kek,
+      bytesToArrayBuffer(ciphertext),
+    );
+
+    return new Uint8Array(plaintext);
+  } finally {
+    prfOutput.fill(0);
+  }
 }

@@ -21,6 +21,18 @@ async function hubFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return resp.json();
 }
 
+export async function uploadIdentityBlob(blob: {
+  credential_id: string;
+  hkdf_salt: string;
+  iv: string;
+  ciphertext: string;
+}): Promise<void> {
+  await hubFetch<{ status?: string }>('/v1/identity/blob', {
+    method: 'POST',
+    body: JSON.stringify(blob),
+  });
+}
+
 export interface FaucetFundResponse {
   address: string;
   amount: number;

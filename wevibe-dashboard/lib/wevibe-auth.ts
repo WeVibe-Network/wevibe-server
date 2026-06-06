@@ -6,7 +6,6 @@ import { sha512 } from '@noble/hashes/sha512';
 import {
   type WrappedSeed,
   createIdentityPasskey,
-  derivePrfKey,
   isPasskeySupported,
   unwrapSeed,
   wrapSeed,
@@ -83,9 +82,11 @@ function isWrappedSeed(value: unknown): value is WrappedSeed {
   return typeof value === 'object'
     && value !== null
     && 'v' in value
+    && 'hkdfSaltB64' in value
     && 'ivB64' in value
     && 'ctB64' in value
     && (value as WrappedSeed).v === 1
+    && typeof (value as WrappedSeed).hkdfSaltB64 === 'string'
     && typeof (value as WrappedSeed).ivB64 === 'string'
     && typeof (value as WrappedSeed).ctB64 === 'string';
 }
@@ -151,8 +152,7 @@ export async function unlockIdentity(): Promise<void> {
   }
 
   const credentialId = base64ToBytes(record.credentialIdB64);
-  const key = await derivePrfKey(credentialId);
-  const seed = await unwrapSeed(key, record.wrapped);
+  const seed = await unwrapSeed(credentialId, record.wrapped);
 
   if (seed.length !== 32) {
     throw new Error(`Invalid Ed25519 seed length in wrapped identity record: ${seed.length}`);
@@ -202,8 +202,7 @@ export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
       throw new Error('Passkey PRF extension is required to protect your WeVibe identity seed.');
     }
 
-    const key = await derivePrfKey(credentialId);
-    const wrapped = await wrapSeed(key, seed);
+    const wrapped = await wrapSeed(credentialId, seed);
 
     const identity: StoredIdentityRecord = {
       id: KEY_ID,
@@ -217,6 +216,19 @@ export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
     await saveIdentityRecord(identity);
     lockIdentity();
     unlockedSeed = seed;
+
+    try {
+      const { uploadIdentityBlob } = await import('./hub-client');
+      await uploadIdentityBlob({
+        credential_id: identity.credentialIdB64,
+        hkdf_salt: wrapped.hkdfSaltB64,
+        iv: wrapped.ivB64,
+        ciphertext: wrapped.ctB64,
+      });
+    } catch (e) {
+      console.warn('WeVibe: identity blob upload to hub failed (identity still created locally):', e);
+    }
+
     return { pubkeyHex };
   } catch (error) {
     seed.fill(0);
