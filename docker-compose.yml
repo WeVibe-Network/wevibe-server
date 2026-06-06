@@ -33,7 +33,7 @@ services:
       POSTGRES_PASSWORD: wevibe_dev
       POSTGRES_DB: wevibe_hub
     ports:
-      - "5433:5432"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -49,7 +49,7 @@ services:
     environment:
       QDRANT__SERVICE__API_KEY: "${WEVIBE_QDRANT_API_KEY:-wevibe_dev_qdrant_key_32chars_minimum}"
     ports:
-      - "6333:6333"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -71,10 +71,10 @@ services:
       WEVIBE_EPOCH_DURATION_SECONDS: "${WEVIBE_EPOCH_DURATION_SECONDS:-}"
     entrypoint: ["/usr/local/bin/init-chain.sh", "start"]
     ports:
-      - "26656:26656"
-      - "26657:26657"
-      - "1317:1317"
-      - "9090:9090"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:26656:26656"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:26657:26657"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:1317:1317"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:9090:9090"
     volumes:
       - wevibe_chain_data:/root/.wevibed
     healthcheck:
@@ -126,8 +126,9 @@ services:
       RETRIEVAL_RECALL_DEPTH: "${RETRIEVAL_RECALL_DEPTH:-5000}"
       WEVIBE_TEST_MODE: "true"
       HUB_NODE_PRIVKEY: "${HUB_NODE_PRIVKEY:-0000000000000000000000000000000000000000000000000000000000000000}"
+      WEVIBE_HUB_RESPONSE_SEED: "${WEVIBE_HUB_RESPONSE_SEED:-408e6099f9553438066e0f5dc1565314d163837d2db3c3a1ad821da089766a14}"
     ports:
-      - "4440:4440"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:4440:4440"
     depends_on:
       wevibe-postgres:
         condition: service_healthy
@@ -162,7 +163,7 @@ services:
       SOCIAL_GRAPH_PORT: "4470"
       CHAIN_REST_URL: "http://wevibe-chain:1317"
     ports:
-      - "4470:4470"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:4470:4470"
     volumes:
       - wevibe_social_graph_data:/data
     healthcheck:
@@ -215,7 +216,7 @@ services:
       WEVIBE_COIN_MIN_DENOM: ${WEVIBE_COIN_MIN_DENOM:-uvibe}
       NODE_ENV: production
     ports:
-      - "3000:3000"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:3000:3000"
     depends_on:
       wevibe-hub:
         condition: service_healthy
@@ -239,7 +240,7 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       WEVIBE_KEYSTORE_PATH: /root/.wevibe/keys
     ports:
-      - "4450:4450"
+      - "${WEVIBE_BIND_HOST:-127.0.0.1}:4450:4450"
     depends_on:
       wevibe-hub:
         condition: service_healthy
