@@ -33,6 +33,25 @@ export async function uploadIdentityBlob(blob: {
   });
 }
 
+export async function fetchIdentityBlob(credentialId: string): Promise<{
+  pubkey: string;
+  hkdf_salt: string;
+  iv: string;
+  ciphertext: string;
+} | null> {
+  const resp = await fetch(`${getHubUrl()}/v1/identity/blob/${encodeURIComponent(credentialId)}`);
+
+  if (resp.status === 404) {
+    return null;
+  }
+
+  if (!resp.ok) {
+    throw new Error(`Hub error ${resp.status}`);
+  }
+
+  return resp.json();
+}
+
 export interface FaucetFundResponse {
   address: string;
   amount: number;

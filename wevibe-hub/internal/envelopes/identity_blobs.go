@@ -18,3 +18,14 @@ func StoreIdentityBlob(ctx context.Context, pool *pgxpool.Pool, pubkey, credenti
 		pubkey, credentialID, hkdfSalt, iv, ciphertext)
 	return err
 }
+
+func GetIdentityBlob(ctx context.Context, pool *pgxpool.Pool, credentialID string) (pubkey, hkdfSalt, iv, ciphertext string, err error) {
+	err = pool.QueryRow(ctx,
+		`SELECT pubkey, hkdf_salt, iv, ciphertext
+		 FROM identity_blobs
+		 WHERE credential_id = $1
+		 LIMIT 1`,
+		credentialID).Scan(&pubkey, &hkdfSalt, &iv, &ciphertext)
+
+	return pubkey, hkdfSalt, iv, ciphertext, err
+}

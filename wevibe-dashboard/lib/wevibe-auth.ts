@@ -6,10 +6,13 @@ import { sha512 } from '@noble/hashes/sha512';
 import {
   type WrappedSeed,
   createIdentityPasskey,
+  decryptSeedWithPrf,
+  discoverPasskeyPrf,
   isPasskeySupported,
   unwrapSeed,
   wrapSeed,
 } from './passkey';
+import { fetchIdentityBlob } from './hub-client';
 
 const DB_NAME = 'wevibe-dashboard';
 const DB_VERSION = 1;
@@ -76,6 +79,11 @@ function base64ToBytes(base64: string): Uint8Array {
   }
 
   return bytes;
+}
+
+async function deriveEd25519PubkeyHex(seed: Uint8Array): Promise<string> {
+  const pubkey = await ed.getPublicKeyAsync(seed);
+  return bytesToHex(pubkey);
 }
 
 function isWrappedSeed(value: unknown): value is WrappedSeed {
@@ -189,9 +197,9 @@ export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
     throw new Error(`generateIdentity returned invalid Ed25519 seed length: ${seed.length}`);
   }
 
-  const pubkeyHex = bytesToHex(id.edPub);
-
   try {
+    const pubkeyHex = await deriveEd25519PubkeyHex(seed);
+
     const { credentialId, prfSupported } = await createIdentityPasskey({
       userId: id.edPub,
       userName: 'wevibe',
@@ -236,6 +244,57 @@ export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
   } finally {
     id.edPriv.fill(0);
     id.xPriv.fill(0);
+  }
+}
+
+export async function adoptIdentityFromPasskey(): Promise<{ pubkeyHex: string }> {
+  const { credentialId, prfOutput } = await discoverPasskeyPrf();
+  try {
+    const credentialIdB64 = bytesToBase64(credentialId);
+    const blob = await fetchIdentityBlob(credentialIdB64);
+
+    if (!blob) {
+      throw new Error('No identity found for this passkey');
+    }
+
+    const wrapped: WrappedSeed = {
+      v: 1,
+      hkdfSaltB64: blob.hkdf_salt,
+      ivB64: blob.iv,
+      ctB64: blob.ciphertext,
+    };
+
+    const seed = await decryptSeedWithPrf(prfOutput, wrapped);
+    if (seed.length !== 32) {
+      seed.fill(0);
+      throw new Error(`Invalid Ed25519 seed length in adopted identity record: ${seed.length}`);
+    }
+
+    try {
+      const pubkeyHex = await deriveEd25519PubkeyHex(seed);
+      if (pubkeyHex.toLowerCase() !== blob.pubkey.toLowerCase()) {
+        throw new Error('identity integrity check failed');
+      }
+
+      const record: StoredIdentityRecord = {
+        id: KEY_ID,
+        pubkeyHex,
+        credentialIdB64,
+        wrapped,
+        createdAt: new Date().toISOString(),
+      };
+
+      await saveIdentityRecord(record);
+      lockIdentity();
+      unlockedSeed = seed;
+
+      return { pubkeyHex };
+    } catch (error) {
+      seed.fill(0);
+      throw error;
+    }
+  } finally {
+    prfOutput.fill(0);
   }
 }
 

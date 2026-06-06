@@ -108,6 +108,36 @@ export async function createIdentityPasskey(opts: {
   };
 }
 
+/** Discovers a resident passkey and returns both credential id and PRF output. */
+export async function discoverPasskeyPrf(): Promise<{ credentialId: Uint8Array; prfOutput: Uint8Array }> {
+  const publicKey: PublicKeyCredentialRequestOptions = {
+    challenge: bytesToArrayBuffer(randomBytes(32)),
+    allowCredentials: [],
+    userVerification: 'required',
+    extensions: {
+      prf: {
+        eval: {
+          first: bytesToArrayBuffer(PRF_EVAL_SALT),
+        },
+      },
+    } as AuthenticationExtensionsClientInputs,
+  };
+
+  const asserted = await navigator.credentials.get({ publicKey });
+  const credential = requirePublicKeyCredential(asserted, 'get');
+  const ext = credential.getClientExtensionResults() as PrfGetExtensionResults;
+  const first = ext.prf?.results?.first;
+
+  if (!(first instanceof ArrayBuffer)) {
+    throw new Error('Passkey PRF result missing: expected prf.results.first ArrayBuffer');
+  }
+
+  return {
+    credentialId: new Uint8Array(credential.rawId),
+    prfOutput: new Uint8Array(first.slice(0)),
+  };
+}
+
 /** Obtains the deterministic PRF output for a credential with fixed evaluation salt. */
 async function getPrfOutput(credentialId: Uint8Array): Promise<Uint8Array> {
   const publicKey: PublicKeyCredentialRequestOptions = {
@@ -189,21 +219,20 @@ export async function wrapSeed(credentialId: Uint8Array, seed: Uint8Array): Prom
   }
 }
 
-/** Decrypts a wrapped seed payload using PRF → HKDF derived KEK and AES-GCM. */
-export async function unwrapSeed(
-  credentialId: Uint8Array,
+/** Decrypts a wrapped seed payload from a provided PRF output. */
+export async function decryptSeedWithPrf(
+  prfOutput: Uint8Array,
   wrapped: WrappedSeed,
 ): Promise<Uint8Array> {
-  if (wrapped.v !== 1) {
-    throw new Error(`Unsupported wrapped seed version: ${wrapped.v}`);
-  }
-
-  const hkdfSalt = base64ToBytes(wrapped.hkdfSaltB64);
-  const iv = base64ToBytes(wrapped.ivB64);
-  const ciphertext = base64ToBytes(wrapped.ctB64);
-  const prfOutput = await getPrfOutput(credentialId);
-
   try {
+    if (wrapped.v !== 1) {
+      throw new Error(`Unsupported wrapped seed version: ${wrapped.v}`);
+    }
+
+    const hkdfSalt = base64ToBytes(wrapped.hkdfSaltB64);
+    const iv = base64ToBytes(wrapped.ivB64);
+    const ciphertext = base64ToBytes(wrapped.ctB64);
+
     const kek = await deriveSeedKek(prfOutput, hkdfSalt);
     const plaintext = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: bytesToArrayBuffer(iv) },
@@ -215,4 +244,13 @@ export async function unwrapSeed(
   } finally {
     prfOutput.fill(0);
   }
+}
+
+/** Decrypts a wrapped seed payload using PRF → HKDF derived KEK and AES-GCM. */
+export async function unwrapSeed(
+  credentialId: Uint8Array,
+  wrapped: WrappedSeed,
+): Promise<Uint8Array> {
+  const prfOutput = await getPrfOutput(credentialId);
+  return decryptSeedWithPrf(prfOutput, wrapped);
 }

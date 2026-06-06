@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
@@ -70,4 +73,37 @@ func StoreIdentityBlob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func GetIdentityBlob(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	credentialID := chi.URLParam(r, "credentialId")
+	if credentialID == "" {
+		http.Error(w, `{"error":"missing credential_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	pubkey, hkdfSalt, iv, ciphertext, err := envelopes.GetIdentityBlob(r.Context(), pool, credentialID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"pubkey":     pubkey,
+		"hkdf_salt":  hkdfSalt,
+		"iv":         iv,
+		"ciphertext": ciphertext,
+	})
 }
