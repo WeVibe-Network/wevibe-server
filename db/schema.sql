@@ -302,6 +302,14 @@ CREATE TABLE IF NOT EXISTS identity_blobs (
 
 CREATE INDEX IF NOT EXISTS idx_identity_blobs_credential ON identity_blobs(credential_id);
 
+CREATE TABLE IF NOT EXISTS pairing_blobs (
+    pairing_id  TEXT        PRIMARY KEY,
+    hkdf_salt   TEXT        NOT NULL,
+    iv          TEXT        NOT NULL,
+    ciphertext  TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ── Recovery shares ─────────────────────────────────────────────────────────
 -- Sealed Shamir shares for threshold recovery of K_master.
 -- Hub stores opaque sealed blobs — cannot read share content.

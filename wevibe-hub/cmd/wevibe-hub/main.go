@@ -19,6 +19,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/config"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/hubsign"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/social"
@@ -54,6 +55,13 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	responseSigner, err := hubsign.NewFromEnv()
+	if err != nil {
+		log.Fatalf("FATAL: hub response signer init: %v", err)
+	}
+	handlers.SetResponsePubkeyHex(responseSigner.PublicKeyHex())
+
 	if err := db.ApplySchema(cfg.DatabaseURL); err != nil {
 		log.Fatalf("FATAL: schema apply failed: %v", err)
 	}
@@ -160,10 +168,11 @@ func main() {
 		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		ExposedHeaders:   []string{},
+		ExposedHeaders:   []string{hubsign.SignatureHeader},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+	r.Use(hubsign.SigningMiddleware(responseSigner))
 
 	r.Get("/health", handlers.Health)
 
@@ -180,6 +189,8 @@ func main() {
 	r.Post("/v1/orgs", handlers.CreateOrg)
 	r.Post("/v1/identity/blob", handlers.StoreIdentityBlob)
 	r.Get("/v1/identity/blob/{credentialId}", handlers.GetIdentityBlob)
+	r.Post("/v1/pair", handlers.StorePairingBlob)
+	r.Get("/v1/pair/{pairingId}", handlers.GetPairingBlob)
 	r.Get("/v1/hub/serving-address", handlers.GetServingAddress)
 	r.Get("/v1/balance/{address}", handlers.GetBalance)
 	r.Post("/v1/faucet/fund", handlers.FundFromFaucet)
