@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useIdentity } from '@/lib/identity-context';
 import { useOrgContext } from '@/lib/org-context';
-import { formatVibe, formatVibeWithDenom } from '@/lib/format';
-import { getBalance, getOrg, getOrgFinances, type OrgFinances, type OrgSummary } from '@/lib/hub-client';
+import { formatVibeWithDenom } from '@/lib/format';
+import { getOrg, getOrgFinances, type OrgFinances, type OrgSummary } from '@/lib/hub-client';
 import type { OrgRole } from '@/lib/org-role';
 import { getContributorStats, type ContributorStats } from '@/lib/social-graph-client';
 
@@ -28,6 +28,8 @@ function rolePillClass(role: OrgRole): string {
 function formatCount(value: number): string {
   return value.toLocaleString();
 }
+
+const fmtVibe2 = (uvibe: number): string => (uvibe / 1e6).toFixed(2);
 
 function HeroValue({ loading, value, className }: { loading: boolean; value: string; className: string }) {
   if (loading) {
@@ -52,13 +54,10 @@ function LeaderTile({ label, value, loading }: { label: string; value: string; l
 export default function MyOrgPage() {
   const router = useRouter();
   const { activeOrg, loading: orgLoading } = useOrgContext();
-  const { identity, walletAddress, loading: identityLoading } = useIdentity();
+  const { identity, loading: identityLoading } = useIdentity();
 
   const [stats, setStats] = useState<ContributorStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
-
-  const [vibeBalance, setVibeBalance] = useState<string | null>(null);
-  const [balanceLoading, setBalanceLoading] = useState(false);
 
   const [orgSummary, setOrgSummary] = useState<OrgSummaryWithMemberCount | null>(null);
   const [orgSummaryLoading, setOrgSummaryLoading] = useState(false);
@@ -98,27 +97,6 @@ export default function MyOrgPage() {
         if (!active) return;
         setStatsLoading(false);
       });
-
-    if (walletAddress) {
-      setBalanceLoading(true);
-      setVibeBalance(null);
-      void getBalance(walletAddress)
-        .then(result => {
-          if (!active) return;
-          setVibeBalance(formatVibe(result.amount));
-        })
-        .catch(() => {
-          if (!active) return;
-          setVibeBalance('—');
-        })
-        .finally(() => {
-          if (!active) return;
-          setBalanceLoading(false);
-        });
-    } else {
-      setBalanceLoading(false);
-      setVibeBalance('—');
-    }
 
     setOrgSummaryLoading(true);
     setOrgSummary(null);
@@ -160,7 +138,7 @@ export default function MyOrgPage() {
     return () => {
       active = false;
     };
-  }, [identityPubkey, walletAddress, orgLoading, activeOrgId, activeOrgRole]);
+  }, [identityPubkey, orgLoading, activeOrgId, activeOrgRole]);
 
   if (identityLoading) {
     return (
@@ -237,6 +215,8 @@ export default function MyOrgPage() {
   const contributions = stats?.contributions ?? 0;
   const serves = stats?.serves ?? 0;
   const reputationXp = stats?.reputation_xp ?? 0;
+  const earnedVibePending = fmtVibe2(stats?.pending_withdrawal ?? 0);
+  const earnedVibeAllTime = fmtVibe2(stats?.all_time_earnings ?? 0);
   const firstSeenEpoch = stats?.first_seen_epoch ?? 0;
   const orgBreadth = stats?.org_breadth ?? 0;
 
@@ -316,11 +296,12 @@ export default function MyOrgPage() {
 
           <div>
             <HeroValue
-              loading={balanceLoading}
-              value={vibeBalance ?? '—'}
+              loading={statsLoading}
+              value={`${earnedVibePending} / ${earnedVibeAllTime}`}
               className="text-4xl font-semibold text-wv-amber"
             />
-            <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.12em] text-wv-dim">VIBE BALANCE</p>
+            <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.12em] text-wv-dim">EARNED VIBE</p>
+            <p className="mt-1 text-xs text-wv-faint">pending / all-time</p>
           </div>
         </div>
         {firstSeenEpoch > 0 && (

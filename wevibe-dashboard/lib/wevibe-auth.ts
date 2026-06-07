@@ -29,6 +29,7 @@ const BASE32_RFC4648_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 ed.etc.sha512Sync = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages));
 
 let unlockedSeed: Uint8Array | null = null;
+let inflightUnlock: Promise<void> | null = null;
 
 interface StoredIdentityRecord {
   id: typeof KEY_ID;
@@ -298,26 +299,38 @@ export async function unlockIdentity(): Promise<void> {
     return;
   }
 
-  const record = await loadIdentityRecord();
-  if (!record) {
-    throw new Error('No dashboard identity. Generate one first.');
+  if (inflightUnlock) {
+    return inflightUnlock;
   }
 
-  const cached = loadSeedFromSession(record.pubkeyHex);
-  if (cached) {
-    unlockedSeed = cached;
-    return;
+  inflightUnlock = (async () => {
+    const record = await loadIdentityRecord();
+    if (!record) {
+      throw new Error('No dashboard identity. Generate one first.');
+    }
+
+    const cached = loadSeedFromSession(record.pubkeyHex);
+    if (cached) {
+      unlockedSeed = cached;
+      return;
+    }
+
+    const credentialId = base64ToBytes(record.credentialIdB64);
+    const seed = await unwrapSeed(credentialId, record.wrapped);
+
+    if (seed.length !== 32) {
+      throw new Error(`Invalid Ed25519 seed length in wrapped identity record: ${seed.length}`);
+    }
+
+    unlockedSeed = seed;
+    persistSeedToSession(record.pubkeyHex, seed);
+  })();
+
+  try {
+    await inflightUnlock;
+  } finally {
+    inflightUnlock = null;
   }
-
-  const credentialId = base64ToBytes(record.credentialIdB64);
-  const seed = await unwrapSeed(credentialId, record.wrapped);
-
-  if (seed.length !== 32) {
-    throw new Error(`Invalid Ed25519 seed length in wrapped identity record: ${seed.length}`);
-  }
-
-  unlockedSeed = seed;
-  persistSeedToSession(record.pubkeyHex, seed);
 }
 
 export function lockIdentity(): void {

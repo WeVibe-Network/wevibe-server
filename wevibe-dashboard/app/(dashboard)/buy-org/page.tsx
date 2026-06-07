@@ -34,6 +34,21 @@ interface CreatedOrgState {
   recoveryPhrase: string;
 }
 
+type RecoveryPhrasePhase = 'reveal' | 'confirm' | 'passed';
+
+function pickDistinctWordIndices(wordCount: number): number[] {
+  if (wordCount < 3) {
+    return [];
+  }
+
+  const selected = new Set<number>();
+  while (selected.size < 3) {
+    selected.add(Math.floor(Math.random() * wordCount));
+  }
+
+  return Array.from(selected);
+}
+
 const AXIS_TICK_SLOTS = new Set([0, 7, 15, 23, SLOT_CAP - 1]);
 
 function readVarint(bytes: Uint8Array, startOffset: number): { value: number; nextOffset: number } {
@@ -171,6 +186,10 @@ export default function BuyOrgPage() {
   const [submitting, setSubmitting] = useState(false);
   const [createdOrg, setCreatedOrg] = useState<CreatedOrgState | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [recoveryPhrasePhase, setRecoveryPhrasePhase] = useState<RecoveryPhrasePhase>('reveal');
+  const [recoveryConfirmIndices, setRecoveryConfirmIndices] = useState<number[]>([]);
+  const [recoveryConfirmInputs, setRecoveryConfirmInputs] = useState<string[]>(['', '', '']);
+  const [recoveryConfirmError, setRecoveryConfirmError] = useState<string | null>(null);
 
   const canBuyOrgFlow = state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && walletLinked;
 
@@ -220,6 +239,14 @@ export default function BuyOrgPage() {
       };
     });
   }, [capReached, chartSlots, currentSlot]);
+
+  const recoveryWords = useMemo(() => {
+    if (!createdOrg?.recoveryPhrase) {
+      return [];
+    }
+
+    return createdOrg.recoveryPhrase.trim().split(/\s+/);
+  }, [createdOrg?.recoveryPhrase]);
 
   const handleCreateIdentity = useCallback(async () => {
     setCreatingIdentity(true);
@@ -338,6 +365,10 @@ export default function BuyOrgPage() {
         recoveryPhrase: setup.recoveryPhrase,
       });
       setCopyStatus('idle');
+      setRecoveryPhrasePhase('reveal');
+      setRecoveryConfirmIndices([]);
+      setRecoveryConfirmInputs(['', '', '']);
+      setRecoveryConfirmError(null);
       setConfirmOpen(false);
       setOrgName('');
       setDomain('');
@@ -396,6 +427,48 @@ export default function BuyOrgPage() {
     }
   }, [createdOrg]);
 
+  const handleStartRecoveryVerification = useCallback(() => {
+    if (recoveryWords.length < 3) {
+      return;
+    }
+
+    setRecoveryConfirmIndices(pickDistinctWordIndices(recoveryWords.length));
+    setRecoveryConfirmInputs(['', '', '']);
+    setRecoveryConfirmError(null);
+    setRecoveryPhrasePhase('confirm');
+  }, [recoveryWords]);
+
+  const handleRecoveryConfirmInputChange = useCallback((inputIndex: number, value: string) => {
+    setRecoveryConfirmInputs((prev) => {
+      const next = [...prev];
+      next[inputIndex] = value;
+      return next;
+    });
+  }, []);
+
+  const handleRecoveryConfirmSubmit = useCallback(() => {
+    if (recoveryConfirmIndices.length !== 3) {
+      return;
+    }
+
+    const allCorrect = recoveryConfirmIndices.every((wordIndex, inputIndex) => {
+      const expectedWord = recoveryWords[wordIndex]?.trim().toLowerCase() ?? '';
+      const enteredWord = recoveryConfirmInputs[inputIndex]?.trim().toLowerCase() ?? '';
+      return enteredWord.length > 0 && enteredWord === expectedWord;
+    });
+
+    if (allCorrect) {
+      setRecoveryPhrasePhase('passed');
+      setRecoveryConfirmError(null);
+      return;
+    }
+
+    setRecoveryPhrasePhase('reveal');
+    setRecoveryConfirmError("That doesn't match. Here is your phrase again — save it and retry.");
+    setRecoveryConfirmInputs(['', '', '']);
+    setRecoveryConfirmIndices([]);
+  }, [recoveryConfirmIndices, recoveryConfirmInputs, recoveryWords]);
+
   const openConfirmModal = useCallback(() => {
     if (capReached) {
       return;
@@ -412,6 +485,7 @@ export default function BuyOrgPage() {
   const confirmButtonLabel = currentPriceUvibe == null
     ? 'Confirm & Buy'
     : `Confirm & Buy (${formatVibe(currentPriceUvibe)})`;
+  const recoveryConfirmReady = recoveryConfirmInputs.every((word) => word.trim().length > 0);
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
@@ -477,18 +551,73 @@ export default function BuyOrgPage() {
                 Save this recovery phrase now. It is shown ONCE and is the ONLY way to recover your
                 organization&apos;s master key. WeVibe cannot recover it for you.
               </p>
-              <code className="mt-3 block break-words rounded-md border border-wv-line bg-wv-panel-2 p-3 font-mono text-sm leading-6 text-wv-text">
-                {createdOrg.recoveryPhrase}
-              </code>
-              <div className="mt-3 flex items-center gap-3">
-                <Button type="button" variant="secondary" onClick={handleCopyRecoveryPhrase}>
-                  Copy
-                </Button>
-                {copyStatus === 'copied' && <span className="text-xs text-wv-green">Recovery phrase copied.</span>}
-                {copyStatus === 'failed' && (
-                  <span className="text-xs text-wv-red">Copy failed. Please copy it manually.</span>
-                )}
-              </div>
+
+              {recoveryPhrasePhase === 'reveal' && (
+                <>
+                  <code className="mt-3 block break-words rounded-md border border-wv-line bg-wv-panel-2 p-3 font-mono text-sm leading-6 text-wv-text">
+                    {createdOrg.recoveryPhrase}
+                  </code>
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <Button type="button" variant="secondary" onClick={handleCopyRecoveryPhrase}>
+                      Copy
+                    </Button>
+                    <Button type="button" variant="success" onClick={handleStartRecoveryVerification}>
+                      I&apos;ve written it down — verify
+                    </Button>
+                    {copyStatus === 'copied' && <span className="text-xs text-wv-green">Recovery phrase copied.</span>}
+                    {copyStatus === 'failed' && (
+                      <span className="text-xs text-wv-red">Copy failed. Please copy it manually.</span>
+                    )}
+                  </div>
+                  {recoveryConfirmError && (
+                    <p className="mt-2 text-sm text-wv-red">
+                      {recoveryConfirmError}
+                    </p>
+                  )}
+                </>
+              )}
+
+              {recoveryPhrasePhase === 'confirm' && recoveryConfirmIndices.length === 3 && (
+                <div className="mt-3 rounded-md border border-wv-line bg-wv-panel-2 p-3">
+                  <p className="text-sm text-wv-dim">
+                    Confirm your saved phrase by entering the requested words.
+                  </p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    {recoveryConfirmIndices.map((wordIndex, inputIndex) => (
+                      <div key={`recovery-check-${wordIndex}`}>
+                        <label
+                          htmlFor={`recovery-check-word-${inputIndex}`}
+                          className="block text-sm font-medium text-wv-text"
+                        >
+                          Word #{wordIndex + 1}
+                        </label>
+                        <input
+                          id={`recovery-check-word-${inputIndex}`}
+                          type="text"
+                          value={recoveryConfirmInputs[inputIndex]}
+                          onChange={(event) => handleRecoveryConfirmInputChange(inputIndex, event.target.value)}
+                          className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4">
+                    <Button
+                      type="button"
+                      onClick={handleRecoveryConfirmSubmit}
+                      disabled={!recoveryConfirmReady}
+                    >
+                      Confirm
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {recoveryPhrasePhase === 'passed' && (
+                <p className="mt-3 text-sm text-wv-green">
+                  Recovery phrase verified. You can continue to your organization.
+                </p>
+              )}
             </div>
 
             <div className="rounded-md border border-wv-line bg-wv-panel-2 p-4">
@@ -497,16 +626,18 @@ export default function BuyOrgPage() {
               <p className="mt-1 font-mono text-sm text-wv-text">{createdOrg.orgId}</p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <Button
-                type="button"
-                onClick={() => {
-                  router.push('/my-org');
-                }}
-              >
-                I&apos;ve saved it — go to my org
-              </Button>
-            </div>
+            {recoveryPhrasePhase === 'passed' && (
+              <div className="flex items-center gap-3">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    router.push('/my-org');
+                  }}
+                >
+                  Go to my org
+                </Button>
+              </div>
+            )}
           </div>
         </Card>
       )}

@@ -51,6 +51,8 @@ export default function ProfilePage() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [localSaveMessage, setLocalSaveMessage] = useState<string | null>(null);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [modelsError, setModelsError] = useState(false);
 
   useEffect(() => {
     async function loadProfile() {
@@ -113,6 +115,42 @@ export default function ProfilePage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!settings || settings.llm_provider !== 'ollama') {
+      setOllamaModels([]);
+      setModelsError(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/ollama-models')
+      .then(response => response.json() as Promise<{ models?: unknown; error?: unknown }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models.filter((model): model is string => typeof model === 'string')
+          : [];
+
+        setOllamaModels(models);
+        setModelsError(Boolean(data.error) || models.length === 0);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setOllamaModels([]);
+        setModelsError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.llm_provider, settings?.ollama_url]);
 
   const handleWalletConnect = useCallback(async () => {
     setWalletActionError(null);
@@ -519,20 +557,51 @@ export default function ProfilePage() {
                       <label htmlFor="profile-ollama-model" className="block text-sm font-medium text-wv-text">
                         Ollama Model
                       </label>
-                      <input
-                        id="profile-ollama-model"
-                        type="text"
-                        value={settings.ollama_model}
-                        onChange={event => setSettings(current => (
-                          current
-                            ? {
-                              ...current,
-                              ollama_model: event.target.value,
-                            }
-                            : current
-                        ))}
-                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-                      />
+                      {ollamaModels.length > 0 ? (
+                        <>
+                          <select
+                            id="profile-ollama-model"
+                            value={settings.ollama_model}
+                            onChange={event => setSettings(current => (
+                              current
+                                ? {
+                                  ...current,
+                                  ollama_model: event.target.value,
+                                }
+                                : current
+                            ))}
+                            className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                          >
+                            {settings.ollama_model && !ollamaModels.includes(settings.ollama_model) && (
+                              <option value={settings.ollama_model}>{settings.ollama_model}</option>
+                            )}
+                            {ollamaModels.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </select>
+                          <p className="mt-2 text-xs text-wv-dim">Detected from your local Ollama.</p>
+                        </>
+                      ) : (
+                        <>
+                          <input
+                            id="profile-ollama-model"
+                            type="text"
+                            value={settings.ollama_model}
+                            onChange={event => setSettings(current => (
+                              current
+                                ? {
+                                  ...current,
+                                  ollama_model: event.target.value,
+                                }
+                                : current
+                            ))}
+                            className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                          />
+                          {modelsError ? (
+                            <p className="mt-2 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : (

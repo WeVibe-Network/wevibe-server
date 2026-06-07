@@ -11,6 +11,11 @@ interface MessageRow {
   data: string;
 }
 
+interface PartRow {
+  pdata: string;
+  mdata: string;
+}
+
 function getDbPath(): string {
   return (
     process.env.OPENCODE_DB_PATH ??
@@ -18,36 +23,83 @@ function getDbPath(): string {
   );
 }
 
-function extractTranscript(messages: MessageRow[]): string {
+function extractTranscript(rows: PartRow[]): string {
   const lines: string[] = [];
 
-  for (const msg of messages) {
-    try {
-      const data = JSON.parse(msg.data);
-      const role = data.role ?? 'unknown';
+  for (const row of rows) {
+    let partData: Record<string, unknown>;
 
-      if (typeof data.content === 'string') {
-        lines.push(`[${role}] ${data.content}`);
-      } else if (Array.isArray(data.content)) {
-        for (const part of data.content) {
-          if (part.type === 'text' && typeof part.text === 'string') {
-            lines.push(`[${role}] ${part.text}`);
-          } else if (part.type === 'tool_use') {
-            lines.push(`[${role}:tool] ${part.name ?? 'tool'}(${JSON.stringify(part.input ?? {}).slice(0, 200)})`);
-          } else if (part.type === 'tool_result') {
-            const content = typeof part.content === 'string'
-              ? part.content.slice(0, 500)
-              : JSON.stringify(part.content ?? '').slice(0, 500);
-            lines.push(`[tool_result] ${content}`);
-          }
-        }
-      }
+    try {
+      partData = JSON.parse(row.pdata) as Record<string, unknown>;
     } catch {
-      // Skip malformed messages
+      // Skip malformed parts
+      continue;
+    }
+
+    let role = 'unknown';
+    try {
+      const messageData = JSON.parse(row.mdata) as { role?: string };
+      role = messageData.role ?? 'unknown';
+    } catch {
+      // Keep unknown role if message payload is malformed
+    }
+
+    if (partData.type === 'text') {
+      const text = partData.text;
+      if (typeof text === 'string' && text.trim().length > 0) {
+        lines.push(`[${role}] ${text}`);
+      }
+      continue;
+    }
+
+    if (partData.type === 'reasoning') {
+      const text = partData.text;
+      if (typeof text === 'string' && text.trim().length > 0) {
+        lines.push(`[${role}:reasoning] ${text}`);
+      }
+      continue;
+    }
+
+    if (partData.type === 'tool') {
+      const tool = partData.tool ?? 'tool';
+      const state = (partData.state ?? {}) as {
+        input?: unknown;
+        output?: unknown;
+      };
+      const input = state.input ?? {};
+
+      let inputStr: string;
+      if (
+        typeof input === 'object' &&
+        input !== null &&
+        'command' in input &&
+        typeof (input as { command?: unknown }).command === 'string'
+      ) {
+        inputStr = (input as { command: string }).command;
+      } else {
+        const inputJson = JSON.stringify(input);
+        inputStr = typeof inputJson === 'string' ? inputJson.slice(0, 300) : '';
+      }
+
+      const out = state.output;
+      let outStr = '';
+      if (typeof out === 'string') {
+        outStr = out.slice(0, 300);
+      } else if (out) {
+        const outJson = JSON.stringify(out);
+        outStr = typeof outJson === 'string' ? outJson.slice(0, 300) : '';
+      }
+
+      lines.push(`[${role}:tool] ${String(tool)}(${inputStr})${outStr ? ` -> ${outStr}` : ''}`);
     }
   }
 
-  return lines.join('\n\n');
+  let transcript = lines.join('\n\n');
+  if (transcript.length > 120000) {
+    transcript = `${transcript.slice(0, 120000)}\n\n[transcript truncated]`;
+  }
+
+  return transcript;
 }
 
 export async function GET(
@@ -77,7 +129,17 @@ export async function GET(
       .prepare('SELECT id, data FROM message WHERE session_id = ? ORDER BY rowid ASC')
       .all(id) as MessageRow[];
 
-    const transcript = extractTranscript(messages);
+    const parts = db
+      .prepare(
+        `SELECT p.data AS pdata, m.data AS mdata
+         FROM part p
+         JOIN message m ON m.id = p.message_id
+         WHERE p.session_id = ?
+         ORDER BY m.time_created ASC, m.rowid ASC, p.time_created ASC, p.rowid ASC`,
+      )
+      .all(id) as PartRow[];
+
+    const transcript = extractTranscript(parts);
 
     return NextResponse.json({
       session_id: id,

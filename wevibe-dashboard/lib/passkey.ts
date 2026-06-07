@@ -90,9 +90,11 @@ export async function createIdentityPasskey(opts: {
       { type: 'public-key', alg: -257 },
     ],
     authenticatorSelection: {
+      authenticatorAttachment: 'platform',
       residentKey: 'required',
       userVerification: 'required',
     },
+    timeout: 60000,
     extensions: {
       prf: {},
     } as AuthenticationExtensionsClientInputs,
@@ -114,6 +116,7 @@ export async function discoverPasskeyPrf(): Promise<{ credentialId: Uint8Array; 
     challenge: bytesToArrayBuffer(randomBytes(32)),
     allowCredentials: [],
     userVerification: 'required',
+    timeout: 60000,
     extensions: {
       prf: {
         eval: {
@@ -146,9 +149,11 @@ async function getPrfOutput(credentialId: Uint8Array): Promise<Uint8Array> {
       {
         type: 'public-key',
         id: bytesToArrayBuffer(credentialId),
+        transports: ['internal'],
       },
     ],
     userVerification: 'required',
+    timeout: 60000,
     extensions: {
       prf: {
         eval: {

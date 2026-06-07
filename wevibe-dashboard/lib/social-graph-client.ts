@@ -10,6 +10,8 @@ export interface ContributorStats {
   serve_xp: number;
   org_breadth: number;
   first_seen_epoch: number;
+  pending_withdrawal: number;
+  all_time_earnings: number;
 }
 
 export async function getContributorStats(pubkey: string): Promise<ContributorStats> {

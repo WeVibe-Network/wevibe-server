@@ -20,6 +20,8 @@ import {
   unlockIdentity,
 } from './wevibe-auth';
 import { getActiveWalletAddress } from './wallet-connect';
+import Button from '@/components/ui/button';
+import Modal from '@/components/ui/modal';
 
 interface IdentityContextValue {
   identity: IdentityMetadata | null;
@@ -38,6 +40,7 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
   const [walletAddress, setWalletAddressState] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState<boolean>(() => isUnlocked());
   const [loading, setLoading] = useState(true);
+  const [walletChangePending, setWalletChangePending] = useState(false);
 
   const mountedRef = useRef(true);
   const walletAddressRef = useRef<string | null>(null);
@@ -104,15 +107,20 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleKeplrKeystoreChange = () => {
+      console.info('[wevibe] keplr_keystorechange event received', { stored: walletAddressRef.current });
+      if (mountedRef.current) {
+        setWalletChangePending(true);
+      }
+
       void (async () => {
         try {
-          const storedWalletAddress = walletAddressRef.current;
-          if (storedWalletAddress) {
-            const activeWalletAddress = await getActiveWalletAddress();
-            if (activeWalletAddress && activeWalletAddress !== storedWalletAddress) {
-              await persistWalletAddress(activeWalletAddress);
-            }
+          const stored = walletAddressRef.current;
+          const live = await getActiveWalletAddress();
+          if (live && live !== stored) {
+            await persistWalletAddress(live);
           }
+        } catch (e) {
+          console.info('[wevibe] keplr_keystorechange persist skipped', e);
         } finally {
           await refresh();
         }
@@ -120,6 +128,7 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
     };
 
     window.addEventListener('keplr_keystorechange', handleKeplrKeystoreChange);
+    console.info('[wevibe] keplr_keystorechange listener registered');
 
     return () => {
       window.removeEventListener('keplr_keystorechange', handleKeplrKeystoreChange);
@@ -139,6 +148,24 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
   return (
     <IdentityContext.Provider value={value}>
       {children}
+      <Modal
+        open={walletChangePending}
+        title="Wallet address changed"
+        onClose={() => setWalletChangePending(false)}
+        footer={(
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setWalletChangePending(false)}
+            >
+              Dismiss
+            </Button>
+            <Button onClick={() => window.location.reload()}>Refresh</Button>
+          </div>
+        )}
+      >
+        <p>Keplr&apos;s active wallet address changed. Refresh the page to pick up the new address.</p>
+      </Modal>
     </IdentityContext.Provider>
   );
 }
