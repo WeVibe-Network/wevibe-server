@@ -4,3 +4,8 @@
 /blob-report/
 /e2e/.auth/
 .next/
+
+# Local environment (never commit machine-specific config)
+.env.local
+.env*.local
+node_modules/
