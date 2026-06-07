@@ -127,6 +127,7 @@ export interface MemberRecord {
   role: OrgRole;
   join_epoch: number;
   active: boolean;
+  membership_active?: boolean;
   joined_at: string;
   wallet_address?: string;
   dismissed_reports_count?: number;

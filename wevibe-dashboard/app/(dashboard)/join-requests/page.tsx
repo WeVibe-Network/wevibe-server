@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { listJoinRequests, approveJoinRequest, denyJoinRequest, JoinRequest } from '@/lib/hub-client';
 import { connectWallet } from '@/lib/wallet-connect';
-import { buildAddMemberMsg, directBroadcast } from '@/lib/chain-client';
+import { buildAddMemberMsg, directBroadcast, getOrgAccountAddress } from '@/lib/chain-client';
 import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
 
@@ -68,7 +68,8 @@ export default function JoinRequestsPage() {
         request.requester_pubkey,
         'member',
       );
-      await directBroadcast(walletConn.address, [msgAddMember]);
+      const orgAccount = await getOrgAccountAddress(orgId);
+      await directBroadcast(walletConn.address, [msgAddMember], orgAccount);
 
       setRequests(prev => prev.filter(r => r.request_id !== requestId));
       setApprovalMode(prev => {
@@ -79,7 +80,7 @@ export default function JoinRequestsPage() {
     } catch (err) {
       console.error('Failed to approve:', err);
       if (hubApproved) {
-        alert('Request was approved, but on-chain membership sync failed. Please retry the on-chain add member step.');
+        alert('Request was approved in hub, but on-chain add-member failed — the org account may need VIBE for gas.');
       } else {
         alert('Failed to approve request');
       }

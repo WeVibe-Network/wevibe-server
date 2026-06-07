@@ -281,9 +281,14 @@ export default function MembersPage() {
                   </td>
                   <td className="px-4 py-3 font-mono text-wv-dim">{m.join_epoch}</td>
                   <td className="px-4 py-3">
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${m.active ? 'bg-[rgba(54,211,153,0.12)] text-wv-green' : 'bg-wv-panel-2 text-wv-faint'}`}>
-                      {m.active ? 'active' : 'inactive'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${m.active ? 'bg-[rgba(54,211,153,0.12)] text-wv-green' : 'bg-wv-panel-2 text-wv-faint'}`}>
+                        {m.active ? 'active' : 'inactive'}
+                      </span>
+                      <span className={`text-[11px] px-2 py-0.5 rounded font-medium ${m.membership_active ? 'bg-[rgba(54,211,153,0.08)] text-wv-green' : 'bg-wv-panel-2 text-wv-faint'}`}>
+                        {m.membership_active ? 'recall: on' : 'recall: off'}
+                      </span>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-xs">
                     {(m.dismissed_reports_count ?? 0) > 0 ? (

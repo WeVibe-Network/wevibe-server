@@ -37,6 +37,28 @@ export function getChainRpcEndpoint(): string {
   return rpc;
 }
 
+interface OrgAccountQueryResponse {
+  account_address?: string;
+}
+
+export async function getOrgAccountAddress(orgId: string): Promise<string> {
+  const chainRest = getConfig().chainRest;
+  const response = await fetch(`${chainRest}/wevibe/org/v1/account/${encodeURIComponent(orgId)}`);
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({ error: response.statusText, message: response.statusText }));
+    throw new Error(errorBody.error ?? errorBody.message ?? `Chain REST error ${response.status}`);
+  }
+
+  const body = (await response.json()) as OrgAccountQueryResponse;
+  const accountAddress = body.account_address?.trim();
+  if (!accountAddress) {
+    throw new Error('Chain REST response missing account_address');
+  }
+
+  return accountAddress;
+}
+
 // The wevibe Msg `value` fields are already-encoded protobuf bytes (hand-rolled
 // encoders above). This passthrough GeneratedType returns those bytes verbatim so
 // CosmJS's Registry can place them into the tx body without re-encoding.
@@ -472,7 +494,8 @@ export function buildServeBatchMsg(
 
 export async function directBroadcast(
   walletAddress: string,
-  msgs: EncodeObject[]
+  msgs: EncodeObject[],
+  feeGranter?: string,
 ): Promise<{ txHash: string; code: number; rawLog: string; deliverTxData?: Uint8Array }> {
   const decodeRpcDataField = (data: unknown): Uint8Array | undefined => {
     if (data == null) {
@@ -514,10 +537,19 @@ export async function directBroadcast(
   const signer = getOfflineSigner(chainId);
   const client = await getSigningClient(signer);
 
-  const fee = {
+  const fee: {
+    amount: { denom: string; amount: string }[];
+    gas: string;
+    granter?: string;
+  } = {
     amount: [{ denom: 'uvibe', amount: '5000' }],
     gas: '200000',
   };
+
+  const normalizedFeeGranter = feeGranter?.trim();
+  if (normalizedFeeGranter) {
+    fee.granter = normalizedFeeGranter;
+  }
 
   const [account] = await signer.getAccounts();
   if (!account) {
