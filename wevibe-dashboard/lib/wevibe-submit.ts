@@ -82,9 +82,6 @@ export async function sealDekToModPubkey(
     );
   }
 
-  const ephPrivRaw = await crypto.subtle.exportKey('raw', ephKeyPair.privateKey);
-  const ephPrivBytes = new Uint8Array(ephPrivRaw);
-
   const modKey = await crypto.subtle.importKey(
     'raw',
     modPubkeyBytes.buffer as ArrayBuffer,
