@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-	"github.com/go-chi/chi/v5"
 )
 
 type KeywordResultSubmission struct {
@@ -43,21 +43,23 @@ type UpdateKeywordsRequest struct {
 }
 
 type SubmissionRecord struct {
-	SubmissionHash     string           `json:"submission_hash"`
-	OrgID              string           `json:"org_id"`
-	EpochID            int              `json:"epoch_id"`
-	ContributorPubkey  string           `json:"contributor_pubkey"`
-	Status             string           `json:"status"`
-	MemoryType         string           `json:"memory_type"`
-	MatchedKeywords    []string         `json:"matched_keywords,omitempty"`
-	ExtractionResult   *json.RawMessage `json:"extraction_result,omitempty"`
-	ExtractionFeedback *string          `json:"extraction_feedback,omitempty"`
-	ModeratorPubkey    *string          `json:"moderator_pubkey,omitempty"`
-	ApprovedAt         *time.Time       `json:"approved_at,omitempty"`
-	VerifiedAt         *time.Time       `json:"verified_at,omitempty"`
-	DenialReason       *string          `json:"denial_reason,omitempty"`
-	UpdatedAt          time.Time        `json:"updated_at"`
-	CreatedAt          time.Time        `json:"created_at"`
+	SubmissionHash       string           `json:"submission_hash"`
+	OrgID                string           `json:"org_id"`
+	EpochID              int              `json:"epoch_id"`
+	ContributorPubkey    string           `json:"contributor_pubkey"`
+	Status               string           `json:"status"`
+	MemoryType           string           `json:"memory_type"`
+	PreferenceConfidence float64          `json:"preference_confidence"`
+	Derivation           string           `json:"derivation"`
+	MatchedKeywords      []string         `json:"matched_keywords,omitempty"`
+	ExtractionResult     *json.RawMessage `json:"extraction_result,omitempty"`
+	ExtractionFeedback   *string          `json:"extraction_feedback,omitempty"`
+	ModeratorPubkey      *string          `json:"moderator_pubkey,omitempty"`
+	ApprovedAt           *time.Time       `json:"approved_at,omitempty"`
+	VerifiedAt           *time.Time       `json:"verified_at,omitempty"`
+	DenialReason         *string          `json:"denial_reason,omitempty"`
+	UpdatedAt            time.Time        `json:"updated_at"`
+	CreatedAt            time.Time        `json:"created_at"`
 }
 
 var keywordFormatRegex = regexp.MustCompile(protocol.KeywordFormatRegex)
@@ -721,7 +723,7 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	if statusFilter != "" {
 		rows, err = pool.Query(r.Context(), `
 			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, status, memory_type,
-			       extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
+			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
 			       COALESCE(se.matched_keywords, ARRAY[]::TEXT[])
 			FROM pending_submissions ps
 			LEFT JOIN LATERAL (
@@ -739,7 +741,7 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	} else {
 		rows, err = pool.Query(r.Context(), `
 			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, status, memory_type,
-			       extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
+			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
 			       COALESCE(se.matched_keywords, ARRAY[]::TEXT[])
 			FROM pending_submissions ps
 			LEFT JOIN LATERAL (
@@ -774,7 +776,7 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	for qr.Next() {
 		var sub SubmissionRecord
 		err := qr.Scan(&sub.SubmissionHash, &sub.OrgID, &sub.EpochID, &sub.ContributorPubkey,
-			&sub.Status, &sub.MemoryType, &sub.ExtractionResult, &sub.ExtractionFeedback,
+			&sub.Status, &sub.MemoryType, &sub.PreferenceConfidence, &sub.Derivation, &sub.ExtractionResult, &sub.ExtractionFeedback,
 			&sub.ModeratorPubkey, &sub.ApprovedAt, &sub.VerifiedAt, &sub.UpdatedAt, &sub.CreatedAt,
 			&sub.MatchedKeywords)
 		if err != nil {
@@ -835,7 +837,7 @@ func ListMySubmissions(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := pool.Query(r.Context(), `
 		SELECT submission_hash, org_id, epoch_id, contributor_pubkey, status, memory_type,
-		       extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at,
+		       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at,
 		       denial_reason, updated_at, created_at
 		FROM pending_submissions
 		WHERE org_id = $1 AND contributor_pubkey = $2
@@ -852,7 +854,7 @@ func ListMySubmissions(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var sub SubmissionRecord
 		err := rows.Scan(&sub.SubmissionHash, &sub.OrgID, &sub.EpochID, &sub.ContributorPubkey,
-			&sub.Status, &sub.MemoryType, &sub.ExtractionResult, &sub.ExtractionFeedback,
+			&sub.Status, &sub.MemoryType, &sub.PreferenceConfidence, &sub.Derivation, &sub.ExtractionResult, &sub.ExtractionFeedback,
 			&sub.ModeratorPubkey, &sub.ApprovedAt, &sub.VerifiedAt, &sub.DenialReason, &sub.UpdatedAt, &sub.CreatedAt)
 		if err != nil {
 			continue

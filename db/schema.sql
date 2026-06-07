@@ -127,8 +127,11 @@ CREATE TABLE IF NOT EXISTS pending_submissions (
     stack_hint              TEXT[]      NOT NULL DEFAULT '{}',
     memory_type             TEXT        NOT NULL DEFAULT 'memory'
                                         CHECK (memory_type = 'memory'),
+    preference_confidence   REAL        NOT NULL DEFAULT 0,
+    derivation              TEXT        NOT NULL DEFAULT 'verbatim'
+                                        CHECK (derivation IN ('verbatim', 'edited-after-extraction')),
     status                  TEXT        NOT NULL DEFAULT 'pending'
-                                    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied', 'ready', 'approved')),
+                                     CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied', 'ready', 'approved')),
     denial_reason           TEXT,
     moderator_pubkey        TEXT,
     approved_at             TIMESTAMPTZ,

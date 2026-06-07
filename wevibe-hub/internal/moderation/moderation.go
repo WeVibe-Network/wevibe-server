@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -79,17 +80,35 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		return fmt.Errorf("wrapped_dek_hash mismatch")
 	}
 
+	preferenceConfidence := req.PreferenceConfidence
+	if math.IsNaN(preferenceConfidence) || math.IsInf(preferenceConfidence, 0) {
+		preferenceConfidence = 0
+	}
+	if preferenceConfidence < 0 {
+		preferenceConfidence = 0
+	}
+	if preferenceConfidence > 1 {
+		preferenceConfidence = 1
+	}
+
+	derivation := req.Derivation
+	switch derivation {
+	case "verbatim", "edited-after-extraction":
+	default:
+		derivation = "verbatim"
+	}
+
 	_, err = pool.Exec(ctx, `
 		INSERT INTO pending_submissions
 			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex,
 			 plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash,
-			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, sanitization_findings)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`,
 		req.SubmissionHash, req.OrgID, req.EpochID, req.ContributorPubkey,
 		req.Ciphertext, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash,
 		req.WrappedDekMod, req.ContributorSig, req.StackHint, req.MemoryType,
-		sanitizationFindings,
+		preferenceConfidence, derivation, sanitizationFindings,
 	)
 	return err
 }
@@ -107,7 +126,7 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
         SELECT ps.submission_hash, ps.org_id, ps.epoch_id, ps.contributor_pubkey,
                COALESCE(m.wallet_address, '') AS contributor_wallet,
                ps.ciphertext_hex, ps.wrapped_dek_mod,
-               ps.stack_hint, ps.memory_type, ps.created_at, ps.status,
+	               ps.stack_hint, ps.memory_type, ps.preference_confidence, ps.derivation, ps.created_at, ps.status,
                COALESCE(v.vote_count, 0) AS vote_count,
                o.required_approvals,
                COALESCE(v.voter_pubkeys, ARRAY[]::TEXT[]) AS voter_pubkeys
@@ -134,7 +153,7 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 		if err := rows.Scan(
 			&item.SubmissionHash, &item.OrgID, &item.EpochID,
 			&item.ContributorPubkey, &item.ContributorWallet, &item.CiphertextHex, &item.WrappedDekMod,
-			&item.StackHint, &item.MemoryType, &item.CreatedAt, &item.Status,
+			&item.StackHint, &item.MemoryType, &item.PreferenceConfidence, &item.Derivation, &item.CreatedAt, &item.Status,
 			&item.Votes, &item.RequiredApprovals, &item.VoterPubkeys,
 		); err != nil {
 			return nil, err

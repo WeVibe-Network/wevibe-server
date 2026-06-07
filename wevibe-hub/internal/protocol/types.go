@@ -139,19 +139,21 @@ type MemberEnvelopePair struct {
 }
 
 type SubmitMemoryRequest struct {
-	OrgID             string   `json:"org_id"`
-	EpochID           int      `json:"epoch_id"`
-	Ciphertext        string   `json:"ciphertext"`
-	PlaintextHash     string   `json:"plaintext_hash"`
-	Salt              string   `json:"salt"`
-	CiphertextHash    string   `json:"ciphertext_hash"`
-	WrappedDekHash    string   `json:"wrapped_dek_hash"`
-	WrappedDekMod     string   `json:"wrapped_dek_mod"`
-	SubmissionHash    string   `json:"submission_hash"`
-	ContributorPubkey string   `json:"contributor_pubkey"`
-	ContributorSig    string   `json:"contributor_sig"`
-	StackHint         []string `json:"stack_hint"`
-	MemoryType        string   `json:"memory_type"`
+	OrgID                string   `json:"org_id"`
+	EpochID              int      `json:"epoch_id"`
+	Ciphertext           string   `json:"ciphertext"`
+	PlaintextHash        string   `json:"plaintext_hash"`
+	Salt                 string   `json:"salt"`
+	CiphertextHash       string   `json:"ciphertext_hash"`
+	WrappedDekHash       string   `json:"wrapped_dek_hash"`
+	WrappedDekMod        string   `json:"wrapped_dek_mod"`
+	SubmissionHash       string   `json:"submission_hash"`
+	PreferenceConfidence float64  `json:"preference_confidence"`
+	Derivation           string   `json:"derivation"`
+	ContributorPubkey    string   `json:"contributor_pubkey"`
+	ContributorSig       string   `json:"contributor_sig"`
+	StackHint            []string `json:"stack_hint"`
+	MemoryType           string   `json:"memory_type"`
 }
 
 type SubmitMemoryResponse struct {
@@ -179,6 +181,8 @@ type PendingQueueItem struct {
 	WrappedDekMod          string    `json:"wrapped_dek_mod"`
 	StackHint              []string  `json:"stack_hint"`
 	MemoryType             string    `json:"memory_type"`
+	PreferenceConfidence   float64   `json:"preference_confidence"`
+	Derivation             string    `json:"derivation"`
 	CreatedAt              time.Time `json:"created_at"`
 	Status                 string    `json:"status"`
 	Votes                  int       `json:"votes"`
