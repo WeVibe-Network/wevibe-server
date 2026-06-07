@@ -34,7 +34,9 @@ function bytesEqual(a, b) {
 }
 
 async function main() {
-  const sdkModule = await import('/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-sdk/pkg-nodejs/wevibe_sdk_wasm.js');
+  const sdkPath = process.env.WEVIBE_SDK_WASM
+    ?? new URL('../vendor/wevibe-sdk-wasm/wevibe_sdk_wasm.js', import.meta.url).href;
+  const sdkModule = await import(sdkPath);
   const sdk = sdkModule.default ?? sdkModule;
 
   let hasFailure = false;

@@ -16,7 +16,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	mnemonic, err := loadMnemonic("/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-chain/scripts/dev-mnemonics.env")
+	mnemonicPath := os.Getenv("WEVIBE_DEV_MNEMONICS")
+	if mnemonicPath == "" {
+		mnemonicPath = "dev-mnemonics.env"
+	}
+	mnemonic, err := loadMnemonic(mnemonicPath)
 	if err != nil {
 		fmt.Printf("FAIL: load mnemonic: %v\n", err)
 		os.Exit(1)

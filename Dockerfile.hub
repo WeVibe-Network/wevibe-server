@@ -13,10 +13,8 @@ COPY wevibe-sdk/ ./wevibe-sdk/
 # Copy hub go.mod and go.sum - put them directly in /build
 COPY wevibe-server/wevibe-hub/go.mod wevibe-server/wevibe-hub/go.sum ./
 
-# Fix replace directives to use local paths inside container
+# Rewrite the relative replace directives to container-local paths
 RUN sed -i \
-    -e 's|/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-chain|./wevibe-chain|g' \
-    -e 's|/Users/jerrysmith/Desktop/wevibe-workspace/wevibe-sdk|./wevibe-sdk|g' \
     -e 's|../../wevibe-chain|./wevibe-chain|g' \
     -e 's|../../wevibe-sdk|./wevibe-sdk|g' go.mod
 

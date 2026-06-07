@@ -93,7 +93,7 @@ function base64ToBytes(base64: string): Uint8Array {
 
 // Seed cached in sessionStorage (cleared on tab close) to avoid a biometric
 // prompt on every refresh. This exposes the raw seed to XSS for the tab
-// session — an accepted product tradeoff (Walter).
+// session — an accepted product tradeoff.
 function persistSeedToSession(pubkeyHex: string, seed: Uint8Array): void {
   if (typeof sessionStorage === 'undefined') {
     return;
