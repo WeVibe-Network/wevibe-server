@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { listMembers, transferLeadership, closeOrg, type MemberRecord } from '@/lib/hub-client'
+import { listMembers, transferLeadership, closeOrg, enableMemberRecall, type MemberRecord } from '@/lib/hub-client'
 import { getIdentity } from '@/lib/wevibe-auth'
 import { connectWallet } from '@/lib/wallet-connect'
 import {
@@ -9,6 +9,7 @@ import {
   buildRemoveMemberMsg,
   buildUpdateMemberRoleMsg,
   directBroadcast,
+  getOrgAccountAddress,
 } from '@/lib/chain-client'
 import type { OrgRole } from '@/lib/org-role'
 import { useOrgContext } from '@/lib/org-context'
@@ -48,11 +49,25 @@ export default function MembersPage() {
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
   const [removeLoading, setRemoveLoading] = useState(false)
 
+  const [enableRecallTarget, setEnableRecallTarget] = useState<string | null>(null)
+
   const [transferTarget, setTransferTarget] = useState<string | null>(null)
   const [transferLoading, setTransferLoading] = useState(false)
 
   const [closeDialogOpen, setCloseDialogOpen] = useState(false)
   const [closeLoading, setCloseLoading] = useState(false)
+
+  async function resolveOrgAccountForGas() {
+    try {
+      const orgAccount = (await getOrgAccountAddress(orgId)).trim()
+      if (!orgAccount) {
+        throw new Error('missing org account')
+      }
+      return orgAccount
+    } catch {
+      throw new Error('could not resolve org account for gas')
+    }
+  }
 
   async function refreshMembers() {
     setLoading(true)
@@ -101,7 +116,8 @@ export default function MembersPage() {
     try {
       const walletConn = await connectWallet()
       const msgAddMember = buildAddMemberMsg(walletConn.address, orgId, invitePubkey, inviteRole)
-      await directBroadcast(walletConn.address, [msgAddMember])
+      const orgAccount = await resolveOrgAccountForGas()
+      await directBroadcast(walletConn.address, [msgAddMember], orgAccount)
       setInviteSuccess(`Invited ${invitePubkey.slice(0, 12)}... as ${inviteRole}`)
       setInvitePubkey('')
       setInviteX25519Pubkey('')
@@ -119,7 +135,8 @@ export default function MembersPage() {
     try {
       const walletConn = await connectWallet()
       const msgUpdateMemberRole = buildUpdateMemberRoleMsg(walletConn.address, orgId, pubkey, newRole)
-      await directBroadcast(walletConn.address, [msgUpdateMemberRole])
+      const orgAccount = await resolveOrgAccountForGas()
+      await directBroadcast(walletConn.address, [msgUpdateMemberRole], orgAccount)
       setRoleChangeTarget(null)
       await refreshMembers()
     } catch (err) {
@@ -134,13 +151,34 @@ export default function MembersPage() {
     try {
       const walletConn = await connectWallet()
       const msgRemoveMember = buildRemoveMemberMsg(walletConn.address, orgId, pubkey)
-      await directBroadcast(walletConn.address, [msgRemoveMember])
+      const orgAccount = await resolveOrgAccountForGas()
+      await directBroadcast(walletConn.address, [msgRemoveMember], orgAccount)
       setRemoveTarget(null)
       await refreshMembers()
     } catch (err) {
       setError((err as Error).message)
     } finally {
       setRemoveLoading(false)
+    }
+  }
+
+  async function handleEnableRecall(pubkey: string) {
+    setEnableRecallTarget(pubkey)
+    setError('')
+    try {
+      await enableMemberRecall(orgId, pubkey)
+      await refreshMembers()
+    } catch (err) {
+      const status = typeof err === 'object' && err !== null
+        ? (err as { status?: number }).status
+        : undefined
+      if (status === 402) {
+        setError('Org has insufficient credits to enable recall')
+      } else {
+        setError((err as Error).message)
+      }
+    } finally {
+      setEnableRecallTarget(null)
     }
   }
 
@@ -303,6 +341,16 @@ export default function MembersPage() {
                   {viewerRole === 'leader' && (
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
+                        {!m.membership_active && (
+                          <button
+                            data-testid="enable-recall-trigger"
+                            onClick={() => handleEnableRecall(m.pubkey)}
+                            disabled={enableRecallTarget === m.pubkey}
+                            className="text-xs text-wv-green hover:opacity-80 disabled:opacity-50 disabled:pointer-events-none"
+                          >
+                            {enableRecallTarget === m.pubkey ? 'Enabling...' : 'Enable recall'}
+                          </button>
+                        )}
                         <button
                           data-testid="role-change-trigger"
                           onClick={() => setRoleChangeTarget(m.pubkey)}

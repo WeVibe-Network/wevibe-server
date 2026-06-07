@@ -892,6 +892,35 @@ export async function approveJoinRequest(orgId: string, requestId: string, trial
   });
 }
 
+export async function enableMemberRecall(orgId: string, pubkey: string): Promise<void> {
+  const identity = await getIdentity();
+  if (!identity) {
+    throw new Error('No identity');
+  }
+
+  const authHeaders = await buildAuthHeaders();
+  const response = await fetch(
+    `${getHubUrl()}/v1/orgs/${orgId}/members/${encodeURIComponent(pubkey)}/enable-recall`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        signed_by: identity.pubkeyHex,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+    const error = new Error(err.error ?? `Hub error ${response.status}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+}
+
 export async function denyJoinRequest(orgId: string, requestId: string, reason?: string): Promise<void> {
   const identity = await getIdentity();
   if (!identity) {

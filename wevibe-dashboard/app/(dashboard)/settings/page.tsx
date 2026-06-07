@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { getHubResponsePubkey, getHubServingAddress, getOrg, getOrgChainConfig } from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
 import { connectWallet } from '@/lib/wallet-connect';
-import { buildSetOrgConfigMsg, buildSetServingInfoMsg, buildSetServingKeyMsg, directBroadcast } from '@/lib/chain-client';
+import { buildSetOrgConfigMsg, buildSetServingInfoMsg, buildSetServingKeyMsg, directBroadcast, getOrgAccountAddress } from '@/lib/chain-client';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useOrgContext } from '@/lib/org-context';
 import { GuardCard } from '@/components/ui/states';
@@ -62,6 +62,22 @@ export default function SettingsPage() {
   const [hubServingInfoError, setHubServingInfoError] = useState<string | null>(null);
   const [hubServingInfoSuccess, setHubServingInfoSuccess] = useState<string | null>(null);
   const [savingServingInfo, setSavingServingInfo] = useState(false);
+
+  const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
+    if (!activeOrg) {
+      throw new Error('could not resolve org account for gas');
+    }
+
+    try {
+      const orgAccount = (await getOrgAccountAddress(activeOrg.org_id)).trim();
+      if (!orgAccount) {
+        throw new Error('missing org account');
+      }
+      return orgAccount;
+    } catch {
+      throw new Error('could not resolve org account for gas');
+    }
+  }, [activeOrg]);
 
   useEffect(() => {
     if (!activeOrg) {
@@ -167,14 +183,15 @@ export default function SettingsPage() {
         0,
       );
 
-      const result = await directBroadcast(walletConn.address, [msgSetOrgConfig]);
+      const orgAccount = await resolveOrgAccountForGas();
+      const result = await directBroadcast(walletConn.address, [msgSetOrgConfig], orgAccount);
       setConfigSuccess(`Moderation settings updated. Tx: ${result.txHash.slice(0, 16)}...`);
     } catch (err) {
       setConfigError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingConfig(false);
     }
-  }, [activeOrg, reportVoteThreshold, requiredApprovals]);
+  }, [activeOrg, reportVoteThreshold, requiredApprovals, resolveOrgAccountForGas]);
 
   const handleChainConfigSave = useCallback(async (nextServeAttestationRequired: boolean) => {
     if (!activeOrg) {
@@ -198,7 +215,8 @@ export default function SettingsPage() {
         0,
       );
 
-      const result = await directBroadcast(walletConn.address, [msgSetOrgConfig]);
+      const orgAccount = await resolveOrgAccountForGas();
+      const result = await directBroadcast(walletConn.address, [msgSetOrgConfig], orgAccount);
       setServeAttestationRequired(nextServeAttestationRequired);
       txSuccess(
         toastId,
@@ -209,7 +227,7 @@ export default function SettingsPage() {
     } finally {
       setSavingChainConfig(false);
     }
-  }, [activeOrg]);
+  }, [activeOrg, resolveOrgAccountForGas]);
 
   const handleServingKeySave = useCallback(async () => {
     if (!activeOrg) {
@@ -234,7 +252,8 @@ export default function SettingsPage() {
         nextServingKey,
       );
 
-      const result = await directBroadcast(walletConn.address, [msgSetServingKey]);
+      const orgAccount = await resolveOrgAccountForGas();
+      const result = await directBroadcast(walletConn.address, [msgSetServingKey], orgAccount);
       setHubServingAddress(nextServingKey);
       setShowServingKeyEditor(false);
       setNewServingKey('');
@@ -244,7 +263,7 @@ export default function SettingsPage() {
     } finally {
       setSavingServingKey(false);
     }
-  }, [activeOrg, newServingKey]);
+  }, [activeOrg, newServingKey, resolveOrgAccountForGas]);
 
   const handleHubEndpointChange = useCallback((index: number, value: string) => {
     setNewHubEndpoints((previous) => previous.map((endpoint, endpointIndex) => (
@@ -308,7 +327,8 @@ export default function SettingsPage() {
         normalizedResponsePubkey,
       );
 
-      const result = await directBroadcast(walletConn.address, [msgSetServingInfo]);
+      const orgAccount = await resolveOrgAccountForGas();
+      const result = await directBroadcast(walletConn.address, [msgSetServingInfo], orgAccount);
       setHubEndpoints(normalizedEndpoints);
       setHubResponsePubkey(normalizedResponsePubkey);
       setShowServingInfoEditor(false);
@@ -320,7 +340,7 @@ export default function SettingsPage() {
     } finally {
       setSavingServingInfo(false);
     }
-  }, [activeOrg, newHubEndpoints, newHubResponsePubkey]);
+  }, [activeOrg, newHubEndpoints, newHubResponsePubkey, resolveOrgAccountForGas]);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">

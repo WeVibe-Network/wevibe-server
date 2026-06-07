@@ -9,7 +9,7 @@ import {
   listReports,
   updateReport,
 } from '@/lib/hub-client';
-import { buildReportMemoryMsg, directBroadcast } from '@/lib/chain-client';
+import { buildReportMemoryMsg, directBroadcast, getOrgAccountAddress } from '@/lib/chain-client';
 import { connectWallet } from '@/lib/wallet-connect';
 import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
@@ -76,6 +76,22 @@ export default function ReportsPage() {
   const [identityReady, setIdentityReady] = useState(false);
 
   const statusFilter = useMemo(() => (activeTab === 'all' ? undefined : activeTab), [activeTab]);
+
+  const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
+    if (!orgId) {
+      throw new Error('could not resolve org account for gas');
+    }
+
+    try {
+      const orgAccount = (await getOrgAccountAddress(orgId)).trim();
+      if (!orgAccount) {
+        throw new Error('missing org account');
+      }
+      return orgAccount;
+    } catch {
+      throw new Error('could not resolve org account for gas');
+    }
+  }, [orgId]);
 
   const refreshReports = useCallback(async () => {
     if (!orgId || !identityReady) return;
@@ -178,7 +194,8 @@ const handleAction = useCallback(
           reason,
         });
 
-        const result = await directBroadcast(walletConn.address, [msgReportMemory]);
+        const orgAccount = await resolveOrgAccountForGas();
+        const result = await directBroadcast(walletConn.address, [msgReportMemory], orgAccount);
         const txHash = result.txHash;
         setNotice(`Report committed to chain. TX: ${txHash.slice(0, 12)}...`);
         await refreshReports();
@@ -188,7 +205,7 @@ const handleAction = useCallback(
         setBusy(null);
       }
     },
-    [orgId, refreshReports],
+    [orgId, refreshReports, resolveOrgAccountForGas],
   );
 
   if (!orgId) {

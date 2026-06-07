@@ -21,6 +21,7 @@ import {
   buildDenialBatchMsg,
   buildSubmitCommitmentMsg,
   directBroadcast,
+  getOrgAccountAddress,
 } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
 import { getConfig } from '@/lib/config';
@@ -59,6 +60,22 @@ export default function ChainSubmitPage() {
   const [denialResult, setDenialResult] = useState<{ txHash?: string; error?: string } | null>(null);
 
   const clientRef = { current: getMcpClient() };
+
+  const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
+    if (!orgId) {
+      throw new Error('could not resolve org account for gas');
+    }
+
+    try {
+      const orgAccount = (await getOrgAccountAddress(orgId)).trim();
+      if (!orgAccount) {
+        throw new Error('missing org account');
+      }
+      return orgAccount;
+    } catch {
+      throw new Error('could not resolve org account for gas');
+    }
+  }, [orgId]);
 
   const loadAll = useCallback(async () => {
     if (!orgId) return;
@@ -273,7 +290,8 @@ export default function ChainSubmitPage() {
         return [commitment, approval];
       });
 
-      const result = await directBroadcast(walletAddress, msgs);
+      const orgAccount = await resolveOrgAccountForGas();
+      const result = await directBroadcast(walletAddress, msgs, orgAccount);
       const txHash = result.txHash;
 
       if (txHash) {
@@ -287,7 +305,7 @@ export default function ChainSubmitPage() {
     } finally {
       setBusy(null);
     }
-  }, [orgId, pendingChain]);
+  }, [orgId, pendingChain, resolveOrgAccountForGas]);
 
   const handleDenialBatchSubmit = useCallback(async () => {
     if (!orgId) return;
