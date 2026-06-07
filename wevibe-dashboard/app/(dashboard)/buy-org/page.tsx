@@ -28,6 +28,12 @@ const CREATE_CONFIRM_POLL_INTERVAL_MS = 1000;
 
 type ChartBarState = 'sold' | 'current' | 'future';
 
+interface CreatedOrgState {
+  orgId: string;
+  orgName: string;
+  recoveryPhrase: string;
+}
+
 const AXIS_TICK_SLOTS = new Set([0, 7, 15, 23, SLOT_CAP - 1]);
 
 function readVarint(bytes: Uint8Array, startOffset: number): { value: number; nextOffset: number } {
@@ -163,6 +169,8 @@ export default function BuyOrgPage() {
   const [domain, setDomain] = useState('');
   const [showFaucetPrompt, setShowFaucetPrompt] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [createdOrg, setCreatedOrg] = useState<CreatedOrgState | null>(null);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   const canBuyOrgFlow = state !== 'INITIALIZING' && state !== 'NO_IDENTITY' && walletLinked;
 
@@ -324,6 +332,17 @@ export default function BuyOrgPage() {
 
       await refreshOrgs(orgId);
 
+      setCreatedOrg({
+        orgId,
+        orgName: orgNameValue,
+        recoveryPhrase: setup.recoveryPhrase,
+      });
+      setCopyStatus('idle');
+      setConfirmOpen(false);
+      setOrgName('');
+      setDomain('');
+      void loadCurrentSlot();
+
       txConfirming(toastId, 'Create org');
 
       const chainRest = getConfig().chainRest;
@@ -345,14 +364,8 @@ export default function BuyOrgPage() {
         }
       }
 
-      setConfirmOpen(false);
-      setOrgName('');
-      setDomain('');
-      void loadCurrentSlot();
-
       if (confirmed) {
         txSuccess(toastId, `Organization created: ${orgId}`);
-        router.push('/my-org');
       } else {
         txError(toastId, 'Created, but on-chain confirmation is taking longer than expected — refresh shortly.');
       }
@@ -368,7 +381,20 @@ export default function BuyOrgPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [capReached, domain, identity, loadCurrentSlot, orgName, refreshOrgs, router, submitting, walletAddress]);
+  }, [capReached, domain, identity, loadCurrentSlot, orgName, refreshOrgs, submitting, walletAddress]);
+
+  const handleCopyRecoveryPhrase = useCallback(async () => {
+    if (!createdOrg?.recoveryPhrase) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(createdOrg.recoveryPhrase);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('failed');
+    }
+  }, [createdOrg]);
 
   const openConfirmModal = useCallback(() => {
     if (capReached) {
@@ -436,6 +462,49 @@ export default function BuyOrgPage() {
             <div className="flex items-center gap-3">
               <Button type="button" onClick={handleLinkWallet} disabled={connecting}>
                 {connecting ? 'Linking…' : 'Link Wallet'}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {createdOrg && (
+        <Card className="p-6">
+          <div className="flex flex-col gap-5">
+            <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-4">
+              <p className="text-sm font-semibold text-wv-green">Organization created — SAVE YOUR RECOVERY PHRASE</p>
+              <p className="mt-2 text-sm text-wv-text">
+                Save this recovery phrase now. It is shown ONCE and is the ONLY way to recover your
+                organization&apos;s master key. WeVibe cannot recover it for you.
+              </p>
+              <code className="mt-3 block break-words rounded-md border border-wv-line bg-wv-panel-2 p-3 font-mono text-sm leading-6 text-wv-text">
+                {createdOrg.recoveryPhrase}
+              </code>
+              <div className="mt-3 flex items-center gap-3">
+                <Button type="button" variant="secondary" onClick={handleCopyRecoveryPhrase}>
+                  Copy
+                </Button>
+                {copyStatus === 'copied' && <span className="text-xs text-wv-green">Recovery phrase copied.</span>}
+                {copyStatus === 'failed' && (
+                  <span className="text-xs text-wv-red">Copy failed. Please copy it manually.</span>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-md border border-wv-line bg-wv-panel-2 p-4">
+              <p className="text-xs font-mono uppercase tracking-[0.08em] text-wv-dim">New organization</p>
+              <p className="mt-2 text-sm text-wv-text">{createdOrg.orgName}</p>
+              <p className="mt-1 font-mono text-sm text-wv-text">{createdOrg.orgId}</p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Button
+                type="button"
+                onClick={() => {
+                  router.push('/my-org');
+                }}
+              >
+                I&apos;ve saved it — go to my org
               </Button>
             </div>
           </div>

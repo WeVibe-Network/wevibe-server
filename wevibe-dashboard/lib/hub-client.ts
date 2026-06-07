@@ -384,13 +384,6 @@ export async function getHubResponsePubkey(): Promise<string> {
   return response.response_pubkey?.trim() ?? '';
 }
 
-export async function createOrg(body: CreateOrgRequest): Promise<CreateOrgResponse> {
-  return hubFetch<CreateOrgResponse>('/v1/orgs', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
 export async function recordOrg(body: RecordOrgRequest): Promise<CreateOrgResponse> {
   return hubFetch<CreateOrgResponse>('/v1/orgs', {
     method: 'POST',
