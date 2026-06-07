@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { getOrgCredits, getOrgFinances } from '@/lib/hub-client'
+import { formatVibeWithDenom } from '@/lib/format'
 import { useOrgContext } from '@/lib/org-context'
 import ClientTime from '@/components/ui/client-time'
 
@@ -76,7 +77,7 @@ export default function BillingPage() {
             </div>
             <div className="bg-wv-panel border border-wv-line rounded-lg p-6 shadow-wv-sm">
               <p className="text-sm font-mono text-wv-dim tracking-[0.08em] uppercase mb-1">Chain Treasury (on-chain retrieval budget)</p>
-              <p className="text-3xl font-semibold tracking-[-0.02em] text-wv-text font-mono">{chainTreasury.toLocaleString()} uvibe</p>
+              <p className="text-3xl font-semibold tracking-[-0.02em] text-wv-text font-mono">{formatVibeWithDenom(chainTreasury)}</p>
             </div>
           </div>
 

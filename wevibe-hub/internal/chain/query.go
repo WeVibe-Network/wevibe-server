@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	attesttypes "github.com/wevibe-network/wevibe-chain/x/attestation/types"
@@ -121,6 +122,34 @@ func (c *GrpcClient) GetOrgAccountFromChain(ctx context.Context, orgID string) (
 	}
 
 	return resp.AccountAddress, nil
+}
+
+// GetOrgTreasuryBalanceFromChain queries the org account uvibe balance.
+func (c *GrpcClient) GetOrgTreasuryBalanceFromChain(ctx context.Context, orgID string) (uint64, error) {
+	if c == nil {
+		return 0, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := c.orgQuery.GetOrgAccount(ctx, &orgtypes.QueryGetOrgAccountRequest{OrgId: orgID})
+	if err != nil {
+		if c.isNotFound(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if resp == nil || resp.Balance == "" {
+		return 0, nil
+	}
+
+	balance, err := strconv.ParseUint(resp.Balance, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse org treasury balance: %w", err)
+	}
+
+	return balance, nil
 }
 
 // --- x/memory ---

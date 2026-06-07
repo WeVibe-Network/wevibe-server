@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useIdentity } from '@/lib/identity-context';
 import { useOrgContext } from '@/lib/org-context';
-import { formatVibe } from '@/lib/format';
+import { formatVibe, formatVibeWithDenom } from '@/lib/format';
 import { getBalance, getOrg, getOrgFinances, type OrgFinances, type OrgSummary } from '@/lib/hub-client';
 import type { OrgRole } from '@/lib/org-role';
 import { getContributorStats, type ContributorStats } from '@/lib/social-graph-client';
@@ -338,7 +338,7 @@ export default function MyOrgPage() {
             <LeaderTile label="EPOCH" value={formatCount(currentEpoch)} loading={orgSummaryLoading} />
             <LeaderTile label="STATUS" value={orgStatus} loading={orgSummaryLoading} />
             <LeaderTile label="HUB CREDITS" value={formatCount(hubCredits)} loading={orgFinancesLoading} />
-            <LeaderTile label="CHAIN TREASURY" value={formatCount(chainTreasury)} loading={orgFinancesLoading} />
+            <LeaderTile label="CHAIN TREASURY" value={formatVibeWithDenom(chainTreasury)} loading={orgFinancesLoading} />
           </div>
         </section>
       )}

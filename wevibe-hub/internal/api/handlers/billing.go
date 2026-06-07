@@ -81,9 +81,9 @@ func GetOrgFinances(w http.ResponseWriter, r *http.Request) {
 
 	var chainTreasury uint64
 	if chainClient != nil {
-		storedOrg, chainErr := chainClient.GetOrgFromChain(r.Context(), orgID)
-		if chainErr == nil && storedOrg != nil {
-			chainTreasury = storedOrg.RetrievalBudget
+		treasuryBalance, chainErr := chainClient.GetOrgTreasuryBalanceFromChain(r.Context(), orgID)
+		if chainErr == nil {
+			chainTreasury = treasuryBalance
 		}
 	}
 
