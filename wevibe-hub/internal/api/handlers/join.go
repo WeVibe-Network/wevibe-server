@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -183,8 +184,22 @@ func ListJoinRequests(w http.ResponseWriter, r *http.Request) {
 	var requests []JoinRequestRecord
 	for rows.Next() {
 		var jr JoinRequestRecord
-		if err := rows.Scan(&jr.RequestID, &jr.RequesterPubkey, &jr.Status, &jr.RequestedAt, &jr.ReviewedBy, &jr.ReviewedAt, &jr.DenialReason, &jr.CooldownUntil); err != nil {
-			continue
+		var requestedAt time.Time
+		var reviewedAt *time.Time
+		var cooldownUntil *time.Time
+		if err := rows.Scan(&jr.RequestID, &jr.RequesterPubkey, &jr.Status, &requestedAt, &jr.ReviewedBy, &reviewedAt, &jr.DenialReason, &cooldownUntil); err != nil {
+			log.Printf("ListJoinRequests scan error org=%s: %v", orgID, err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		jr.RequestedAt = requestedAt.Format(time.RFC3339)
+		if reviewedAt != nil {
+			reviewedAtStr := reviewedAt.Format(time.RFC3339)
+			jr.ReviewedAt = &reviewedAtStr
+		}
+		if cooldownUntil != nil {
+			cooldownUntilStr := cooldownUntil.Format(time.RFC3339)
+			jr.CooldownUntil = &cooldownUntilStr
 		}
 		requests = append(requests, jr)
 	}
