@@ -1,4 +1,17 @@
-# WeVibe Dashboard
+<div align="center">
+
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:02100a,100:2fe07a&height=160&section=header&text=WeVibe%20Dashboard&fontColor=54f59a&fontSize=42&fontAlignY=40&desc=Org%20management%20and%20curation%20UI&descAlignY=64&descSize=16" alt="WeVibe Dashboard" width="100%" />
+
+![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+[![status-alpha](https://img.shields.io/badge/status-alpha-ffc266?style=flat-square)](https://github.com/WeVibe-Network)
+[![license-Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-82aaff?style=flat-square)](../LICENSE)
+[![docs-wevibe-docs](https://img.shields.io/badge/docs-wevibe--docs-54f59a?style=flat-square)](https://github.com/WeVibe-Network/wevibe-docs)
+[![%40WeVibe__Network](https://img.shields.io/badge/%40WeVibe__Network-0a0a0a?style=flat-square&logo=x&logoColor=white)](https://x.com/WeVibe_Network)
+
+</div>
+
+---
 
 WeVibe Dashboard is the hub-hosted web control surface for organization management and curation in the public WeVibe Network.
 
