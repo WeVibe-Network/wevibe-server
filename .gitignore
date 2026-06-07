@@ -32,3 +32,9 @@ node_modules/
 wevibe-dashboard/tsconfig.tsbuildinfo
 # compiled hub binary
 wevibe-hub/wevibe-hub
+
+# Local orchestration docs (never committed)
+AGENTS.md
+MANAGER.md
+WORKER.md
+SESSIONCONTINUANCE.md

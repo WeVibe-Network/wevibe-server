@@ -1,26 +1,31 @@
 # wevibe-infra
 
-Deployment configuration for WeVibe Network managed infrastructure.
+`wevibe-infra` is the deployment and operations layer for `wevibe-server`.
 
-## Components
+> **Alpha status:** the current setup is compose-first. Managed infrastructure automation (Terraform/IaC) is planned, but not implemented yet.
 
-- Qdrant (retrieval index)
-- Ollama (embeddings + LLM extraction)
-- PostgreSQL (org/member state, receipts)
-- Object store — S3-compatible (encrypted memory blobs)
-- wevibe-hub (FastAPI service)
+## What this directory contains
 
-## Environment variables (never commit values)
+- [`Caddyfile`](./Caddyfile) — reverse proxy configuration with automatic TLS support (Let’s Encrypt) when `WEVIBE_DOMAIN` is set.
+- [`docs/`](./docs/) — architecture/design references for infrastructure direction.
+- [`ROADMAP.md`](./ROADMAP.md) — delivery priorities for near-term and mainnet readiness.
 
-WEVIBE_EXTRACTION_PROMPT — LLM extraction prompt (trade secret)
-WEVIBE_KEYWORD_PROMPT    — Keyword scoring prompt (trade secret)
-WEVIBE_QDRANT_URL       — Qdrant connection URL
-WEVIBE_QDRANT_API_KEY   — Qdrant API key for authenticated access
-WEVIBE_DATABASE_URL     — PostgreSQL connection string (exported as DATABASE_URL in docker-compose)
-WEVIBE_OLLAMA_URL       — Ollama base URL
-WEVIBE_HUB_NODE_PRIVKEY — Ed25519 private key for receipt countersigning
+## Current deployment baseline
 
+- Runtime stack definition: [`../docker-compose.yml`](../docker-compose.yml)
+- Fast 2-second epoch testing overlay: [`../docker-compose.fast.yml`](../docker-compose.fast.yml)
+- Hub container build: [`../Dockerfile.hub`](../Dockerfile.hub) (**Go** service)
+- Schema source of truth: [`../db/schema.sql`](../db/schema.sql), applied during hub startup against Postgres
 
-## TODO
+Public endpoint routing in this layer is centered on:
 
-Initialize Terraform config here for VPS or cloud deployment.
+- hub (`4440`)
+- dashboard (`3000`)
+- social-graph (`4470`)
+
+The checked-in `Caddyfile` currently includes the hub route and security headers; extend route blocks to match your deployment topology for dashboard and social-graph endpoints.
+
+## Related documentation
+
+- Self-hosting guide: <https://github.com/WeVibe-Network/wevibe-docs/blob/main/SELF-HOSTING.md>
+- Canonical docs: <https://github.com/WeVibe-Network/wevibe-docs>
