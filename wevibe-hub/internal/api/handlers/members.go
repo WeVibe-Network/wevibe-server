@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -563,6 +564,47 @@ func UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
 	updated, _ := members.GetMember(r.Context(), pool, orgID, pubkey)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
+}
+
+func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	memberPubkey := chi.URLParam(r, "pubkey")
+	if orgID == "" || memberPubkey == "" {
+		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
+	if err != nil || (role != "leader" && role != "moderator") {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+
+	err = billing.Subscribe(r.Context(), pool, orgID, memberPubkey, signed.Pubkey)
+	if err != nil {
+		if errors.Is(err, billing.ErrInsufficientCredits) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "insufficient org credits to enable recall"})
+			return
+		}
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"membership_active": true})
 }
 
 func RegisterPreKey(w http.ResponseWriter, r *http.Request) {

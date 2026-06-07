@@ -212,6 +212,7 @@ func main() {
 			r.Post("/members", handlers.InviteMember)
 			r.Get("/members", handlers.ListMembers)
 			r.Get("/members/{pubkey}", handlers.GetMember)
+			r.Post("/members/{pubkey}/enable-recall", handlers.EnableMemberRecall)
 			r.Post("/members/{pubkey}/pre-key", handlers.RegisterPreKey)
 			r.Get("/members/{pubkey}/pre-key", handlers.GetPreKey)
 			r.Delete("/members/{pubkey}", handlers.RemoveMember)
