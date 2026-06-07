@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { getIdentity, signWithIdentity } from '@/lib/wevibe-auth';
 import {
   Notification,
@@ -20,6 +21,7 @@ export default function ActivityPage() {
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [identityReady, setIdentityReady] = useState(false);
+  const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
@@ -99,14 +101,17 @@ export default function ActivityPage() {
     void loadNotifications(oldest.id);
   }, [loadNotifications, notifications]);
 
-  const handleMarkRead = useCallback(async (id: number) => {
-    try {
-      await markNotificationsRead([id]);
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
-      );
-    } catch { /* ignore */ }
-  }, []);
+  const handleNotificationClick = useCallback(async (notification: Notification) => {
+    if (!notification.read) {
+      try {
+        await markNotificationsRead([notification.id]);
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notification.id ? { ...n, read: true } : n)),
+        );
+      } catch { /* ignore */ }
+    }
+    router.push(notification.route || '/activity');
+  }, [router]);
 
   const handleMarkAllRead = useCallback(async () => {
     try {
@@ -180,7 +185,7 @@ export default function ActivityPage() {
               <button
                 key={n.id}
                 type="button"
-                onClick={() => { if (!n.read) void handleMarkRead(n.id); }}
+                onClick={() => { void handleNotificationClick(n); }}
                 className={`group flex items-start gap-4 rounded-xl border bg-wv-panel p-4 text-left shadow-wv-sm transition ${
                   n.read
                     ? 'border-wv-line'

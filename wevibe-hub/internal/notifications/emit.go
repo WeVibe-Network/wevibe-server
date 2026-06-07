@@ -12,6 +12,8 @@ func EmitUserNotification(ctx context.Context, pool *pgxpool.Pool, hub *Notifica
 		return nil
 	}
 
+	route := routeForCategory(category)
+
 	var orgName string
 	if orgID != "" {
 		_ = pool.QueryRow(ctx, `SELECT org_name FROM orgs WHERE org_id = $1`, orgID).Scan(&orgName)
@@ -21,10 +23,10 @@ func EmitUserNotification(ctx context.Context, pool *pgxpool.Pool, hub *Notifica
 	var createdAt time.Time
 	err := pool.QueryRow(ctx, `
 		INSERT INTO notifications
-			(recipient_pubkey, category, title, body, event_ref, org_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, NOW())
+			(recipient_pubkey, category, title, body, event_ref, org_id, route, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 		RETURNING id, created_at
-	`, recipientPubkey, category, title, body, eventRef, orgID).Scan(&notifID, &createdAt)
+	`, recipientPubkey, category, title, body, eventRef, orgID, route).Scan(&notifID, &createdAt)
 	if err != nil {
 		return err
 	}
@@ -37,6 +39,7 @@ func EmitUserNotification(ctx context.Context, pool *pgxpool.Pool, hub *Notifica
 		EventRef:  eventRef,
 		OrgID:     orgID,
 		OrgName:   orgName,
+		Route:     route,
 		Read:      false,
 		CreatedAt: createdAt.Format(time.RFC3339),
 	}
@@ -61,4 +64,23 @@ func EmitUserNotification(ctx context.Context, pool *pgxpool.Pool, hub *Notifica
 	}
 
 	return nil
+}
+
+func routeForCategory(category string) string {
+	switch category {
+	case "join_request_received":
+		return "/join-requests"
+	case "join_approved":
+		return "/my-org"
+	case "join_denied":
+		return "/activity"
+	case "contributor_promoted":
+		return "/my-org"
+	case "contributor_revoked":
+		return "/my-org"
+	case "test_notification":
+		return "/activity"
+	default:
+		return "/activity"
+	}
 }

@@ -723,6 +723,7 @@ export interface Notification {
   event_ref: string;
   org_id: string;
   org_name: string;
+  route: string;
   read: boolean;
   created_at: string;
 }

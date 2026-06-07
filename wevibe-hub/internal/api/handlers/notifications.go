@@ -34,6 +34,7 @@ type NotificationResponse struct {
 	EventRef  string `json:"event_ref"`
 	OrgID     string `json:"org_id"`
 	OrgName   string `json:"org_name"`
+	Route     string `json:"route"`
 	Read      bool   `json:"read"`
 	CreatedAt string `json:"created_at"`
 }
@@ -67,7 +68,7 @@ func ListNotifications(w http.ResponseWriter, r *http.Request) {
 	unreadOnly := r.URL.Query().Get("unread_only") == "true"
 
 	query := `
-		SELECT n.id, n.category, n.title, n.body, n.event_ref, n.org_id, COALESCE(o.org_name, ''), n.read, n.created_at
+		SELECT n.id, n.category, n.title, n.body, n.event_ref, n.org_id, COALESCE(o.org_name, ''), COALESCE(n.route, ''), n.read, n.created_at
 		FROM notifications n
 		LEFT JOIN orgs o ON n.org_id = o.org_id
 		WHERE n.recipient_pubkey = $1
@@ -102,7 +103,7 @@ func ListNotifications(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var n NotificationResponse
 		var createdAt time.Time
-		if err := rows.Scan(&n.ID, &n.Category, &n.Title, &n.Body, &n.EventRef, &n.OrgID, &n.OrgName, &n.Read, &createdAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.Category, &n.Title, &n.Body, &n.EventRef, &n.OrgID, &n.OrgName, &n.Route, &n.Read, &createdAt); err != nil {
 			continue
 		}
 		n.CreatedAt = createdAt.Format(time.RFC3339)

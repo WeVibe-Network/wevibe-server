@@ -83,6 +83,7 @@ type NotificationPayload struct {
 	EventRef  string `json:"event_ref"`
 	OrgID     string `json:"org_id"`
 	OrgName   string `json:"org_name"`
+	Route     string `json:"route"`
 	Read      bool   `json:"read"`
 	CreatedAt string `json:"created_at"`
 }

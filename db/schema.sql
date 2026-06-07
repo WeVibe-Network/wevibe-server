@@ -433,6 +433,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     body            TEXT        NOT NULL,
     event_ref       TEXT,
     org_id          TEXT,
+    route           TEXT,
     read            BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
