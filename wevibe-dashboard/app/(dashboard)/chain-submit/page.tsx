@@ -525,6 +525,16 @@ export default function ChainSubmitPage() {
                       Possible preference ({(item.preference_confidence * 100).toFixed(0)}%)
                     </span>
                   )}
+                  {item.derivation === 'edited-after-extraction' && (
+                    <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
+                      edited after extraction
+                    </span>
+                  )}
+                  {item.derivation === 'verbatim' && (
+                    <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
+                      verbatim extraction
+                    </span>
+                  )}
                       {item.moderation_approved_by && (
                         <span className="font-mono text-wv-dim">Approved by {item.moderation_approved_by.slice(0, 8)}…</span>
                       )}
@@ -554,6 +564,9 @@ export default function ChainSubmitPage() {
             <h2 className="text-lg font-semibold text-wv-text">Review Keywords</h2>
             <p className="mt-1 text-sm text-wv-dim">
               {reviewKeywords.length} memories with extracted keywords awaiting review
+            </p>
+            <p className="mt-1 text-xs text-wv-amber">
+              Higher preference = more subjective / lower quality — weigh before committing on-chain.
             </p>
           </div>
           <button

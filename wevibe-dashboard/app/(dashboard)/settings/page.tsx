@@ -1,16 +1,37 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getHubResponsePubkey, getHubServingAddress, getOrg, getOrgChainConfig } from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
 import { connectWallet } from '@/lib/wallet-connect';
-import { buildSetOrgConfigMsg, buildSetServingInfoMsg, buildSetServingKeyMsg, directBroadcast, getOrgAccountAddress } from '@/lib/chain-client';
+import {
+  buildSetExtractionProfileMsg,
+  buildSetOrgConfigMsg,
+  buildSetServingInfoMsg,
+  buildSetServingKeyMsg,
+  directBroadcast,
+  getExtractionProfile,
+  getOrgAccountAddress,
+} from '@/lib/chain-client';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useOrgContext } from '@/lib/org-context';
 import { GuardCard } from '@/components/ui/states';
 import InfoTooltip from '@/components/ui/tooltip';
 
 const HUB_RESPONSE_PUBKEY_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
+const EXTRACTION_MODEL_MAX_BYTES = 256;
+const EXTRACTION_SYSTEM_PROMPT_MAX_BYTES = 8192;
+const EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES = 4096;
+const EXTRACTION_DOMAIN_FRAMING_MAX_BYTES = 1024;
+const EXTRACTION_CONSTRAINTS_MAX_BYTES = 4096;
+const EXTRACTION_EXEMPLAR_MAX_BYTES = 4096;
+const EXTRACTION_EXEMPLARS_MAX = 5;
+const EXTRACTION_NUM_CTX_MAX = 131072;
+const EXTRACTION_TOTAL_STRING_BYTES_MAX = 16384;
+
+function byteLengthUtf8(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
 
 function normalizeHubEndpoints(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -62,6 +83,19 @@ export default function SettingsPage() {
   const [hubServingInfoError, setHubServingInfoError] = useState<string | null>(null);
   const [hubServingInfoSuccess, setHubServingInfoSuccess] = useState<string | null>(null);
   const [savingServingInfo, setSavingServingInfo] = useState(false);
+  const [extractionProfileLoading, setExtractionProfileLoading] = useState(false);
+  const [extractionProfileError, setExtractionProfileError] = useState<string | null>(null);
+  const [extractionProfileSuccess, setExtractionProfileSuccess] = useState<string | null>(null);
+  const [savingExtractionProfile, setSavingExtractionProfile] = useState(false);
+  const [extractionProfileVersion, setExtractionProfileVersion] = useState<number | null>(null);
+  const [extractionProfileUpdatedAtHeight, setExtractionProfileUpdatedAtHeight] = useState<string | null>(null);
+  const [extractionModel, setExtractionModel] = useState('');
+  const [extractionNumCtx, setExtractionNumCtx] = useState('');
+  const [extractionSystemPrompt, setExtractionSystemPrompt] = useState('');
+  const [extractionOutputSchema, setExtractionOutputSchema] = useState('');
+  const [extractionDomainFraming, setExtractionDomainFraming] = useState('');
+  const [extractionConstraints, setExtractionConstraints] = useState('');
+  const [extractionExemplars, setExtractionExemplars] = useState<string[]>(['']);
 
   const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
     if (!activeOrg) {
@@ -127,6 +161,74 @@ export default function SettingsPage() {
       cancelled = true;
     };
   }, [activeOrg]);
+
+  useEffect(() => {
+    if (!activeOrg || !isLeader) {
+      setExtractionProfileLoading(false);
+      setExtractionProfileError(null);
+      setExtractionProfileSuccess(null);
+      setExtractionProfileVersion(null);
+      setExtractionProfileUpdatedAtHeight(null);
+      setExtractionModel('');
+      setExtractionNumCtx('');
+      setExtractionSystemPrompt('');
+      setExtractionOutputSchema('');
+      setExtractionDomainFraming('');
+      setExtractionConstraints('');
+      setExtractionExemplars(['']);
+      return;
+    }
+
+    let cancelled = false;
+    setExtractionProfileLoading(true);
+    setExtractionProfileError(null);
+    setExtractionProfileSuccess(null);
+
+    void getExtractionProfile(activeOrg.org_id)
+      .then((profile) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (!profile) {
+          setExtractionProfileVersion(null);
+          setExtractionProfileUpdatedAtHeight(null);
+          setExtractionModel('');
+          setExtractionNumCtx('');
+          setExtractionSystemPrompt('');
+          setExtractionOutputSchema('');
+          setExtractionDomainFraming('');
+          setExtractionConstraints('');
+          setExtractionExemplars(['']);
+          return;
+        }
+
+        setExtractionProfileVersion(profile.profile_version);
+        setExtractionProfileUpdatedAtHeight(profile.updated_at_height);
+        setExtractionModel(profile.extraction_model);
+        setExtractionNumCtx(profile.num_ctx > 0 ? String(profile.num_ctx) : '');
+        setExtractionSystemPrompt(profile.system_prompt);
+        setExtractionOutputSchema(profile.output_schema);
+        setExtractionDomainFraming(profile.domain_framing);
+        setExtractionConstraints(profile.constraints);
+        setExtractionExemplars(profile.exemplars.length > 0 ? [...profile.exemplars] : ['']);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        setExtractionProfileError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setExtractionProfileLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrg, isLeader]);
 
   useEffect(() => {
     if (!activeOrg) {
@@ -342,6 +444,227 @@ export default function SettingsPage() {
     }
   }, [activeOrg, newHubEndpoints, newHubResponsePubkey, resolveOrgAccountForGas]);
 
+  const extractionValidation = useMemo(() => {
+    const extractionModelBytes = byteLengthUtf8(extractionModel);
+    const systemPromptBytes = byteLengthUtf8(extractionSystemPrompt);
+    const outputSchemaBytes = byteLengthUtf8(extractionOutputSchema);
+    const domainFramingBytes = byteLengthUtf8(extractionDomainFraming);
+    const constraintsBytes = byteLengthUtf8(extractionConstraints);
+    const exemplarByteLengths = extractionExemplars.map((exemplar) => byteLengthUtf8(exemplar));
+
+    const totalStringBytes = extractionModelBytes
+      + systemPromptBytes
+      + outputSchemaBytes
+      + domainFramingBytes
+      + constraintsBytes
+      + exemplarByteLengths.reduce((total, next) => total + next, 0);
+
+    const extractionModelError = extractionModelBytes > EXTRACTION_MODEL_MAX_BYTES
+      ? `extraction_model exceeds ${EXTRACTION_MODEL_MAX_BYTES} bytes.`
+      : null;
+    const systemPromptError = systemPromptBytes > EXTRACTION_SYSTEM_PROMPT_MAX_BYTES
+      ? `system_prompt exceeds ${EXTRACTION_SYSTEM_PROMPT_MAX_BYTES} bytes.`
+      : null;
+    const outputSchemaError = outputSchemaBytes > EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES
+      ? `output_schema exceeds ${EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES} bytes.`
+      : null;
+    const domainFramingError = domainFramingBytes > EXTRACTION_DOMAIN_FRAMING_MAX_BYTES
+      ? `domain_framing exceeds ${EXTRACTION_DOMAIN_FRAMING_MAX_BYTES} bytes.`
+      : null;
+    const constraintsError = constraintsBytes > EXTRACTION_CONSTRAINTS_MAX_BYTES
+      ? `constraints exceeds ${EXTRACTION_CONSTRAINTS_MAX_BYTES} bytes.`
+      : null;
+
+    const exemplarFieldErrors = exemplarByteLengths.map((bytes, index) => (
+      bytes > EXTRACTION_EXEMPLAR_MAX_BYTES
+        ? `Exemplar ${index + 1} exceeds ${EXTRACTION_EXEMPLAR_MAX_BYTES} bytes.`
+        : null
+    ));
+
+    const exemplarCountError = extractionExemplars.length > EXTRACTION_EXEMPLARS_MAX
+      ? `No more than ${EXTRACTION_EXEMPLARS_MAX} exemplars are allowed.`
+      : null;
+
+    const trimmedNumCtx = extractionNumCtx.trim();
+    let parsedNumCtx: number | null = null;
+    let numCtxError: string | null = null;
+    if (trimmedNumCtx.length === 0) {
+      numCtxError = 'num_ctx is required.';
+    } else {
+      const parsed = Number(trimmedNumCtx);
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+        numCtxError = 'num_ctx must be a positive integer.';
+      } else if (parsed > EXTRACTION_NUM_CTX_MAX) {
+        numCtxError = `num_ctx cannot exceed ${EXTRACTION_NUM_CTX_MAX}.`;
+      } else {
+        parsedNumCtx = parsed;
+      }
+    }
+
+    const totalStringBytesError = totalStringBytes > EXTRACTION_TOTAL_STRING_BYTES_MAX
+      ? `Total UTF-8 string bytes exceed ${EXTRACTION_TOTAL_STRING_BYTES_MAX}.`
+      : null;
+
+    const hasErrors = Boolean(
+      extractionModelError
+      || systemPromptError
+      || outputSchemaError
+      || domainFramingError
+      || constraintsError
+      || exemplarCountError
+      || numCtxError
+      || totalStringBytesError
+      || exemplarFieldErrors.some((entry) => entry !== null),
+    );
+
+    return {
+      parsedNumCtx,
+      hasErrors,
+      bytes: {
+        extractionModel: extractionModelBytes,
+        systemPrompt: systemPromptBytes,
+        outputSchema: outputSchemaBytes,
+        domainFraming: domainFramingBytes,
+        constraints: constraintsBytes,
+        exemplars: exemplarByteLengths,
+      },
+      totalStringBytes,
+      errors: {
+        extractionModel: extractionModelError,
+        systemPrompt: systemPromptError,
+        outputSchema: outputSchemaError,
+        domainFraming: domainFramingError,
+        constraints: constraintsError,
+        exemplars: exemplarFieldErrors,
+        exemplarCount: exemplarCountError,
+        numCtx: numCtxError,
+        totalBytes: totalStringBytesError,
+      },
+    };
+  }, [
+    extractionConstraints,
+    extractionDomainFraming,
+    extractionExemplars,
+    extractionModel,
+    extractionNumCtx,
+    extractionOutputSchema,
+    extractionSystemPrompt,
+  ]);
+
+  const handleExtractionExemplarChange = useCallback((index: number, value: string) => {
+    setExtractionExemplars((previous) => previous.map((exemplar, exemplarIndex) => (
+      exemplarIndex === index ? value : exemplar
+    )));
+  }, []);
+
+  const handleAddExtractionExemplar = useCallback(() => {
+    setExtractionExemplars((previous) => {
+      if (previous.length >= EXTRACTION_EXEMPLARS_MAX) {
+        return previous;
+      }
+      return [...previous, ''];
+    });
+  }, []);
+
+  const handleRemoveExtractionExemplar = useCallback((index: number) => {
+    setExtractionExemplars((previous) => {
+      if (previous.length <= 1) {
+        return previous;
+      }
+      return previous.filter((_, exemplarIndex) => exemplarIndex !== index);
+    });
+  }, []);
+
+  const handleExtractionProfileSave = useCallback(async () => {
+    if (!activeOrg) {
+      return;
+    }
+
+    if (extractionValidation.hasErrors || extractionValidation.parsedNumCtx === null) {
+      setExtractionProfileError('Resolve extraction profile validation errors before saving.');
+      return;
+    }
+
+    const normalizedExemplars = extractionExemplars
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+      .slice(0, EXTRACTION_EXEMPLARS_MAX);
+    const toastId = txToast('Extraction profile');
+
+    setSavingExtractionProfile(true);
+    setExtractionProfileError(null);
+    setExtractionProfileSuccess(null);
+
+    try {
+      const walletConn = await connectWallet();
+      txConfirming(toastId, 'Extraction profile');
+
+      const msgSetExtractionProfile = buildSetExtractionProfileMsg(
+        walletConn.address,
+        activeOrg.org_id,
+        {
+          extractionModel: extractionModel.trim(),
+          numCtx: extractionValidation.parsedNumCtx,
+          systemPrompt: extractionSystemPrompt,
+          outputSchema: extractionOutputSchema,
+          domainFraming: extractionDomainFraming,
+          exemplars: normalizedExemplars,
+          constraints: extractionConstraints,
+        },
+      );
+
+      const orgAccount = await resolveOrgAccountForGas();
+      const result = await directBroadcast(walletConn.address, [msgSetExtractionProfile], orgAccount);
+
+      let refreshedProfile: Awaited<ReturnType<typeof getExtractionProfile>> = null;
+      try {
+        refreshedProfile = await getExtractionProfile(activeOrg.org_id);
+      } catch {
+        refreshedProfile = null;
+      }
+
+      if (refreshedProfile) {
+        setExtractionProfileVersion(refreshedProfile.profile_version);
+        setExtractionProfileUpdatedAtHeight(refreshedProfile.updated_at_height);
+        setExtractionModel(refreshedProfile.extraction_model);
+        setExtractionNumCtx(refreshedProfile.num_ctx > 0 ? String(refreshedProfile.num_ctx) : '');
+        setExtractionSystemPrompt(refreshedProfile.system_prompt);
+        setExtractionOutputSchema(refreshedProfile.output_schema);
+        setExtractionDomainFraming(refreshedProfile.domain_framing);
+        setExtractionConstraints(refreshedProfile.constraints);
+        setExtractionExemplars(refreshedProfile.exemplars.length > 0 ? [...refreshedProfile.exemplars] : ['']);
+      }
+
+      const nextVersion = refreshedProfile?.profile_version
+        ?? (extractionProfileVersion !== null ? extractionProfileVersion + 1 : null);
+      if (!refreshedProfile && nextVersion !== null) {
+        setExtractionProfileVersion(nextVersion);
+      }
+
+      const versionLabel = nextVersion !== null ? `v${nextVersion}` : 'next profile version';
+      const successMessage = `Extraction profile updated (${versionLabel}). Tx: ${result.txHash.slice(0, 16)}...`;
+      setExtractionProfileSuccess(successMessage);
+      txSuccess(toastId, successMessage);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setExtractionProfileError(message);
+      txError(toastId, message);
+    } finally {
+      setSavingExtractionProfile(false);
+    }
+  }, [
+    activeOrg,
+    extractionConstraints,
+    extractionDomainFraming,
+    extractionExemplars,
+    extractionModel,
+    extractionOutputSchema,
+    extractionProfileVersion,
+    extractionSystemPrompt,
+    extractionValidation,
+    resolveOrgAccountForGas,
+  ]);
+
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <header className="flex flex-col gap-2">
@@ -536,7 +859,8 @@ export default function SettingsPage() {
           </section>
 
           {isLeader && (
-            <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+            <>
+              <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-semibold text-wv-text">Hub Infrastructure</h2>
                 <InfoTooltip label="About hub infrastructure">
@@ -771,7 +1095,254 @@ export default function SettingsPage() {
                   )}
                 </div>
               </div>
-            </section>
+              </section>
+
+              <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-semibold text-wv-text">Extraction Profile</h2>
+                  <InfoTooltip label="About extraction profile">
+                    Leader-owned extraction defaults written on-chain and imported by contributors at extraction time.
+                  </InfoTooltip>
+                </div>
+                <p className="mt-1 text-sm text-wv-dim">
+                  Contributors import this profile at extraction time; it shapes every memory&apos;s quality and recall.
+                </p>
+
+                <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3 text-xs text-wv-dim">
+                  <p>
+                    profile_version:{' '}
+                    <span className="font-mono text-wv-text">{extractionProfileVersion ?? '—'}</span>
+                  </p>
+                  <p className="mt-1">
+                    updated_at_height:{' '}
+                    <span className="font-mono text-wv-text">{extractionProfileUpdatedAtHeight ?? '—'}</span>
+                  </p>
+                </div>
+
+                {extractionProfileError && (
+                  <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                    {extractionProfileError}
+                  </div>
+                )}
+
+                {extractionProfileSuccess && (
+                  <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green break-all">
+                    {extractionProfileSuccess}
+                  </div>
+                )}
+
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="extraction-model" className="block text-sm font-medium text-wv-text">
+                      extraction_model
+                    </label>
+                    <input
+                      id="extraction-model"
+                      type="text"
+                      value={extractionModel}
+                      onChange={(event) => setExtractionModel(event.target.value)}
+                      placeholder="qwen2.5:14b"
+                      disabled={savingExtractionProfile || extractionProfileLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                    <p className={`mt-2 text-xs ${extractionValidation.errors.extractionModel ? 'text-wv-red' : 'text-wv-dim'}`}>
+                      {extractionValidation.bytes.extractionModel}/{EXTRACTION_MODEL_MAX_BYTES} bytes
+                    </p>
+                    {extractionValidation.errors.extractionModel && (
+                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.extractionModel}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label htmlFor="extraction-num-ctx" className="block text-sm font-medium text-wv-text">
+                      num_ctx
+                    </label>
+                    <input
+                      id="extraction-num-ctx"
+                      type="number"
+                      min={1}
+                      max={EXTRACTION_NUM_CTX_MAX}
+                      step={1}
+                      value={extractionNumCtx}
+                      onChange={(event) => setExtractionNumCtx(event.target.value)}
+                      placeholder="4096"
+                      disabled={savingExtractionProfile || extractionProfileLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                    <p className={`mt-2 text-xs ${extractionValidation.errors.numCtx ? 'text-wv-red' : 'text-wv-dim'}`}>
+                      Max {EXTRACTION_NUM_CTX_MAX}
+                    </p>
+                    {extractionValidation.errors.numCtx && (
+                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.numCtx}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label htmlFor="extraction-system-prompt" className="block text-sm font-medium text-wv-text">
+                    system_prompt
+                  </label>
+                  <textarea
+                    id="extraction-system-prompt"
+                    rows={6}
+                    value={extractionSystemPrompt}
+                    onChange={(event) => setExtractionSystemPrompt(event.target.value)}
+                    placeholder="System instructions used by extraction."
+                    disabled={savingExtractionProfile || extractionProfileLoading}
+                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  />
+                  <p className={`mt-2 text-xs ${extractionValidation.errors.systemPrompt ? 'text-wv-red' : 'text-wv-dim'}`}>
+                    {extractionValidation.bytes.systemPrompt}/{EXTRACTION_SYSTEM_PROMPT_MAX_BYTES} bytes
+                  </p>
+                  {extractionValidation.errors.systemPrompt && (
+                    <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.systemPrompt}</p>
+                  )}
+                </div>
+
+                <div className="mt-4">
+                  <label htmlFor="extraction-output-schema" className="block text-sm font-medium text-wv-text">
+                    output_schema
+                  </label>
+                  <textarea
+                    id="extraction-output-schema"
+                    rows={5}
+                    value={extractionOutputSchema}
+                    onChange={(event) => setExtractionOutputSchema(event.target.value)}
+                    placeholder="JSON schema or shape constraints for extraction output."
+                    disabled={savingExtractionProfile || extractionProfileLoading}
+                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  />
+                  <p className={`mt-2 text-xs ${extractionValidation.errors.outputSchema ? 'text-wv-red' : 'text-wv-dim'}`}>
+                    {extractionValidation.bytes.outputSchema}/{EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES} bytes
+                  </p>
+                  {extractionValidation.errors.outputSchema && (
+                    <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.outputSchema}</p>
+                  )}
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="extraction-domain-framing" className="block text-sm font-medium text-wv-text">
+                      domain_framing
+                    </label>
+                    <textarea
+                      id="extraction-domain-framing"
+                      rows={4}
+                      value={extractionDomainFraming}
+                      onChange={(event) => setExtractionDomainFraming(event.target.value)}
+                      placeholder="Domain-specific framing and vocabulary."
+                      disabled={savingExtractionProfile || extractionProfileLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                    <p className={`mt-2 text-xs ${extractionValidation.errors.domainFraming ? 'text-wv-red' : 'text-wv-dim'}`}>
+                      {extractionValidation.bytes.domainFraming}/{EXTRACTION_DOMAIN_FRAMING_MAX_BYTES} bytes
+                    </p>
+                    {extractionValidation.errors.domainFraming && (
+                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.domainFraming}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label htmlFor="extraction-constraints" className="block text-sm font-medium text-wv-text">
+                      constraints
+                    </label>
+                    <textarea
+                      id="extraction-constraints"
+                      rows={4}
+                      value={extractionConstraints}
+                      onChange={(event) => setExtractionConstraints(event.target.value)}
+                      placeholder="Hard constraints for extraction quality and safety."
+                      disabled={savingExtractionProfile || extractionProfileLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                    <p className={`mt-2 text-xs ${extractionValidation.errors.constraints ? 'text-wv-red' : 'text-wv-dim'}`}>
+                      {extractionValidation.bytes.constraints}/{EXTRACTION_CONSTRAINTS_MAX_BYTES} bytes
+                    </p>
+                    {extractionValidation.errors.constraints && (
+                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.constraints}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-wv-text">exemplars</p>
+                    <span className="text-xs text-wv-dim">{extractionExemplars.length}/{EXTRACTION_EXEMPLARS_MAX}</span>
+                  </div>
+                  {extractionValidation.errors.exemplarCount && (
+                    <p className="mt-2 text-xs text-wv-red">{extractionValidation.errors.exemplarCount}</p>
+                  )}
+
+                  <div className="mt-3 flex flex-col gap-3">
+                    {extractionExemplars.map((exemplar, index) => (
+                      <div key={`extraction-exemplar-${index}`} className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <label htmlFor={`extraction-exemplar-${index}`} className="text-xs font-semibold uppercase tracking-wide text-wv-dim">
+                            Exemplar {index + 1}
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveExtractionExemplar(index)}
+                            disabled={savingExtractionProfile || extractionProfileLoading || extractionExemplars.length <= 1}
+                            className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-2.5 py-1.5 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <textarea
+                          id={`extraction-exemplar-${index}`}
+                          rows={4}
+                          value={exemplar}
+                          onChange={(event) => handleExtractionExemplarChange(index, event.target.value)}
+                          placeholder="Example extraction input/output pair or guidance snippet."
+                          disabled={savingExtractionProfile || extractionProfileLoading}
+                          className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                        />
+                        <p className={`mt-2 text-xs ${extractionValidation.errors.exemplars[index] ? 'text-wv-red' : 'text-wv-dim'}`}>
+                          {extractionValidation.bytes.exemplars[index] ?? 0}/{EXTRACTION_EXEMPLAR_MAX_BYTES} bytes
+                        </p>
+                        {extractionValidation.errors.exemplars[index] && (
+                          <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.exemplars[index]}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddExtractionExemplar}
+                    disabled={savingExtractionProfile || extractionProfileLoading || extractionExemplars.length >= EXTRACTION_EXEMPLARS_MAX}
+                    className="mt-3 inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Add exemplar
+                  </button>
+                </div>
+
+                <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 px-3 py-2">
+                  <p className={`text-xs ${extractionValidation.errors.totalBytes ? 'text-wv-red' : 'text-wv-dim'}`}>
+                    Total UTF-8 string bytes: {extractionValidation.totalStringBytes}/{EXTRACTION_TOTAL_STRING_BYTES_MAX}
+                  </p>
+                  {extractionValidation.errors.totalBytes && (
+                    <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.totalBytes}</p>
+                  )}
+                </div>
+
+                <div className="mt-4 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExtractionProfileSave}
+                    disabled={savingExtractionProfile || extractionProfileLoading || extractionValidation.hasErrors || !orgLoaded}
+                    className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  >
+                    {savingExtractionProfile ? 'Broadcasting…' : 'Broadcast MsgSetExtractionProfile'}
+                  </button>
+                </div>
+
+                {extractionProfileLoading && (
+                  <p className="mt-4 text-xs text-wv-dim">Loading on-chain extraction profile…</p>
+                )}
+              </section>
+            </>
           )}
 
           <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
@@ -797,6 +1368,8 @@ function OrgLlamaConfig() {
   const [settings, setSettings] = useState<DashboardSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [modelsError, setModelsError] = useState(false);
 
   useEffect(() => {
     fetch('/api/settings')
@@ -815,6 +1388,42 @@ function OrgLlamaConfig() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!settings || settings.llm_provider !== 'ollama') {
+      setOllamaModels([]);
+      setModelsError(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/ollama-models')
+      .then(response => response.json() as Promise<{ models?: unknown; error?: unknown }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models.filter((model): model is string => typeof model === 'string')
+          : [];
+
+        setOllamaModels(models);
+        setModelsError(Boolean(data.error) || models.length === 0);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setOllamaModels([]);
+        setModelsError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.llm_provider, settings?.ollama_url]);
 
   const handleSave = useCallback(async () => {
     if (!settings) return;
@@ -907,14 +1516,38 @@ function OrgLlamaConfig() {
             <label htmlFor="ollama-model" className="block text-sm font-medium text-wv-text">
               Ollama Model
             </label>
-            <input
-              id="ollama-model"
-              type="text"
-              value={settings.ollama_model}
-              onChange={e => setSettings(s => s ? { ...s, ollama_model: e.target.value } : s)}
-              placeholder="qwen2.5:14b"
-              className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-            />
+            {ollamaModels.length > 0 ? (
+              <>
+                <select
+                  id="ollama-model"
+                  value={settings.ollama_model}
+                  onChange={e => setSettings(s => s ? { ...s, ollama_model: e.target.value } : s)}
+                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                >
+                  {settings.ollama_model && !ollamaModels.includes(settings.ollama_model) && (
+                    <option value={settings.ollama_model}>{settings.ollama_model}</option>
+                  )}
+                  {ollamaModels.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-wv-dim">Detected from your local Ollama.</p>
+              </>
+            ) : (
+              <>
+                <input
+                  id="ollama-model"
+                  type="text"
+                  value={settings.ollama_model}
+                  onChange={e => setSettings(s => s ? { ...s, ollama_model: e.target.value } : s)}
+                  placeholder="qwen2.5:14b"
+                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                />
+                {modelsError && (
+                  <p className="mt-1 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

@@ -572,6 +572,7 @@ export interface Submission {
   updated_at: string;
   sanitization_findings?: SanitizationFinding[] | null;
   preference_confidence?: number;
+  derivation?: 'verbatim' | 'edited-after-extraction' | null;
 }
 
 export interface SanitizationFinding {

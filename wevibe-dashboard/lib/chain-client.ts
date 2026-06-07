@@ -21,6 +21,7 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.org.v1.MsgUpdateMemberRole',
   '/wevibe.org.v1.MsgSetServingKey',
   '/wevibe.org.v1.MsgSetServingInfo',
+  '/wevibe.org.v1.MsgSetExtractionProfile',
   '/wevibe.reputation.v1.MsgIncrementContribution',
   '/wevibe.reputation.v1.MsgIncrementServe',
   '/wevibe.reputation.v1.MsgRecordBan',
@@ -41,6 +42,57 @@ interface OrgAccountQueryResponse {
   account_address?: string;
 }
 
+export interface ExtractionProfile {
+  org_id: string;
+  profile_version: number;
+  extraction_model: string;
+  num_ctx: number;
+  system_prompt: string;
+  output_schema: string;
+  domain_framing: string;
+  exemplars: string[];
+  constraints: string;
+  updated_at_height: string;
+}
+
+interface ExtractionProfileQueryResponse {
+  found?: boolean;
+  profile?: {
+    org_id?: string;
+    profile_version?: string | number;
+    extraction_model?: string;
+    num_ctx?: string | number;
+    system_prompt?: string;
+    output_schema?: string;
+    domain_framing?: string;
+    exemplars?: unknown;
+    constraints?: string;
+    updated_at_height?: string | number;
+  };
+}
+
+function parseNonNegativeInteger(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return Math.floor(value);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.floor(parsed);
+      }
+    }
+  }
+
+  return 0;
+}
+
+function toOptionalString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 export async function getOrgAccountAddress(orgId: string): Promise<string> {
   const chainRest = getConfig().chainRest;
   const response = await fetch(`${chainRest}/wevibe/org/v1/account/${encodeURIComponent(orgId)}`);
@@ -57,6 +109,53 @@ export async function getOrgAccountAddress(orgId: string): Promise<string> {
   }
 
   return accountAddress;
+}
+
+export async function getExtractionProfile(orgId: string): Promise<ExtractionProfile | null> {
+  const normalizedOrgId = orgId.trim();
+  if (!normalizedOrgId) {
+    return null;
+  }
+
+  const chainRest = getConfig().chainRest;
+  const response = await fetch(`${chainRest}/wevibe/org/v1/extraction-profile/${encodeURIComponent(normalizedOrgId)}`, {
+    method: 'GET',
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return null;
+    }
+    const errorBody = await response.json().catch(() => ({ error: response.statusText, message: response.statusText }));
+    throw new Error(errorBody.error ?? errorBody.message ?? `Chain REST error ${response.status}`);
+  }
+
+  const body = (await response.json()) as ExtractionProfileQueryResponse;
+  if (body.found !== true || !body.profile) {
+    return null;
+  }
+
+  const profile = body.profile;
+  return {
+    org_id: toOptionalString(profile.org_id),
+    profile_version: parseNonNegativeInteger(profile.profile_version),
+    extraction_model: toOptionalString(profile.extraction_model),
+    num_ctx: parseNonNegativeInteger(profile.num_ctx),
+    system_prompt: toOptionalString(profile.system_prompt),
+    output_schema: toOptionalString(profile.output_schema),
+    domain_framing: toOptionalString(profile.domain_framing),
+    exemplars: Array.isArray(profile.exemplars)
+      ? profile.exemplars.filter((exemplar): exemplar is string => typeof exemplar === 'string')
+      : [],
+    constraints: toOptionalString(profile.constraints),
+    updated_at_height:
+      typeof profile.updated_at_height === 'string'
+        ? profile.updated_at_height
+        : typeof profile.updated_at_height === 'number'
+          ? String(parseNonNegativeInteger(profile.updated_at_height))
+          : '',
+  };
 }
 
 // The wevibe Msg `value` fields are already-encoded protobuf bytes (hand-rolled
@@ -89,6 +188,16 @@ export interface DenialEntry {
   nullifier: string;
   deny_key: string;
   reason: string;
+}
+
+export interface SetExtractionProfileInput {
+  extractionModel: string;
+  numCtx: number;
+  systemPrompt: string;
+  outputSchema: string;
+  domainFraming: string;
+  exemplars: string[];
+  constraints: string;
 }
 
 export interface ServeEntryInput {
@@ -415,6 +524,29 @@ export function buildSetServingInfoMsg(
 
   return {
     typeUrl: '/wevibe.org.v1.MsgSetServingInfo',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildSetExtractionProfileMsg(
+  signer: string,
+  orgId: string,
+  profile: SetExtractionProfileInput,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeStringField(0x1a, profile.extractionModel),
+    ...encodeVarint(0x20), ...encodeVarint(profile.numCtx),
+    ...encodeStringField(0x2a, profile.systemPrompt),
+    ...encodeStringField(0x32, profile.outputSchema),
+    ...encodeStringField(0x3a, profile.domainFraming),
+    ...encodeRepeatedStringField(0x42, profile.exemplars),
+    ...encodeStringField(0x4a, profile.constraints),
+  ];
+
+  return {
+    typeUrl: '/wevibe.org.v1.MsgSetExtractionProfile',
     value: Uint8Array.from(fields),
   };
 }

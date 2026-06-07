@@ -19,11 +19,13 @@ export interface SessionDetail {
 }
 
 export interface MemoryCandidate {
-  insight: string;
+  implement: string;
   context: string;
-  avoid: string | null;
+  dnd: string | null;
   stack: string[];
   memory_type: 'memory';
+  preference_confidence: number;
+  extraction_hash: string;
 }
 
 export type ExtractionStatus =

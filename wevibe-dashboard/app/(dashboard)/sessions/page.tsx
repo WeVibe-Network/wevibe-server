@@ -15,6 +15,49 @@ import { buildSubmitMemoryPayload, submitMemoryBatchToHub } from '@/lib/wevibe-s
 import { useOrgContext, type MemberOrgEntry } from '@/lib/org-context';
 import { getConfig } from '@/lib/config';
 
+type MemoryDerivation = 'verbatim' | 'edited-after-extraction';
+
+interface ExtractionHashPayload {
+  implement: string;
+  context: string;
+  dnd: string | null;
+  stack: string[];
+}
+
+function bufferToHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function sortedExtractionHashPayload(
+  payload: ExtractionHashPayload,
+): Record<string, string | string[] | null> {
+  const sortedPayload: Record<string, string | string[] | null> = {};
+  for (const key of Object.keys(payload).sort()) {
+    sortedPayload[key] = payload[key as keyof ExtractionHashPayload];
+  }
+  return sortedPayload;
+}
+
+async function computeExtractionHash(payload: ExtractionHashPayload): Promise<string> {
+  const canonicalPayload = sortedExtractionHashPayload(payload);
+  const bytes = new TextEncoder().encode(JSON.stringify(canonicalPayload));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return bufferToHex(digest);
+}
+
+async function deriveMemorySubmissionAttestation(memory: MemoryCandidate): Promise<MemoryDerivation> {
+  const extractedHash = memory.extraction_hash.trim().toLowerCase();
+  const recomputedHash = await computeExtractionHash({
+    implement: memory.implement,
+    context: memory.context,
+    dnd: memory.dnd,
+    stack: memory.stack,
+  });
+  return recomputedHash === extractedHash ? 'verbatim' : 'edited-after-extraction';
+}
+
 export default function SessionsPage() {
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -25,6 +68,7 @@ export default function SessionsPage() {
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus>('idle');
   const [extractionError, setExtractionError] = useState<string | null>(null);
+  const [extractElapsed, setExtractElapsed] = useState(0);
   const [memories, setMemories] = useState<MemoryCandidate[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [memoryOrgs, setMemoryOrgs] = useState<Map<number, string>>(new Map());
@@ -59,6 +103,21 @@ export default function SessionsPage() {
     }
     void load();
   }, []);
+
+  useEffect(() => {
+    if (extractionStatus !== 'extracting') {
+      setExtractElapsed(0);
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setExtractElapsed((prev) => prev + 1);
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [extractionStatus]);
 
   const selectSession = useCallback(
     async (id: string) => {
@@ -102,6 +161,7 @@ export default function SessionsPage() {
     if (!sessionDetail) return;
 
     setExtractionStatus('extracting');
+    setExtractElapsed(0);
     setExtractionError(null);
     setMemories([]);
     setSelected(new Set());
@@ -239,10 +299,8 @@ export default function SessionsPage() {
           const memory = memories[idx];
           if (!memory) continue;
 
-          const parts = [memory.insight];
-          if (memory.context) parts.push(`Context: ${memory.context}`);
-          if (memory.avoid) parts.push(`Avoid: ${memory.avoid}`);
-          const memoryText = parts.join('\n\n');
+          const memoryText = `${memory.implement}${memory.context ? `\n\nContext: ${memory.context}` : ''}${memory.dnd ? `\n\nDon't: ${memory.dnd}` : ''}`;
+          const derivation = await deriveMemorySubmissionAttestation(memory);
 
           const prepared = await buildSubmitMemoryPayload({
             memoryText,
@@ -250,6 +308,8 @@ export default function SessionsPage() {
             orgId,
             epochId,
             memoryType: memory.memory_type,
+            preferenceConfidence: memory.preference_confidence,
+            derivation,
             modPubkeyHex: modPubkey || '',
             hubUrl,
           });
@@ -436,10 +496,10 @@ export default function SessionsPage() {
                     <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] p-8 text-center">
                       <div className="mx-auto h-8 w-8 animate-spin rounded-full border-3 border-[rgba(124,92,255,0.22)] border-t-wv-violet" />
                       <p className="mt-4 text-sm font-medium text-wv-text">
-                        Extracting memories…
+                        Analyzing your session with your local model…
                       </p>
                       <p className="mt-1 text-xs text-wv-violet">
-                        Please wait while your session is being analyzed
+                        {`${sessionDetail?.message_count ?? ''} messages · local extraction can take ~30-60s · ${extractElapsed}s elapsed`}
                       </p>
                     </div>
                   )}
@@ -459,7 +519,7 @@ export default function SessionsPage() {
                     </div>
                   )}
 
-                  {extractionStatus === 'done' && (
+                  {extractionStatus === 'done' && memories.length > 0 && (
                     <div className="space-y-4">
                       <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
                         <span className="font-semibold">
@@ -494,6 +554,19 @@ export default function SessionsPage() {
                         const currentOrgId = memoryOrgs.get(idx) ?? activeOrg?.org_id ?? (orgs.length > 0 ? orgs[0].org_id : '');
                         const currentOrgEntry = orgs.find(o => o.org_id === currentOrgId);
                         const showOrgDropdown = orgs.length > 1;
+                        const preferenceBadge = memory.preference_confidence > 0.8
+                          ? (
+                              <span className="rounded-full bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-xs font-medium text-wv-red">
+                                Likely preference · low quality
+                              </span>
+                            )
+                          : memory.preference_confidence > 0.5
+                            ? (
+                                <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
+                                  Possible preference
+                                </span>
+                              )
+                            : null;
 
                         return (
                           <div
@@ -522,13 +595,14 @@ export default function SessionsPage() {
 
                               <div className="min-w-0 flex-1 space-y-2">
                                 <div className="flex items-center justify-between gap-2">
-							<div className="flex items-center gap-2">
-							  <span
-								className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green"
-							  >
-								Memory
-							  </span>
-							</div>
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green"
+                                    >
+                                      Memory
+                                    </span>
+                                    {preferenceBadge}
+                                  </div>
 
                                   {showOrgDropdown && (
                                     <select
@@ -554,7 +628,7 @@ export default function SessionsPage() {
                                   )}
                                 </div>
                                 <p className="text-sm font-medium text-wv-text">
-                                  {memory.insight}
+                                  {memory.implement}
                                 </p>
 
                                 {memory.context && (
@@ -563,9 +637,9 @@ export default function SessionsPage() {
                                   </p>
                                 )}
 
-                                {memory.avoid && (
+                                {memory.dnd && (
                                   <p className="rounded bg-[rgba(255,178,85,0.12)] px-2 py-1 text-xs text-wv-amber">
-                                    <span className="font-mono font-medium">⚠ Avoid:</span> {memory.avoid}
+                                    <span className="font-mono font-medium">⚠ Don&apos;t:</span> {memory.dnd}
                                   </p>
                                 )}
 

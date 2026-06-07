@@ -136,6 +136,8 @@ export interface SubmitMemoryParams {
   orgId: string;
   epochId: number;
   memoryType: MemoryType;
+  preferenceConfidence: number;
+  derivation: string;
   modPubkeyHex: string;
   hubUrl: string;
 }
@@ -154,6 +156,8 @@ export interface SubmitMemoryPayload {
   contributor_pubkey: string;
   contributor_sig: string;
   stack_hint: string[];
+  preference_confidence: number;
+  derivation: string;
   attestation: null;
 }
 
@@ -173,7 +177,16 @@ export interface BatchSubmitResponse {
 export async function buildSubmitMemoryPayload(
   params: SubmitMemoryParams,
 ): Promise<{ status: 'ok'; payload: SubmitMemoryPayload } | { status: 'error'; error: string }> {
-  const { memoryText, stackHint, orgId, epochId, memoryType, modPubkeyHex } = params;
+  const {
+    memoryText,
+    stackHint,
+    orgId,
+    epochId,
+    memoryType,
+    preferenceConfidence,
+    derivation,
+    modPubkeyHex,
+  } = params;
 
 	if (memoryType !== 'memory') {
 		return { status: 'error', error: 'memory_type is required for submission' };
@@ -243,6 +256,8 @@ export async function buildSubmitMemoryPayload(
       contributor_pubkey: identity.pubkeyHex,
       contributor_sig: signatureHex,
       stack_hint: stackHint,
+      preference_confidence: preferenceConfidence,
+      derivation,
       attestation: null,
     },
   };
