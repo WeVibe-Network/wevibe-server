@@ -192,6 +192,7 @@ func main() {
 	r.Post("/v1/pair", handlers.StorePairingBlob)
 	r.Get("/v1/pair/{pairingId}", handlers.GetPairingBlob)
 	r.Get("/v1/hub/serving-address", handlers.GetServingAddress)
+	r.Get("/v1/extraction-presets", handlers.GetExtractionPresets)
 	r.Get("/v1/balance/{address}", handlers.GetBalance)
 	r.Post("/v1/faucet/fund", handlers.FundFromFaucet)
 	r.Get("/v1/orgs/discover", handlers.DiscoverOrgs)
@@ -199,8 +200,10 @@ func main() {
 	r.Route("/v1/orgs/{orgID}", func(r chi.Router) {
 		// Public org-scoped reads (no membership required)
 		r.Get("/", handlers.GetOrg)
+		r.Get("/extraction-profile", handlers.GetExtractionProfile)
 		r.Post("/join", handlers.SubmitJoinRequest)
 		r.Get("/epoch/{epochID}/manifest", handlers.GetEpochManifest)
+		r.Put("/extraction-profile", handlers.SetExtractionProfile)
 
 		// Membership-required routes
 		r.Group(func(r chi.Router) {

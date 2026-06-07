@@ -266,6 +266,15 @@ CREATE TABLE IF NOT EXISTS org_credits (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS org_extraction_profile (
+    org_id          TEXT        PRIMARY KEY REFERENCES orgs(org_id) ON DELETE CASCADE,
+    system_prompt   TEXT        NOT NULL DEFAULT '',
+    num_ctx         INTEGER     NOT NULL DEFAULT 32768,
+    model           TEXT        NOT NULL DEFAULT '',
+    preset_id       TEXT        NOT NULL DEFAULT '',
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS credit_transactions (
     txn_id          BIGSERIAL   PRIMARY KEY,
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id),

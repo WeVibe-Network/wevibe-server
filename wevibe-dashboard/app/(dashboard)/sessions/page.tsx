@@ -17,11 +17,37 @@ import { getConfig } from '@/lib/config';
 
 type MemoryDerivation = 'verbatim' | 'edited-after-extraction';
 
+interface ExtractionMeta {
+  source: 'org-profile' | 'wevibe-default';
+  preset_id: string | null;
+  model: string;
+  num_ctx: number | null;
+  prompt_fingerprint: string;
+}
+
 interface ExtractionHashPayload {
   implement: string;
   context: string;
   dnd: string | null;
   stack: string[];
+}
+
+function isExtractionMeta(value: unknown): value is ExtractionMeta {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    (candidate.source === 'org-profile' || candidate.source === 'wevibe-default')
+    && (candidate.preset_id === null || typeof candidate.preset_id === 'string')
+    && typeof candidate.model === 'string'
+    && (
+      candidate.num_ctx === null
+      || (typeof candidate.num_ctx === 'number' && Number.isFinite(candidate.num_ctx))
+    )
+    && typeof candidate.prompt_fingerprint === 'string'
+  );
 }
 
 function bufferToHex(buffer: ArrayBuffer): string {
@@ -70,6 +96,7 @@ export default function SessionsPage() {
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [extractElapsed, setExtractElapsed] = useState(0);
   const [memories, setMemories] = useState<MemoryCandidate[]>([]);
+  const [extractionMeta, setExtractionMeta] = useState<ExtractionMeta | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [memoryOrgs, setMemoryOrgs] = useState<Map<number, string>>(new Map());
 
@@ -125,6 +152,7 @@ export default function SessionsPage() {
         setActiveSessionId(null);
         setSessionDetail(null);
         setMemories([]);
+        setExtractionMeta(null);
         setSelected(new Set());
         setExtractionStatus('idle');
         setExtractionError(null);
@@ -135,6 +163,7 @@ export default function SessionsPage() {
 
       setActiveSessionId(id);
       setMemories([]);
+      setExtractionMeta(null);
       setSelected(new Set());
       setMemoryOrgs(new Map());
       setExtractionStatus('idle');
@@ -164,6 +193,7 @@ export default function SessionsPage() {
     setExtractElapsed(0);
     setExtractionError(null);
     setMemories([]);
+    setExtractionMeta(null);
     setSelected(new Set());
     setMemoryOrgs(new Map());
     setSubmitResult(null);
@@ -183,6 +213,7 @@ export default function SessionsPage() {
 
       const data = (await resp.json()) as {
         memories: MemoryCandidate[];
+        extraction_meta?: unknown;
         error?: string;
       };
 
@@ -192,6 +223,7 @@ export default function SessionsPage() {
 
       setMemories(data.memories ?? []);
       setSelected(new Set((data.memories ?? []).map((_, i) => i)));
+      setExtractionMeta(isExtractionMeta(data.extraction_meta) ? data.extraction_meta : null);
       setExtractionStatus('done');
     } catch (err) {
       setExtractionError((err as Error).message);
@@ -523,12 +555,21 @@ export default function SessionsPage() {
                     <div className="space-y-4">
                       <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
                         <span className="font-semibold">
-                          Your session produced {memories.length} memory{memories.length !== 1 ? 'ies' : ''}!
+                          Your session produced {memories.length} memor{memories.length !== 1 ? 'ies' : 'y'}!
                         </span>
                         <span className="ml-2 text-wv-green">
                           Select which to submit for review.
                         </span>
                       </div>
+
+                      {extractionMeta && (
+                        <div className="font-mono text-xs text-wv-dim">
+                          Extracted with: {extractionMeta.preset_id || (extractionMeta.source === 'wevibe-default' ? 'WeVibe default' : 'custom')} · model {extractionMeta.model} · num_ctx {extractionMeta.num_ctx ?? 'null'} · prompt {extractionMeta.prompt_fingerprint}
+                          {extractionMeta.source === 'wevibe-default' && (
+                            <span className="ml-2 text-wv-faint">(org has not set a default)</span>
+                          )}
+                        </div>
+                      )}
 
                       <div className="flex items-center gap-3 text-xs">
                         <button
@@ -673,7 +714,7 @@ export default function SessionsPage() {
                               Submitting Batch…
                             </>
                           ) : (
-                            `Submit ${selected.size} Memory${selected.size !== 1 ? 'ies' : ''}`
+                            `Submit ${selected.size} Memor${selected.size !== 1 ? 'ies' : 'y'}`
                           )}
                         </button>
 

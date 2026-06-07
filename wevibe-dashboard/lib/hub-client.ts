@@ -192,6 +192,53 @@ export async function getOrgChainConfig(orgId: string): Promise<OrgChainConfig> 
   return hubFetch<OrgChainConfig>(`/v1/orgs/${orgId}/chain-config`);
 }
 
+export interface ExtractionProfile {
+  found: boolean;
+  system_prompt: string;
+  num_ctx: number;
+  model: string;
+  preset_id: string;
+  updated_at: string;
+}
+
+export interface ExtractionPreset {
+  id: string;
+  label: string;
+  goal: string;
+  recommended: boolean;
+  system_prompt: string;
+}
+
+export interface ExtractionPresetsResponse {
+  presets: ExtractionPreset[];
+  recommended_id: string;
+  default_num_ctx: number;
+  default_model: string;
+}
+
+export async function getExtractionProfile(orgId: string): Promise<ExtractionProfile> {
+  return hubFetch<ExtractionProfile>(`/v1/orgs/${orgId}/extraction-profile`);
+}
+
+export async function updateExtractionProfile(
+  orgId: string,
+  profile: {
+    system_prompt: string;
+    num_ctx: number;
+    model: string;
+    preset_id: string;
+  },
+): Promise<ExtractionProfile> {
+  return hubFetch<ExtractionProfile>(`/v1/orgs/${orgId}/extraction-profile`, {
+    method: 'PUT',
+    body: JSON.stringify(profile),
+  });
+}
+
+export async function getExtractionPresets(): Promise<ExtractionPresetsResponse> {
+  return hubFetch<ExtractionPresetsResponse>('/v1/extraction-presets');
+}
+
 // updateOrgChainConfig was removed in CO-011a.4. Category B chain config
 // (serve_attestation_required, min_contributions_per_epoch, contest_stake_vibe)
 // is now broadcast directly via the relay using MsgSetOrgConfig.

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import { loadSettings } from '@/lib/settings';
 import type { MemoryCandidate } from '@/lib/session-types';
 
 export const dynamic = 'force-dynamic';
+const DEFAULT_EXTRACTION_NUM_CTX = 32768;
 const MCP_SESSION_TOKEN_PATH = path.join(
   homedir(),
   '.wevibe',
@@ -25,6 +27,7 @@ interface ExtractionProfileOverrides {
   prompt?: string;
   numCtx?: number;
   model?: string;
+  presetId: string | null;
 }
 
 async function readMcpSessionToken(): Promise<string | null> {
@@ -61,18 +64,18 @@ function isMemoryCandidate(value: unknown): value is MemoryCandidate {
   );
 }
 
-function resolveServerChainRestBaseUrl(): string {
-  const explicitRestUrl = process.env.WEVIBE_CHAIN_REST_URL?.trim();
-  if (explicitRestUrl && explicitRestUrl.length > 0) {
-    return explicitRestUrl.replace(/\/+$/, '');
+function resolveServerHubBaseUrl(): string {
+  const explicitHubUrl = process.env.WEVIBE_HUB_URL?.trim();
+  if (explicitHubUrl && explicitHubUrl.length > 0) {
+    return explicitHubUrl.replace(/\/+$/, '');
   }
 
-  const configuredRestUrl = readConfigFromEnv().chainRest.trim();
-  if (configuredRestUrl.length > 0) {
-    return configuredRestUrl.replace(/\/+$/, '');
+  const configuredHubUrl = readConfigFromEnv().hubUrl.trim();
+  if (configuredHubUrl.length > 0) {
+    return configuredHubUrl.replace(/\/+$/, '');
   }
 
-  return 'http://localhost:1317';
+  return 'http://localhost:4440';
 }
 
 async function fetchOrgExtractionProfileOverrides(
@@ -83,8 +86,8 @@ async function fetchOrgExtractionProfileOverrides(
     return null;
   }
 
-  const chainRest = resolveServerChainRestBaseUrl();
-  const profileUrl = `${chainRest}/wevibe/org/v1/extraction-profile/${encodeURIComponent(trimmedOrgId)}`;
+  const hubUrl = resolveServerHubBaseUrl();
+  const profileUrl = `${hubUrl}/v1/orgs/${encodeURIComponent(trimmedOrgId)}/extraction-profile`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     controller.abort();
@@ -102,32 +105,40 @@ async function fetchOrgExtractionProfileOverrides(
     }
 
     const responseBody = (await response.json()) as unknown;
-    if (!isRecord(responseBody) || responseBody.found !== true || !isRecord(responseBody.profile)) {
+    if (!isRecord(responseBody) || responseBody.found !== true) {
       return null;
     }
 
-    const profile = responseBody.profile;
-    const overrides: ExtractionProfileOverrides = {};
+    const overrides: ExtractionProfileOverrides = {
+      presetId: null,
+    };
 
-    if (typeof profile.system_prompt === 'string') {
-      const prompt = profile.system_prompt.trim();
+    if (typeof responseBody.system_prompt === 'string') {
+      const prompt = responseBody.system_prompt.trim();
       if (prompt.length > 0) {
         overrides.prompt = prompt;
       }
     }
 
     if (
-      typeof profile.num_ctx === 'number'
-      && Number.isFinite(profile.num_ctx)
-      && profile.num_ctx > 0
+      typeof responseBody.num_ctx === 'number'
+      && Number.isFinite(responseBody.num_ctx)
+      && responseBody.num_ctx > 0
     ) {
-      overrides.numCtx = profile.num_ctx;
+      overrides.numCtx = responseBody.num_ctx;
     }
 
-    if (typeof profile.extraction_model === 'string') {
-      const model = profile.extraction_model.trim();
+    if (typeof responseBody.model === 'string') {
+      const model = responseBody.model.trim();
       if (model.length > 0) {
         overrides.model = model;
+      }
+    }
+
+    if (typeof responseBody.preset_id === 'string') {
+      const presetId = responseBody.preset_id.trim();
+      if (presetId.length > 0) {
+        overrides.presetId = presetId;
       }
     }
 
@@ -137,6 +148,14 @@ async function fetchOrgExtractionProfileOverrides(
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function computePromptFingerprint(prompt: string | undefined): string {
+  if (typeof prompt !== 'string') {
+    return 'wevibe-default';
+  }
+
+  return createHash('sha256').update(prompt).digest('hex').slice(0, 12);
 }
 
 export async function POST(request: NextRequest) {
@@ -185,7 +204,12 @@ export async function POST(request: NextRequest) {
   const settings = loadSettings();
   const profileOverrides = await fetchOrgExtractionProfileOverrides(settings.org_id);
   const modelFromSettings = settings.ollama_model.trim();
-  const resolvedModel = profileOverrides?.model ?? modelFromSettings;
+  const resolvedOllamaModel = profileOverrides?.model ?? modelFromSettings;
+  const openRouterModel = settings.openrouter_model.trim();
+  const useOpenRouter =
+    settings.llm_provider === 'openrouter'
+    && openRouterModel.length > 0;
+  const resolvedModel = useOpenRouter ? openRouterModel : resolvedOllamaModel;
   const mcpExtractRequestBody: {
     transcript: string;
     project_context: {
@@ -197,6 +221,9 @@ export async function POST(request: NextRequest) {
     num_ctx?: number;
     model?: string;
     ollama_url?: string;
+    provider?: string;
+    api_key?: string;
+    base_url?: string;
   } = {
     transcript: body.transcript,
     project_context: projectContext,
@@ -214,7 +241,11 @@ export async function POST(request: NextRequest) {
     mcpExtractRequestBody.model = resolvedModel;
   }
 
-  if (settings.ollama_url.trim().length > 0) {
+  if (useOpenRouter) {
+    mcpExtractRequestBody.provider = 'openrouter';
+    mcpExtractRequestBody.api_key = settings.openrouter_api_key;
+    mcpExtractRequestBody.base_url = 'https://openrouter.ai/api/v1';
+  } else if (settings.ollama_url.trim().length > 0) {
     mcpExtractRequestBody.ollama_url = settings.ollama_url;
   }
 
@@ -266,5 +297,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  return NextResponse.json({ memories });
+  return NextResponse.json({
+    memories,
+    extraction_meta: {
+      source: profileOverrides ? 'org-profile' : 'wevibe-default',
+      preset_id: profileOverrides?.presetId ?? null,
+      model: resolvedModel,
+      num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
+      prompt_fingerprint: computePromptFingerprint(mcpExtractRequestBody.prompt),
+    },
+  });
 }

@@ -1,33 +1,36 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getHubResponsePubkey, getHubServingAddress, getOrg, getOrgChainConfig } from '@/lib/hub-client';
+import {
+  getExtractionPresets,
+  getExtractionProfile,
+  getHubResponsePubkey,
+  getHubServingAddress,
+  getOrg,
+  getOrgChainConfig,
+  updateExtractionProfile,
+  type ExtractionPreset,
+} from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
 import { connectWallet } from '@/lib/wallet-connect';
 import {
-  buildSetExtractionProfileMsg,
   buildSetOrgConfigMsg,
   buildSetServingInfoMsg,
   buildSetServingKeyMsg,
   directBroadcast,
-  getExtractionProfile,
   getOrgAccountAddress,
 } from '@/lib/chain-client';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useOrgContext } from '@/lib/org-context';
 import { GuardCard } from '@/components/ui/states';
 import InfoTooltip from '@/components/ui/tooltip';
+import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
 
 const HUB_RESPONSE_PUBKEY_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
 const EXTRACTION_MODEL_MAX_BYTES = 256;
-const EXTRACTION_SYSTEM_PROMPT_MAX_BYTES = 8192;
-const EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES = 4096;
-const EXTRACTION_DOMAIN_FRAMING_MAX_BYTES = 1024;
-const EXTRACTION_CONSTRAINTS_MAX_BYTES = 4096;
-const EXTRACTION_EXEMPLAR_MAX_BYTES = 4096;
-const EXTRACTION_EXEMPLARS_MAX = 5;
+const EXTRACTION_SYSTEM_PROMPT_MAX_BYTES = 16384;
 const EXTRACTION_NUM_CTX_MAX = 131072;
-const EXTRACTION_TOTAL_STRING_BYTES_MAX = 16384;
+const EXTRACTION_TOTAL_STRING_BYTES_MAX = 24576;
 
 function byteLengthUtf8(value: string): number {
   return new TextEncoder().encode(value).length;
@@ -87,15 +90,17 @@ export default function SettingsPage() {
   const [extractionProfileError, setExtractionProfileError] = useState<string | null>(null);
   const [extractionProfileSuccess, setExtractionProfileSuccess] = useState<string | null>(null);
   const [savingExtractionProfile, setSavingExtractionProfile] = useState(false);
-  const [extractionProfileVersion, setExtractionProfileVersion] = useState<number | null>(null);
-  const [extractionProfileUpdatedAtHeight, setExtractionProfileUpdatedAtHeight] = useState<string | null>(null);
+  const [extractionProfileUpdatedAt, setExtractionProfileUpdatedAt] = useState<string | null>(null);
+  const [hasSavedExtractionProfile, setHasSavedExtractionProfile] = useState<boolean | null>(null);
   const [extractionModel, setExtractionModel] = useState('');
   const [extractionNumCtx, setExtractionNumCtx] = useState('');
   const [extractionSystemPrompt, setExtractionSystemPrompt] = useState('');
-  const [extractionOutputSchema, setExtractionOutputSchema] = useState('');
-  const [extractionDomainFraming, setExtractionDomainFraming] = useState('');
-  const [extractionConstraints, setExtractionConstraints] = useState('');
-  const [extractionExemplars, setExtractionExemplars] = useState<string[]>(['']);
+  const [extractionPresets, setExtractionPresets] = useState<ExtractionPreset[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const [extractionDefaultsMeta, setExtractionDefaultsMeta] = useState<{ num_ctx: number | null; model: string | null }>({
+    num_ctx: null,
+    model: null,
+  });
 
   const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
     if (!activeOrg) {
@@ -167,15 +172,14 @@ export default function SettingsPage() {
       setExtractionProfileLoading(false);
       setExtractionProfileError(null);
       setExtractionProfileSuccess(null);
-      setExtractionProfileVersion(null);
-      setExtractionProfileUpdatedAtHeight(null);
+      setExtractionProfileUpdatedAt(null);
+      setHasSavedExtractionProfile(null);
       setExtractionModel('');
       setExtractionNumCtx('');
       setExtractionSystemPrompt('');
-      setExtractionOutputSchema('');
-      setExtractionDomainFraming('');
-      setExtractionConstraints('');
-      setExtractionExemplars(['']);
+      setExtractionPresets([]);
+      setSelectedPresetId(null);
+      setExtractionDefaultsMeta({ num_ctx: null, model: null });
       return;
     }
 
@@ -183,40 +187,63 @@ export default function SettingsPage() {
     setExtractionProfileLoading(true);
     setExtractionProfileError(null);
     setExtractionProfileSuccess(null);
+    setHasSavedExtractionProfile(null);
 
-    void getExtractionProfile(activeOrg.org_id)
-      .then((profile) => {
+    void Promise.all([
+      getExtractionProfile(activeOrg.org_id),
+      getExtractionPresets(),
+    ])
+      .then(([profileResponse, presetsResponse]) => {
         if (cancelled) {
           return;
         }
 
-        if (!profile) {
-          setExtractionProfileVersion(null);
-          setExtractionProfileUpdatedAtHeight(null);
-          setExtractionModel('');
-          setExtractionNumCtx('');
-          setExtractionSystemPrompt('');
-          setExtractionOutputSchema('');
-          setExtractionDomainFraming('');
-          setExtractionConstraints('');
-          setExtractionExemplars(['']);
+        const defaultsModel = typeof presetsResponse.default_model === 'string'
+          ? presetsResponse.default_model.trim()
+          : '';
+        const defaultModel = defaultsModel.length > 0 ? defaultsModel : null;
+
+        const defaultNumCtx = Number.isFinite(presetsResponse.default_num_ctx)
+          && presetsResponse.default_num_ctx > 0
+          ? Math.floor(presetsResponse.default_num_ctx)
+          : null;
+
+        const presets = Array.isArray(presetsResponse.presets)
+          ? presetsResponse.presets
+          : [];
+
+        const recommendedPreset = (
+          presetsResponse.recommended_id
+            ? presets.find((preset) => preset.id === presetsResponse.recommended_id)
+            : undefined
+        ) ?? presets.find((preset) => preset.recommended);
+
+        setExtractionDefaultsMeta({ num_ctx: defaultNumCtx, model: defaultModel });
+        setExtractionPresets(presets);
+
+        if (profileResponse.found) {
+          setHasSavedExtractionProfile(true);
+          setExtractionProfileUpdatedAt(profileResponse.updated_at || null);
+          setExtractionModel(profileResponse.model);
+          setExtractionNumCtx(profileResponse.num_ctx > 0 ? String(profileResponse.num_ctx) : '');
+          setExtractionSystemPrompt(profileResponse.system_prompt);
+          const matchingPreset = presets.find((preset) => preset.system_prompt === profileResponse.system_prompt);
+          setSelectedPresetId(matchingPreset?.id ?? null);
           return;
         }
 
-        setExtractionProfileVersion(profile.profile_version);
-        setExtractionProfileUpdatedAtHeight(profile.updated_at_height);
-        setExtractionModel(profile.extraction_model);
-        setExtractionNumCtx(profile.num_ctx > 0 ? String(profile.num_ctx) : '');
-        setExtractionSystemPrompt(profile.system_prompt);
-        setExtractionOutputSchema(profile.output_schema);
-        setExtractionDomainFraming(profile.domain_framing);
-        setExtractionConstraints(profile.constraints);
-        setExtractionExemplars(profile.exemplars.length > 0 ? [...profile.exemplars] : ['']);
+        setHasSavedExtractionProfile(false);
+        setExtractionProfileUpdatedAt(null);
+        setExtractionModel(defaultModel ?? '');
+        setExtractionNumCtx(defaultNumCtx !== null ? String(defaultNumCtx) : '');
+        setExtractionSystemPrompt(recommendedPreset?.system_prompt ?? '');
+        setSelectedPresetId(recommendedPreset?.id ?? null);
       })
       .catch((err) => {
         if (cancelled) {
           return;
         }
+        setHasSavedExtractionProfile(null);
         setExtractionProfileError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
@@ -447,43 +474,19 @@ export default function SettingsPage() {
   const extractionValidation = useMemo(() => {
     const extractionModelBytes = byteLengthUtf8(extractionModel);
     const systemPromptBytes = byteLengthUtf8(extractionSystemPrompt);
-    const outputSchemaBytes = byteLengthUtf8(extractionOutputSchema);
-    const domainFramingBytes = byteLengthUtf8(extractionDomainFraming);
-    const constraintsBytes = byteLengthUtf8(extractionConstraints);
-    const exemplarByteLengths = extractionExemplars.map((exemplar) => byteLengthUtf8(exemplar));
-
     const totalStringBytes = extractionModelBytes
-      + systemPromptBytes
-      + outputSchemaBytes
-      + domainFramingBytes
-      + constraintsBytes
-      + exemplarByteLengths.reduce((total, next) => total + next, 0);
+      + systemPromptBytes;
 
-    const extractionModelError = extractionModelBytes > EXTRACTION_MODEL_MAX_BYTES
-      ? `extraction_model exceeds ${EXTRACTION_MODEL_MAX_BYTES} bytes.`
-      : null;
-    const systemPromptError = systemPromptBytes > EXTRACTION_SYSTEM_PROMPT_MAX_BYTES
-      ? `system_prompt exceeds ${EXTRACTION_SYSTEM_PROMPT_MAX_BYTES} bytes.`
-      : null;
-    const outputSchemaError = outputSchemaBytes > EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES
-      ? `output_schema exceeds ${EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES} bytes.`
-      : null;
-    const domainFramingError = domainFramingBytes > EXTRACTION_DOMAIN_FRAMING_MAX_BYTES
-      ? `domain_framing exceeds ${EXTRACTION_DOMAIN_FRAMING_MAX_BYTES} bytes.`
-      : null;
-    const constraintsError = constraintsBytes > EXTRACTION_CONSTRAINTS_MAX_BYTES
-      ? `constraints exceeds ${EXTRACTION_CONSTRAINTS_MAX_BYTES} bytes.`
-      : null;
-
-    const exemplarFieldErrors = exemplarByteLengths.map((bytes, index) => (
-      bytes > EXTRACTION_EXEMPLAR_MAX_BYTES
-        ? `Exemplar ${index + 1} exceeds ${EXTRACTION_EXEMPLAR_MAX_BYTES} bytes.`
-        : null
-    ));
-
-    const exemplarCountError = extractionExemplars.length > EXTRACTION_EXEMPLARS_MAX
-      ? `No more than ${EXTRACTION_EXEMPLARS_MAX} exemplars are allowed.`
-      : null;
+    const extractionModelError = extractionModel.trim().length === 0
+      ? 'model is required.'
+      : extractionModelBytes > EXTRACTION_MODEL_MAX_BYTES
+        ? `model exceeds ${EXTRACTION_MODEL_MAX_BYTES} bytes.`
+        : null;
+    const systemPromptError = extractionSystemPrompt.trim().length === 0
+      ? 'system_prompt is required.'
+      : systemPromptBytes > EXTRACTION_SYSTEM_PROMPT_MAX_BYTES
+        ? `system_prompt exceeds ${EXTRACTION_SYSTEM_PROMPT_MAX_BYTES} bytes.`
+        : null;
 
     const trimmedNumCtx = extractionNumCtx.trim();
     let parsedNumCtx: number | null = null;
@@ -508,13 +511,8 @@ export default function SettingsPage() {
     const hasErrors = Boolean(
       extractionModelError
       || systemPromptError
-      || outputSchemaError
-      || domainFramingError
-      || constraintsError
-      || exemplarCountError
       || numCtxError
-      || totalStringBytesError
-      || exemplarFieldErrors.some((entry) => entry !== null),
+      || totalStringBytesError,
     );
 
     return {
@@ -523,57 +521,31 @@ export default function SettingsPage() {
       bytes: {
         extractionModel: extractionModelBytes,
         systemPrompt: systemPromptBytes,
-        outputSchema: outputSchemaBytes,
-        domainFraming: domainFramingBytes,
-        constraints: constraintsBytes,
-        exemplars: exemplarByteLengths,
       },
       totalStringBytes,
       errors: {
         extractionModel: extractionModelError,
         systemPrompt: systemPromptError,
-        outputSchema: outputSchemaError,
-        domainFraming: domainFramingError,
-        constraints: constraintsError,
-        exemplars: exemplarFieldErrors,
-        exemplarCount: exemplarCountError,
         numCtx: numCtxError,
         totalBytes: totalStringBytesError,
       },
     };
   }, [
-    extractionConstraints,
-    extractionDomainFraming,
-    extractionExemplars,
     extractionModel,
     extractionNumCtx,
-    extractionOutputSchema,
     extractionSystemPrompt,
   ]);
 
-  const handleExtractionExemplarChange = useCallback((index: number, value: string) => {
-    setExtractionExemplars((previous) => previous.map((exemplar, exemplarIndex) => (
-      exemplarIndex === index ? value : exemplar
-    )));
+  const markExtractionProfileCustom = useCallback(() => {
+    setSelectedPresetId(null);
   }, []);
 
-  const handleAddExtractionExemplar = useCallback(() => {
-    setExtractionExemplars((previous) => {
-      if (previous.length >= EXTRACTION_EXEMPLARS_MAX) {
-        return previous;
-      }
-      return [...previous, ''];
-    });
-  }, []);
-
-  const handleRemoveExtractionExemplar = useCallback((index: number) => {
-    setExtractionExemplars((previous) => {
-      if (previous.length <= 1) {
-        return previous;
-      }
-      return previous.filter((_, exemplarIndex) => exemplarIndex !== index);
-    });
-  }, []);
+  const handleSelectExtractionPreset = useCallback((preset: ExtractionPreset) => {
+    setSelectedPresetId(preset.id);
+    setExtractionSystemPrompt(preset.system_prompt);
+    setExtractionNumCtx(String(extractionDefaultsMeta.num_ctx ?? 32768));
+    setExtractionModel((previous) => extractionDefaultsMeta.model ?? previous);
+  }, [extractionDefaultsMeta.model, extractionDefaultsMeta.num_ctx]);
 
   const handleExtractionProfileSave = useCallback(async () => {
     if (!activeOrg) {
@@ -585,84 +557,51 @@ export default function SettingsPage() {
       return;
     }
 
-    const normalizedExemplars = extractionExemplars
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0)
-      .slice(0, EXTRACTION_EXEMPLARS_MAX);
-    const toastId = txToast('Extraction profile');
-
     setSavingExtractionProfile(true);
     setExtractionProfileError(null);
     setExtractionProfileSuccess(null);
 
     try {
-      const walletConn = await connectWallet();
-      txConfirming(toastId, 'Extraction profile');
-
-      const msgSetExtractionProfile = buildSetExtractionProfileMsg(
-        walletConn.address,
+      await updateExtractionProfile(
         activeOrg.org_id,
         {
-          extractionModel: extractionModel.trim(),
-          numCtx: extractionValidation.parsedNumCtx,
-          systemPrompt: extractionSystemPrompt,
-          outputSchema: extractionOutputSchema,
-          domainFraming: extractionDomainFraming,
-          exemplars: normalizedExemplars,
-          constraints: extractionConstraints,
+          system_prompt: extractionSystemPrompt,
+          num_ctx: extractionValidation.parsedNumCtx,
+          model: extractionModel.trim(),
+          preset_id: selectedPresetId ?? '',
         },
       );
 
-      const orgAccount = await resolveOrgAccountForGas();
-      const result = await directBroadcast(walletConn.address, [msgSetExtractionProfile], orgAccount);
+      const refreshedProfile = await getExtractionProfile(activeOrg.org_id);
 
-      let refreshedProfile: Awaited<ReturnType<typeof getExtractionProfile>> = null;
-      try {
-        refreshedProfile = await getExtractionProfile(activeOrg.org_id);
-      } catch {
-        refreshedProfile = null;
-      }
-
-      if (refreshedProfile) {
-        setExtractionProfileVersion(refreshedProfile.profile_version);
-        setExtractionProfileUpdatedAtHeight(refreshedProfile.updated_at_height);
-        setExtractionModel(refreshedProfile.extraction_model);
+      if (refreshedProfile.found) {
+        setHasSavedExtractionProfile(true);
+        setExtractionProfileUpdatedAt(refreshedProfile.updated_at || null);
+        setExtractionModel(refreshedProfile.model);
         setExtractionNumCtx(refreshedProfile.num_ctx > 0 ? String(refreshedProfile.num_ctx) : '');
         setExtractionSystemPrompt(refreshedProfile.system_prompt);
-        setExtractionOutputSchema(refreshedProfile.output_schema);
-        setExtractionDomainFraming(refreshedProfile.domain_framing);
-        setExtractionConstraints(refreshedProfile.constraints);
-        setExtractionExemplars(refreshedProfile.exemplars.length > 0 ? [...refreshedProfile.exemplars] : ['']);
+        const matchingPreset = extractionPresets.find((preset) => preset.system_prompt === refreshedProfile.system_prompt);
+        setSelectedPresetId(matchingPreset?.id ?? null);
+      } else {
+        setHasSavedExtractionProfile(false);
+        setExtractionProfileUpdatedAt(null);
       }
 
-      const nextVersion = refreshedProfile?.profile_version
-        ?? (extractionProfileVersion !== null ? extractionProfileVersion + 1 : null);
-      if (!refreshedProfile && nextVersion !== null) {
-        setExtractionProfileVersion(nextVersion);
-      }
-
-      const versionLabel = nextVersion !== null ? `v${nextVersion}` : 'next profile version';
-      const successMessage = `Extraction profile updated (${versionLabel}). Tx: ${result.txHash.slice(0, 16)}...`;
+      const successMessage = 'Extraction default saved.';
       setExtractionProfileSuccess(successMessage);
-      txSuccess(toastId, successMessage);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setExtractionProfileError(message);
-      txError(toastId, message);
     } finally {
       setSavingExtractionProfile(false);
     }
   }, [
     activeOrg,
-    extractionConstraints,
-    extractionDomainFraming,
-    extractionExemplars,
     extractionModel,
-    extractionOutputSchema,
-    extractionProfileVersion,
+    extractionPresets,
     extractionSystemPrompt,
     extractionValidation,
-    resolveOrgAccountForGas,
+    selectedPresetId,
   ]);
 
   return (
@@ -1101,7 +1040,7 @@ export default function SettingsPage() {
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg font-semibold text-wv-text">Extraction Profile</h2>
                   <InfoTooltip label="About extraction profile">
-                    Leader-owned extraction defaults written on-chain and imported by contributors at extraction time.
+                    Leader-owned extraction defaults stored in the hub and imported by contributors at extraction time.
                   </InfoTooltip>
                 </div>
                 <p className="mt-1 text-sm text-wv-dim">
@@ -1109,14 +1048,18 @@ export default function SettingsPage() {
                 </p>
 
                 <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3 text-xs text-wv-dim">
-                  <p>
-                    profile_version:{' '}
-                    <span className="font-mono text-wv-text">{extractionProfileVersion ?? '—'}</span>
+                  <p className="text-wv-text">
+                    {hasSavedExtractionProfile === false
+                      ? 'No saved extraction default yet. Recommended defaults are prefilled.'
+                      : hasSavedExtractionProfile === true
+                        ? 'Saved extraction default is active.'
+                        : 'Loading extraction default…'}
                   </p>
-                  <p className="mt-1">
-                    updated_at_height:{' '}
-                    <span className="font-mono text-wv-text">{extractionProfileUpdatedAtHeight ?? '—'}</span>
-                  </p>
+                  {extractionProfileUpdatedAt && (
+                    <p className="mt-1">
+                      updated_at: <span className="font-mono text-wv-text">{extractionProfileUpdatedAt}</span>
+                    </p>
+                  )}
                 </div>
 
                 {extractionProfileError && (
@@ -1131,201 +1074,140 @@ export default function SettingsPage() {
                   </div>
                 )}
 
-                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="extraction-model" className="block text-sm font-medium text-wv-text">
-                      extraction_model
-                    </label>
-                    <input
-                      id="extraction-model"
-                      type="text"
-                      value={extractionModel}
-                      onChange={(event) => setExtractionModel(event.target.value)}
-                      placeholder="qwen2.5:14b"
-                      disabled={savingExtractionProfile || extractionProfileLoading}
-                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                    />
-                    <p className={`mt-2 text-xs ${extractionValidation.errors.extractionModel ? 'text-wv-red' : 'text-wv-dim'}`}>
-                      {extractionValidation.bytes.extractionModel}/{EXTRACTION_MODEL_MAX_BYTES} bytes
-                    </p>
-                    {extractionValidation.errors.extractionModel && (
-                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.extractionModel}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label htmlFor="extraction-num-ctx" className="block text-sm font-medium text-wv-text">
-                      num_ctx
-                    </label>
-                    <input
-                      id="extraction-num-ctx"
-                      type="number"
-                      min={1}
-                      max={EXTRACTION_NUM_CTX_MAX}
-                      step={1}
-                      value={extractionNumCtx}
-                      onChange={(event) => setExtractionNumCtx(event.target.value)}
-                      placeholder="4096"
-                      disabled={savingExtractionProfile || extractionProfileLoading}
-                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                    />
-                    <p className={`mt-2 text-xs ${extractionValidation.errors.numCtx ? 'text-wv-red' : 'text-wv-dim'}`}>
-                      Max {EXTRACTION_NUM_CTX_MAX}
-                    </p>
-                    {extractionValidation.errors.numCtx && (
-                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.numCtx}</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <label htmlFor="extraction-system-prompt" className="block text-sm font-medium text-wv-text">
-                    system_prompt
-                  </label>
-                  <textarea
-                    id="extraction-system-prompt"
-                    rows={6}
-                    value={extractionSystemPrompt}
-                    onChange={(event) => setExtractionSystemPrompt(event.target.value)}
-                    placeholder="System instructions used by extraction."
-                    disabled={savingExtractionProfile || extractionProfileLoading}
-                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                  />
-                  <p className={`mt-2 text-xs ${extractionValidation.errors.systemPrompt ? 'text-wv-red' : 'text-wv-dim'}`}>
-                    {extractionValidation.bytes.systemPrompt}/{EXTRACTION_SYSTEM_PROMPT_MAX_BYTES} bytes
-                  </p>
-                  {extractionValidation.errors.systemPrompt && (
-                    <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.systemPrompt}</p>
-                  )}
-                </div>
-
-                <div className="mt-4">
-                  <label htmlFor="extraction-output-schema" className="block text-sm font-medium text-wv-text">
-                    output_schema
-                  </label>
-                  <textarea
-                    id="extraction-output-schema"
-                    rows={5}
-                    value={extractionOutputSchema}
-                    onChange={(event) => setExtractionOutputSchema(event.target.value)}
-                    placeholder="JSON schema or shape constraints for extraction output."
-                    disabled={savingExtractionProfile || extractionProfileLoading}
-                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                  />
-                  <p className={`mt-2 text-xs ${extractionValidation.errors.outputSchema ? 'text-wv-red' : 'text-wv-dim'}`}>
-                    {extractionValidation.bytes.outputSchema}/{EXTRACTION_OUTPUT_SCHEMA_MAX_BYTES} bytes
-                  </p>
-                  {extractionValidation.errors.outputSchema && (
-                    <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.outputSchema}</p>
-                  )}
-                </div>
-
-                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label htmlFor="extraction-domain-framing" className="block text-sm font-medium text-wv-text">
-                      domain_framing
-                    </label>
-                    <textarea
-                      id="extraction-domain-framing"
-                      rows={4}
-                      value={extractionDomainFraming}
-                      onChange={(event) => setExtractionDomainFraming(event.target.value)}
-                      placeholder="Domain-specific framing and vocabulary."
-                      disabled={savingExtractionProfile || extractionProfileLoading}
-                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                    />
-                    <p className={`mt-2 text-xs ${extractionValidation.errors.domainFraming ? 'text-wv-red' : 'text-wv-dim'}`}>
-                      {extractionValidation.bytes.domainFraming}/{EXTRACTION_DOMAIN_FRAMING_MAX_BYTES} bytes
-                    </p>
-                    {extractionValidation.errors.domainFraming && (
-                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.domainFraming}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label htmlFor="extraction-constraints" className="block text-sm font-medium text-wv-text">
-                      constraints
-                    </label>
-                    <textarea
-                      id="extraction-constraints"
-                      rows={4}
-                      value={extractionConstraints}
-                      onChange={(event) => setExtractionConstraints(event.target.value)}
-                      placeholder="Hard constraints for extraction quality and safety."
-                      disabled={savingExtractionProfile || extractionProfileLoading}
-                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                    />
-                    <p className={`mt-2 text-xs ${extractionValidation.errors.constraints ? 'text-wv-red' : 'text-wv-dim'}`}>
-                      {extractionValidation.bytes.constraints}/{EXTRACTION_CONSTRAINTS_MAX_BYTES} bytes
-                    </p>
-                    {extractionValidation.errors.constraints && (
-                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.constraints}</p>
-                    )}
-                  </div>
-                </div>
-
                 <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium text-wv-text">exemplars</p>
-                    <span className="text-xs text-wv-dim">{extractionExemplars.length}/{EXTRACTION_EXEMPLARS_MAX}</span>
-                  </div>
-                  {extractionValidation.errors.exemplarCount && (
-                    <p className="mt-2 text-xs text-wv-red">{extractionValidation.errors.exemplarCount}</p>
-                  )}
-
-                  <div className="mt-3 flex flex-col gap-3">
-                    {extractionExemplars.map((exemplar, index) => (
-                      <div key={`extraction-exemplar-${index}`} className="rounded-lg border border-wv-line bg-wv-panel px-3 py-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <label htmlFor={`extraction-exemplar-${index}`} className="text-xs font-semibold uppercase tracking-wide text-wv-dim">
-                            Exemplar {index + 1}
-                          </label>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Preset</p>
+                  {extractionPresets.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {extractionPresets.map((preset) => {
+                        const isSelected = preset.id === selectedPresetId;
+                        return (
                           <button
+                            key={preset.id}
                             type="button"
-                            onClick={() => handleRemoveExtractionExemplar(index)}
-                            disabled={savingExtractionProfile || extractionProfileLoading || extractionExemplars.length <= 1}
-                            className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-2.5 py-1.5 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                            onClick={() => handleSelectExtractionPreset(preset)}
+                            title={preset.goal}
+                            disabled={savingExtractionProfile || extractionProfileLoading}
+                            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition ${
+                              isSelected
+                                ? 'border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.12)] text-wv-violet'
+                                : 'border-wv-line-2 text-wv-text hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet'
+                            } disabled:cursor-not-allowed disabled:opacity-60`}
                           >
-                            Remove
+                            <span>{preset.label}</span>
+                            {preset.recommended && (
+                              <span className="rounded-full border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.12)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-wv-violet">
+                                Recommended
+                              </span>
+                            )}
                           </button>
-                        </div>
-                        <textarea
-                          id={`extraction-exemplar-${index}`}
-                          rows={4}
-                          value={exemplar}
-                          onChange={(event) => handleExtractionExemplarChange(index, event.target.value)}
-                          placeholder="Example extraction input/output pair or guidance snippet."
-                          disabled={savingExtractionProfile || extractionProfileLoading}
-                          className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                        />
-                        <p className={`mt-2 text-xs ${extractionValidation.errors.exemplars[index] ? 'text-wv-red' : 'text-wv-dim'}`}>
-                          {extractionValidation.bytes.exemplars[index] ?? 0}/{EXTRACTION_EXEMPLAR_MAX_BYTES} bytes
-                        </p>
-                        {extractionValidation.errors.exemplars[index] && (
-                          <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.exemplars[index]}</p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleAddExtractionExemplar}
-                    disabled={savingExtractionProfile || extractionProfileLoading || extractionExemplars.length >= EXTRACTION_EXEMPLARS_MAX}
-                    className="mt-3 inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-3 py-2 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Add exemplar
-                  </button>
-                </div>
-
-                <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 px-3 py-2">
-                  <p className={`text-xs ${extractionValidation.errors.totalBytes ? 'text-wv-red' : 'text-wv-dim'}`}>
-                    Total UTF-8 string bytes: {extractionValidation.totalStringBytes}/{EXTRACTION_TOTAL_STRING_BYTES_MAX}
-                  </p>
-                  {extractionValidation.errors.totalBytes && (
-                    <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.totalBytes}</p>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-wv-dim">No extraction presets are available from the hub.</p>
+                  )}
+                  {selectedPresetId === null && (
+                    <p className="mt-2 text-xs text-wv-dim">Custom profile active (edited under Advanced).</p>
                   )}
                 </div>
+
+                {extractionSystemPrompt.trim().length > 0 && (
+                  <p className="mt-3 text-xs text-wv-dim">
+                    Preference score scale: 0.0 verifiable fact · 0.2–0.3 org convention · 0.5 ambiguous · 0.7–0.8 likely preference · 1.0 pure taste. Every memory is tagged; ≥0.7 is flagged low-quality.
+                  </p>
+                )}
+
+                <details className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+                  <summary className="cursor-pointer text-sm font-medium text-wv-text">
+                    Advanced (custom): author your own prompt
+                  </summary>
+
+                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="extraction-model" className="block text-sm font-medium text-wv-text">
+                        model
+                      </label>
+                      <input
+                        id="extraction-model"
+                        type="text"
+                        value={extractionModel}
+                        onChange={(event) => {
+                          markExtractionProfileCustom();
+                          setExtractionModel(event.target.value);
+                        }}
+                        placeholder="qwen3:4b"
+                        disabled={savingExtractionProfile || extractionProfileLoading}
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                      />
+                      <p className={`mt-2 text-xs ${extractionValidation.errors.extractionModel ? 'text-wv-red' : 'text-wv-dim'}`}>
+                        {extractionValidation.bytes.extractionModel}/{EXTRACTION_MODEL_MAX_BYTES} bytes
+                      </p>
+                      {extractionValidation.errors.extractionModel && (
+                        <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.extractionModel}</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label htmlFor="extraction-num-ctx" className="block text-sm font-medium text-wv-text">
+                        num_ctx
+                      </label>
+                      <input
+                        id="extraction-num-ctx"
+                        type="number"
+                        min={1}
+                        max={EXTRACTION_NUM_CTX_MAX}
+                        step={1}
+                        value={extractionNumCtx}
+                        onChange={(event) => {
+                          markExtractionProfileCustom();
+                          setExtractionNumCtx(event.target.value);
+                        }}
+                        placeholder="32768"
+                        disabled={savingExtractionProfile || extractionProfileLoading}
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                      />
+                      <p className={`mt-2 text-xs ${extractionValidation.errors.numCtx ? 'text-wv-red' : 'text-wv-dim'}`}>
+                        Max {EXTRACTION_NUM_CTX_MAX}
+                      </p>
+                      {extractionValidation.errors.numCtx && (
+                        <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.numCtx}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <label htmlFor="extraction-system-prompt" className="block text-sm font-medium text-wv-text">
+                      system_prompt
+                    </label>
+                    <textarea
+                      id="extraction-system-prompt"
+                      rows={6}
+                      value={extractionSystemPrompt}
+                      onChange={(event) => {
+                        markExtractionProfileCustom();
+                        setExtractionSystemPrompt(event.target.value);
+                      }}
+                      placeholder="System instructions used by extraction."
+                      disabled={savingExtractionProfile || extractionProfileLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                    <p className={`mt-2 text-xs ${extractionValidation.errors.systemPrompt ? 'text-wv-red' : 'text-wv-dim'}`}>
+                      {extractionValidation.bytes.systemPrompt}/{EXTRACTION_SYSTEM_PROMPT_MAX_BYTES} bytes
+                    </p>
+                    {extractionValidation.errors.systemPrompt && (
+                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.systemPrompt}</p>
+                    )}
+                  </div>
+
+                  <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel px-3 py-2">
+                    <p className={`text-xs ${extractionValidation.errors.totalBytes ? 'text-wv-red' : 'text-wv-dim'}`}>
+                      Total UTF-8 string bytes: {extractionValidation.totalStringBytes}/{EXTRACTION_TOTAL_STRING_BYTES_MAX}
+                    </p>
+                    {extractionValidation.errors.totalBytes && (
+                      <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.totalBytes}</p>
+                    )}
+                  </div>
+                </details>
 
                 <div className="mt-4 flex items-center gap-2">
                   <button
@@ -1334,12 +1216,12 @@ export default function SettingsPage() {
                     disabled={savingExtractionProfile || extractionProfileLoading || extractionValidation.hasErrors || !orgLoaded}
                     className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
                   >
-                    {savingExtractionProfile ? 'Broadcasting…' : 'Broadcast MsgSetExtractionProfile'}
+                    {savingExtractionProfile ? 'Saving…' : 'Save extraction default'}
                   </button>
                 </div>
 
                 {extractionProfileLoading && (
-                  <p className="mt-4 text-xs text-wv-dim">Loading on-chain extraction profile…</p>
+                  <p className="mt-4 text-xs text-wv-dim">Loading extraction profile…</p>
                 )}
               </section>
             </>
@@ -1369,7 +1251,9 @@ function OrgLlamaConfig() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [modelsError, setModelsError] = useState(false);
+  const [ollamaModelsError, setOllamaModelsError] = useState(false);
+  const [openRouterModels, setOpenRouterModels] = useState<SearchableModelOption[]>([]);
+  const [openRouterModelsError, setOpenRouterModelsError] = useState(false);
 
   useEffect(() => {
     fetch('/api/settings')
@@ -1392,7 +1276,7 @@ function OrgLlamaConfig() {
   useEffect(() => {
     if (!settings || settings.llm_provider !== 'ollama') {
       setOllamaModels([]);
-      setModelsError(false);
+      setOllamaModelsError(false);
       return;
     }
 
@@ -1410,20 +1294,73 @@ function OrgLlamaConfig() {
           : [];
 
         setOllamaModels(models);
-        setModelsError(Boolean(data.error) || models.length === 0);
+        setOllamaModelsError(Boolean(data.error) || models.length === 0);
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
         setOllamaModels([]);
-        setModelsError(true);
+        setOllamaModelsError(true);
       });
 
     return () => {
       cancelled = true;
     };
   }, [settings?.llm_provider, settings?.ollama_url]);
+
+  useEffect(() => {
+    if (!settings || settings.llm_provider !== 'openrouter') {
+      setOpenRouterModels([]);
+      setOpenRouterModelsError(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/openrouter-models')
+      .then(response => response.json() as Promise<{ models?: unknown; error?: unknown }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models
+            .map((entry) => {
+              if (!entry || typeof entry !== 'object') {
+                return null;
+              }
+
+              const model = entry as { id?: unknown; name?: unknown };
+              if (typeof model.id !== 'string' || model.id.length === 0) {
+                return null;
+              }
+
+              return {
+                id: model.id,
+                name: typeof model.name === 'string' && model.name.length > 0 ? model.name : model.id,
+              };
+            })
+            .filter((entry): entry is SearchableModelOption => entry !== null)
+          : [];
+
+        setOpenRouterModels(models);
+        setOpenRouterModelsError(Boolean(data.error) || models.length === 0);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setOpenRouterModels([]);
+        setOpenRouterModelsError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.llm_provider]);
 
   const handleSave = useCallback(async () => {
     if (!settings) return;
@@ -1543,7 +1480,7 @@ function OrgLlamaConfig() {
                   placeholder="qwen2.5:14b"
                   className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
                 />
-                {modelsError && (
+                {ollamaModelsError && (
                   <p className="mt-1 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
                 )}
               </>
@@ -1571,14 +1508,19 @@ function OrgLlamaConfig() {
             <label htmlFor="openrouter-model" className="block text-sm font-medium text-wv-text">
               OpenRouter Model
             </label>
-            <input
+            <SearchableModelCombobox
               id="openrouter-model"
-              type="text"
               value={settings.openrouter_model}
-              onChange={e => setSettings(s => s ? { ...s, openrouter_model: e.target.value } : s)}
+              onChange={nextValue => setSettings(s => s ? { ...s, openrouter_model: nextValue } : s)}
+              options={openRouterModels}
               placeholder="anthropic/claude-sonnet-4"
               className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
             />
+            {openRouterModels.length > 0 ? (
+              <p className="mt-1 text-xs text-wv-dim">Search OpenRouter public models or type any model id manually.</p>
+            ) : openRouterModelsError ? (
+              <p className="mt-1 text-xs text-wv-dim">Could not load OpenRouter models — enter a model id manually.</p>
+            ) : null}
           </div>
         </div>
       )}

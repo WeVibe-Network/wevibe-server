@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { PairPlugin } from '@/components/pairing/pair-plugin';
 import InfoTooltip from '@/components/ui/tooltip';
+import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
 import { getConfig } from '@/lib/config';
 import { getProfile, type ProfileResponse } from '@/lib/hub-client';
 import { useIdentity } from '@/lib/identity-context';
@@ -52,7 +53,9 @@ export default function ProfilePage() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [localSaveMessage, setLocalSaveMessage] = useState<string | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [modelsError, setModelsError] = useState(false);
+  const [ollamaModelsError, setOllamaModelsError] = useState(false);
+  const [openRouterModels, setOpenRouterModels] = useState<SearchableModelOption[]>([]);
+  const [openRouterModelsError, setOpenRouterModelsError] = useState(false);
 
   useEffect(() => {
     async function loadProfile() {
@@ -119,7 +122,7 @@ export default function ProfilePage() {
   useEffect(() => {
     if (!settings || settings.llm_provider !== 'ollama') {
       setOllamaModels([]);
-      setModelsError(false);
+      setOllamaModelsError(false);
       return;
     }
 
@@ -137,20 +140,73 @@ export default function ProfilePage() {
           : [];
 
         setOllamaModels(models);
-        setModelsError(Boolean(data.error) || models.length === 0);
+        setOllamaModelsError(Boolean(data.error) || models.length === 0);
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
         setOllamaModels([]);
-        setModelsError(true);
+        setOllamaModelsError(true);
       });
 
     return () => {
       cancelled = true;
     };
   }, [settings?.llm_provider, settings?.ollama_url]);
+
+  useEffect(() => {
+    if (!settings || settings.llm_provider !== 'openrouter') {
+      setOpenRouterModels([]);
+      setOpenRouterModelsError(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/openrouter-models')
+      .then(response => response.json() as Promise<{ models?: unknown; error?: unknown }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models
+            .map((entry) => {
+              if (!entry || typeof entry !== 'object') {
+                return null;
+              }
+
+              const model = entry as { id?: unknown; name?: unknown };
+              if (typeof model.id !== 'string' || model.id.length === 0) {
+                return null;
+              }
+
+              return {
+                id: model.id,
+                name: typeof model.name === 'string' && model.name.length > 0 ? model.name : model.id,
+              };
+            })
+            .filter((entry): entry is SearchableModelOption => entry !== null)
+          : [];
+
+        setOpenRouterModels(models);
+        setOpenRouterModelsError(Boolean(data.error) || models.length === 0);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setOpenRouterModels([]);
+        setOpenRouterModelsError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.llm_provider]);
 
   const handleWalletConnect = useCallback(async () => {
     setWalletActionError(null);
@@ -597,7 +653,7 @@ export default function ProfilePage() {
                             ))}
                             className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
                           />
-                          {modelsError ? (
+                          {ollamaModelsError ? (
                             <p className="mt-2 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
                           ) : null}
                         </>
@@ -629,20 +685,26 @@ export default function ProfilePage() {
                       <label htmlFor="profile-openrouter-model" className="block text-sm font-medium text-wv-text">
                         OpenRouter Model
                       </label>
-                      <input
+                      <SearchableModelCombobox
                         id="profile-openrouter-model"
-                        type="text"
                         value={settings.openrouter_model}
-                        onChange={event => setSettings(current => (
+                        onChange={nextValue => setSettings(current => (
                           current
                             ? {
                               ...current,
-                              openrouter_model: event.target.value,
+                              openrouter_model: nextValue,
                             }
                             : current
                         ))}
+                        options={openRouterModels}
+                        placeholder="anthropic/claude-sonnet-4"
                         className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
                       />
+                      {openRouterModels.length > 0 ? (
+                        <p className="mt-2 text-xs text-wv-dim">Search OpenRouter public models or type any model id manually.</p>
+                      ) : openRouterModelsError ? (
+                        <p className="mt-2 text-xs text-wv-dim">Could not load OpenRouter models — enter a model id manually.</p>
+                      ) : null}
                     </div>
                   </div>
                 )}
