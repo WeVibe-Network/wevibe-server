@@ -176,7 +176,7 @@ services:
 
   wevibe-faucet:
     build:
-      context: ../faucet
+      context: ../wevibe-faucet
       dockerfile: Dockerfile
     container_name: wevibe-faucet
     restart: unless-stopped
