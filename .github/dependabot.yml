@@ -25,6 +25,11 @@ updates:
       prefix: "deps"
     labels:
       - "dependencies"
+    # @noble/hashes v2 changed its module paths and API; the major bump needs a
+    # code migration, so it is excluded from automation here.
+    ignore:
+      - dependency-name: "@noble/hashes"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-wevibe-dashboard:
         patterns:
