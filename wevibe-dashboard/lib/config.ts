@@ -11,6 +11,7 @@ export interface WevibeConfig {
 }
 
 export const WEVIBE_CONFIG_GLOBAL = '__WEVIBE_CONFIG__';
+export const DEFAULT_WEVIBE_MCP_HTTP_URL = 'http://127.0.0.1:4450';
 
 const DEFAULT_CONFIG: WevibeConfig = {
   hubUrl: 'http://localhost:4440',
@@ -51,4 +52,11 @@ export function hubWsUrl(path: string): string {
   const hubUrl = new URL(getConfig().hubUrl);
   hubUrl.protocol = hubUrl.protocol === 'https:' ? 'wss:' : 'ws:';
   return new URL(path, hubUrl).toString();
+}
+
+export function getMcpHttpUrl(): string {
+  const configuredUrl = process.env.WEVIBE_MCP_HTTP_URL?.trim();
+  return configuredUrl && configuredUrl.length > 0
+    ? configuredUrl
+    : DEFAULT_WEVIBE_MCP_HTTP_URL;
 }
