@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -137,19 +136,8 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Admitting a member subscribes them: the org pays SubscriptionCost out of
-	// its prepaid credit pool and the member's recall access is activated
-	// (membership_active = TRUE). An insufficiently-funded org leaves the member
-	// row in place but inactive (membership_active = FALSE → recall denied); the
-	// invite is NOT rolled back.
-	if err := billing.Subscribe(r.Context(), pool, orgID, req.Pubkey, req.SignedBy); err != nil {
-		if errors.Is(err, billing.ErrInsufficientCredits) {
-			http.Error(w, `{"error":"insufficient org credits to subscribe member"}`, http.StatusPaymentRequired)
-			return
-		}
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
+	// Admission does not consume hub credits. Recall stays gated by
+	// membership_active until an explicit enable-recall subscription action.
 
 	if updated, err := members.GetMember(r.Context(), pool, orgID, req.Pubkey); err == nil {
 		member = updated

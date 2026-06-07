@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,11 +10,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 )
 
 func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
@@ -294,21 +292,9 @@ func ApproveJoinRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Non-trial join approvals subscribe the new member: the org debits its
-	// credit pool once and activates membership_active. Trial members use the
-	// orthogonal free-tier path (expiry + daily limit) and are NOT subscribed.
-	// Insufficient credits leaves the (already-admitted) member inactive; the
-	// approval is not rolled back.
-	if !isTrial {
-		if subErr := billing.Subscribe(ctx, pool, orgID, requesterPubkey, signed.Pubkey); subErr != nil {
-			if errors.Is(subErr, billing.ErrInsufficientCredits) {
-				http.Error(w, `{"error":"insufficient org credits to subscribe member"}`, http.StatusPaymentRequired)
-				return
-			}
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-	}
+	// Admission is gated on-chain (MsgAddMember + org VIBE for gas), not by hub
+	// credits. Credits only gate RECALL via membership_active, which remains
+	// false on admission and is enabled by a future explicit enable-recall action.
 
 	_ = emitUserNotification(ctx,
 		requesterPubkey,
