@@ -13,7 +13,7 @@ require (
 	github.com/go-chi/cors v1.2.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/jackc/pgx/v5 v5.7.5
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/lib/pq v1.11.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wevibe-network/wevibe-chain v0.0.0
