@@ -44,7 +44,7 @@ function isLeaderOwnershipConflict(err: unknown): boolean {
 export default function CreateOrgPage() {
   const router = useRouter();
   const { state, walletAddress, walletLinked, identity, refresh } = useDashboardState();
-  const { orgs } = useOrgContext();
+  const { orgs, refresh: refreshOrgs } = useOrgContext();
   const [orgName, setOrgName] = useState('');
   const [domain, setDomain] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -221,7 +221,13 @@ export default function CreateOrgPage() {
             </div>
 
             <div className="flex items-center gap-3">
-              <Button type="button" onClick={() => router.push('/')}>
+              <Button
+                type="button"
+                onClick={async () => {
+                  await refreshOrgs(success.orgId);
+                  router.push('/my-org');
+                }}
+              >
                 Continue to dashboard
               </Button>
             </div>

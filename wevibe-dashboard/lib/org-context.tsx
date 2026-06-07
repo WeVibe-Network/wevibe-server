@@ -31,7 +31,7 @@ interface OrgContextValue {
   setActiveOrg: (orgId: string) => void;
   loading: boolean;
   error: string | null;
-  refresh: () => Promise<void>;
+  refresh: (preferredOrgId?: string) => Promise<void>;
 }
 
 const OrgContext = createContext<OrgContextValue | null>(null);
@@ -46,7 +46,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const identityPubkey = identity?.pubkeyHex ?? null;
 
-  const loadOrgs = useCallback(async () => {
+  const loadOrgs = useCallback(async (preferredOrgId?: string) => {
     setLoading(true);
     try {
       if (!identityPubkey) {
@@ -63,9 +63,18 @@ export function OrgProvider({ children }: { children: ReactNode }) {
         ? localStorage.getItem(STORAGE_KEY)
         : null;
 
-      const nextActiveOrg = savedOrgId
-        ? (memberOrgs.find((org) => org.org_id === savedOrgId) ?? memberOrgs[0] ?? null)
-        : (memberOrgs[0] ?? null);
+      const preferredOrg = preferredOrgId
+        ? (memberOrgs.find((org) => org.org_id === preferredOrgId) ?? null)
+        : null;
+
+      const nextActiveOrg = preferredOrg
+        ?? (savedOrgId
+          ? (memberOrgs.find((org) => org.org_id === savedOrgId) ?? memberOrgs[0] ?? null)
+          : (memberOrgs[0] ?? null));
+
+      if (preferredOrg && typeof window !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY, preferredOrg.org_id);
+      }
 
       setActiveOrgState(nextActiveOrg);
       setError(null);
@@ -88,8 +97,8 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     }
   }, [orgs]);
 
-  const refresh = useCallback(async () => {
-    await loadOrgs();
+  const refresh = useCallback(async (preferredOrgId?: string) => {
+    await loadOrgs(preferredOrgId);
   }, [loadOrgs]);
 
   const value = useMemo<OrgContextValue>(() => ({

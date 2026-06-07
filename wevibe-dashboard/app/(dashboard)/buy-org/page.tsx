@@ -11,6 +11,7 @@ import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
 import { getConfig } from '@/lib/config';
 import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
+import { useOrgContext } from '@/lib/org-context';
 import { SLOT_CAP, slotBarHeightPercent, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useDashboardState } from '@/lib/use-dashboard-state';
@@ -147,6 +148,7 @@ function barStyles(state: ChartBarState): string {
 export default function BuyOrgPage() {
   const router = useRouter();
   const { state, walletAddress, walletLinked, identity, refresh } = useDashboardState();
+  const { refresh: refreshOrgs } = useOrgContext();
 
   const [creatingIdentity, setCreatingIdentity] = useState(false);
   const [identityError, setIdentityError] = useState<string | null>(null);
@@ -320,6 +322,8 @@ export default function BuyOrgPage() {
         hub_serving_key: hubServingKey,
       });
 
+      await refreshOrgs(orgId);
+
       txConfirming(toastId, 'Create org');
 
       const chainRest = getConfig().chainRest;
@@ -364,7 +368,7 @@ export default function BuyOrgPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [capReached, domain, identity, loadCurrentSlot, orgName, router, submitting, walletAddress]);
+  }, [capReached, domain, identity, loadCurrentSlot, orgName, refreshOrgs, router, submitting, walletAddress]);
 
   const openConfirmModal = useCallback(() => {
     if (capReached) {
