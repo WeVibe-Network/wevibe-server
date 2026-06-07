@@ -29,19 +29,11 @@ func GetContributorStats(ctx context.Context, pool *pgxpool.Pool, chainClient Ch
 		return nil, err
 	}
 
-	var chainContributorID string
-	if chainClient != nil {
-		walletAddr, walletErr := getWalletAddress(ctx, pool, orgID, contributorPubkey)
-		if walletErr == nil && walletAddr != "" {
-			chainContributorID = walletAddr
-		} else {
-			chainContributorID = contributorPubkey
-		}
-	}
-
 	var chainProfile *types.StoredContributorProfile
-	if chainClient != nil && chainContributorID != "" {
-		chainProfile, _ = chainClient.GetContributorProfile(ctx, chainContributorID, 0)
+	if chainClient != nil {
+		// D-REPUTATION-KEYED-BY-PUBKEY: chain reputation/earnings are keyed by ed25519 contributor pubkey.
+		// FUTURE: add alias-aware pubkey→wallet resolution once on-chain alias mapping exists post-migration.
+		chainProfile, _ = chainClient.GetContributorProfile(ctx, contributorPubkey, 0)
 	}
 
 	var contributions int
@@ -95,18 +87,4 @@ func GetContributorStats(ctx context.Context, pool *pgxpool.Pool, chainClient Ch
 		ReportsUpheld:       reportsUpheld,
 		FalseReportsAgainst: falseReports,
 	}, nil
-}
-
-func getWalletAddress(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (string, error) {
-	var wallet *string
-	err := pool.QueryRow(ctx,
-		`SELECT wallet_address FROM members WHERE org_id = $1 AND pubkey = $2`,
-		orgID, pubkey).Scan(&wallet)
-	if err != nil {
-		return "", err
-	}
-	if wallet == nil {
-		return "", nil
-	}
-	return *wallet, nil
 }
