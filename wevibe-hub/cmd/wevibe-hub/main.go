@@ -241,6 +241,7 @@ func main() {
 			})
 
 			r.Get("/moderation/queue", handlers.GetPendingQueue)
+			r.Get("/moderation/history", handlers.GetModerationHistory)
 			r.Post("/moderation/{submissionHash}/vote", handlers.VoteOnSubmission)
 			r.Post("/moderation/{submissionHash}/approve", handlers.ApproveSubmission)
 			r.Post("/moderation/{submissionHash}/deny", handlers.DenySubmission)

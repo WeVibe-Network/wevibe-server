@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -360,6 +361,104 @@ func GetPendingQueue(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(items)
+}
+
+func GetModerationHistory(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	if orgID == "" {
+		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		return
+	}
+
+	rows, err := pool.Query(r.Context(), `
+		WITH moderation_history AS (
+			SELECT
+				submission_hash,
+				memory_type,
+				epoch_id,
+				status,
+				moderator_pubkey,
+				denial_reason,
+				CASE
+					WHEN status = 'denied' THEN 'denied'
+					WHEN status IN ('approved', 'ready', 'pending_keyword', 'pending_chain', 'committed') THEN 'approved'
+				END AS decision,
+				CASE
+					WHEN status = 'denied' THEN COALESCE(resolved_at, updated_at)
+					WHEN status IN ('approved', 'ready', 'pending_keyword', 'pending_chain', 'committed') THEN COALESCE(approved_at, resolved_at, updated_at)
+				END AS decided_at
+			FROM pending_submissions
+			WHERE org_id = $1
+				AND status IN ('denied', 'approved', 'ready', 'pending_keyword', 'pending_chain', 'committed')
+		)
+		SELECT
+			submission_hash,
+			memory_type,
+			epoch_id,
+			decision,
+			status,
+			moderator_pubkey,
+			decided_at,
+			denial_reason
+		FROM moderation_history
+		WHERE decided_at >= NOW() - INTERVAL '24 hours'
+		ORDER BY decided_at DESC
+		LIMIT 200
+	`, orgID)
+	if err != nil {
+		log.Printf("GetModerationHistory query error org=%s: %v", orgID, err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type moderationHistoryItem struct {
+		SubmissionHash  string  `json:"submission_hash"`
+		MemoryType      string  `json:"memory_type"`
+		EpochID         int     `json:"epoch_id"`
+		Decision        string  `json:"decision"`
+		Status          string  `json:"status"`
+		ModeratorPubkey *string `json:"moderator_pubkey"`
+		DecidedAt       string  `json:"decided_at"`
+		DenialReason    *string `json:"denial_reason"`
+	}
+
+	items := make([]moderationHistoryItem, 0)
+	for rows.Next() {
+		var item moderationHistoryItem
+		var decidedAt time.Time
+		if err := rows.Scan(
+			&item.SubmissionHash,
+			&item.MemoryType,
+			&item.EpochID,
+			&item.Decision,
+			&item.Status,
+			&item.ModeratorPubkey,
+			&decidedAt,
+			&item.DenialReason,
+		); err != nil {
+			log.Printf("GetModerationHistory scan error org=%s: %v", orgID, err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		item.DecidedAt = decidedAt.UTC().Format(time.RFC3339)
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("GetModerationHistory rows error org=%s: %v", orgID, err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"items": items})
 }
 
 func VoteOnSubmission(w http.ResponseWriter, r *http.Request) {
