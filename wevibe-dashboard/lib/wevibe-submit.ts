@@ -1,8 +1,9 @@
-import { getIdentity, signWithIdentity } from './wevibe-auth';
+import { buildAuthHeaders, getIdentity, signWithIdentity } from './wevibe-auth';
 import {
   submitMemoryCanonical,
   type MemoryType,
 } from './wevibe-signing';
+import { encryptSymmetric, sealToPubkey } from './wevibe-crypto';
 import type { SanitizationFinding } from './hub-client';
 
 function bufToHex(buf: ArrayBuffer): string {
@@ -37,29 +38,10 @@ export function generateDek(): Uint8Array {
 export async function encryptMemory(
   plaintext: string,
   dek: Uint8Array,
-): Promise<{ ciphertext: Uint8Array; nonce: Uint8Array }> {
+): Promise<Uint8Array> {
   const encoder = new TextEncoder();
   const data = encoder.encode(plaintext);
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-
-  const key = await crypto.subtle.importKey(
-    'raw',
-    dek.buffer as ArrayBuffer,
-    { name: 'AES-GCM' },
-    false,
-    ['encrypt'],
-  );
-
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce },
-    key,
-    data,
-  );
-
-  return {
-    ciphertext: new Uint8Array(ciphertext),
-    nonce,
-  };
+  return encryptSymmetric(data, dek);
 }
 
 export async function sealDekToModPubkey(
@@ -67,55 +49,7 @@ export async function sealDekToModPubkey(
   modPubkeyHex: string,
 ): Promise<Uint8Array> {
   const modPubkeyBytes = hexToBuf(modPubkeyHex);
-
-  let ephKeyPair: CryptoKeyPair;
-  try {
-    const keyResult = await crypto.subtle.generateKey(
-      { name: 'X25519' },
-      true,
-      ['deriveBits'],
-    );
-    ephKeyPair = keyResult as CryptoKeyPair;
-  } catch {
-    throw new Error(
-      "Browser doesn't support X25519. Update your browser to a modern version.",
-    );
-  }
-
-  const modKey = await crypto.subtle.importKey(
-    'raw',
-    modPubkeyBytes.buffer as ArrayBuffer,
-    { name: 'X25519' },
-    false,
-    [],
-  );
-
-  const sharedBits = await crypto.subtle.deriveBits(
-    { name: 'X25519', public: modKey },
-    ephKeyPair.privateKey,
-    256,
-  );
-  const sharedSecret = new Uint8Array(sharedBits).slice(0, 32);
-
-  const sealNonce = crypto.getRandomValues(new Uint8Array(12));
-  const sealKey = await crypto.subtle.importKey(
-    'raw',
-    sharedSecret.buffer as ArrayBuffer,
-    { name: 'AES-GCM' },
-    false,
-    ['encrypt'],
-  );
-
-  const encryptedDek = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: sealNonce },
-    sealKey,
-    dek.buffer as ArrayBuffer,
-  );
-
-  const ephPubRaw = await crypto.subtle.exportKey('raw', ephKeyPair.publicKey);
-  const ephPubBytes = new Uint8Array(ephPubRaw);
-
-  return concatBufs(ephPubBytes, sealNonce, new Uint8Array(encryptedDek));
+  return sealToPubkey(dek, modPubkeyBytes);
 }
 
 export async function computeSubmissionHash(
@@ -195,7 +129,7 @@ export async function buildSubmitMemoryPayload(
   }
 
   const dek = generateDek();
-  const { ciphertext, nonce } = await encryptMemory(memoryText, dek);
+  const fullCiphertext = await encryptMemory(memoryText, dek);
   const salt = crypto.getRandomValues(new Uint8Array(32));
   const plaintextBytes = new TextEncoder().encode(memoryText);
   const plaintextHashBuffer = await crypto.subtle.digest(
@@ -212,7 +146,6 @@ export async function buildSubmitMemoryPayload(
   );
   const wrappedDekHashHex = bufToHex(wrappedDekHashBuffer);
 
-  const fullCiphertext = concatBufs(nonce, ciphertext);
   const ciphertextHashBuffer = await crypto.subtle.digest(
     'SHA-256',
     fullCiphertext.buffer as ArrayBuffer,
@@ -265,9 +198,13 @@ export async function submitMemoryBatchToHub(
   orgId: string,
   submissions: SubmitMemoryPayload[],
 ): Promise<BatchSubmitResponse> {
+  const authHeaders = await buildAuthHeaders();
   const resp = await fetch(`${hubUrl}/v1/orgs/${orgId}/submit/batch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders,
+    },
     body: JSON.stringify({ submissions }),
   });
 
@@ -291,9 +228,13 @@ export async function submitMemoryToHub(
   const payload = prepared.payload;
 
   try {
+    const authHeaders = await buildAuthHeaders();
     const resp = await fetch(`${hubUrl}/v1/orgs/${orgId}/submit`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
       body: JSON.stringify(payload),
     });
 

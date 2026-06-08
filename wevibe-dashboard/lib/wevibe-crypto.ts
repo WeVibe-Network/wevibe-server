@@ -121,6 +121,11 @@ export async function sealToPubkey(plaintext: Uint8Array, recipientPub: Uint8Arr
   return wasm.seal_to_pubkey(plaintext, recipientPub);
 }
 
+export async function encryptSymmetric(plaintext: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
+  const wasm = await ensureWasm();
+  return wasm.encrypt_symmetric(plaintext, key);
+}
+
 export async function masterKeyToMnemonic(master: Uint8Array): Promise<string> {
   const wasm = await ensureWasm();
   return wasm.master_key_to_mnemonic(master);
