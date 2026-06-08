@@ -8,6 +8,7 @@ export interface WevibeConfig {
   bech32Prefix: string;
   coinDenom: string;
   coinMinDenom: string;
+  environment: string;
 }
 
 export const WEVIBE_CONFIG_GLOBAL = '__WEVIBE_CONFIG__';
@@ -23,6 +24,7 @@ const DEFAULT_CONFIG: WevibeConfig = {
   bech32Prefix: 'wevibe',
   coinDenom: 'VIBE',
   coinMinDenom: 'uvibe',
+  environment: 'development',
 };
 
 export function readConfigFromEnv(): WevibeConfig {
@@ -36,6 +38,7 @@ export function readConfigFromEnv(): WevibeConfig {
     bech32Prefix: process.env.WEVIBE_BECH32_PREFIX ?? DEFAULT_CONFIG.bech32Prefix,
     coinDenom: process.env.WEVIBE_COIN_DENOM ?? DEFAULT_CONFIG.coinDenom,
     coinMinDenom: process.env.WEVIBE_COIN_MIN_DENOM ?? DEFAULT_CONFIG.coinMinDenom,
+    environment: process.env.WEVIBE_ENV ?? DEFAULT_CONFIG.environment,
   };
 }
 
@@ -59,4 +62,8 @@ export function getMcpHttpUrl(): string {
   return configuredUrl && configuredUrl.length > 0
     ? configuredUrl
     : DEFAULT_WEVIBE_MCP_HTTP_URL;
+}
+
+export function isProductionEnv(): boolean {
+  return getConfig().environment === 'production';
 }

@@ -8,7 +8,7 @@ import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
 import { ErrorBanner, LoadingState } from '@/components/ui/states';
 import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
-import { getConfig } from '@/lib/config';
+import { getConfig, isProductionEnv } from '@/lib/config';
 import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
 import { useOrgContext } from '@/lib/org-context';
@@ -429,6 +429,14 @@ export default function BuyOrgPage() {
 
   const handleStartRecoveryVerification = useCallback(() => {
     if (recoveryWords.length < 3) {
+      return;
+    }
+
+    // Recovery-phrase confirmation challenge is only enforced in production.
+    // In non-production environments it is skipped (WEVIBE_ENV).
+    if (!isProductionEnv()) {
+      setRecoveryConfirmError(null);
+      setRecoveryPhrasePhase('passed');
       return;
     }
 

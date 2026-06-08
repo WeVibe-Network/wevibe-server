@@ -214,6 +214,7 @@ services:
       WEVIBE_BECH32_PREFIX: ${WEVIBE_BECH32_PREFIX:-wevibe}
       WEVIBE_COIN_DENOM: ${WEVIBE_COIN_DENOM:-VIBE}
       WEVIBE_COIN_MIN_DENOM: ${WEVIBE_COIN_MIN_DENOM:-uvibe}
+      WEVIBE_ENV: ${WEVIBE_ENV:-development}
       NODE_ENV: production
     ports:
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:3000:3000"
