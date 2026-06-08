@@ -77,6 +77,9 @@ export default function Topbar() {
     const client = getMcpClient();
     setState(client.state);
     const unsubscribe = client.addStateListener(setState);
+    void client.connect().catch(() => {
+      // state listener reflects 'error'; no-op
+    });
 
     return () => {
       unsubscribe();

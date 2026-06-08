@@ -12,6 +12,7 @@ export default function McpConnectionGuard({ children }: { children: ReactNode }
     setState(client.state);
 
     const unsubscribe = client.addStateListener(setState);
+    void client.connect().catch(() => {});
 
     return () => {
       unsubscribe();

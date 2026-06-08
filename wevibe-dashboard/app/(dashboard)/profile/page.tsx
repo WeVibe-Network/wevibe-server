@@ -7,6 +7,7 @@ import SearchableModelCombobox, { type SearchableModelOption } from '@/component
 import { getConfig } from '@/lib/config';
 import { getProfile, type ProfileResponse } from '@/lib/hub-client';
 import { useIdentity } from '@/lib/identity-context';
+import { resetMcpClient } from '@/lib/mcp-client';
 import type { DashboardSettings } from '@/lib/settings';
 import { txError, txSuccess, txToast } from '@/lib/toast';
 import { clearWalletAddress, getIdentity, setWalletAddress } from '@/lib/wevibe-auth';
@@ -245,6 +246,7 @@ export default function ProfilePage() {
 
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('wevibe-mcp-url', normalizedMcpUrl);
+      void resetMcpClient(normalizedMcpUrl).connect().catch(() => {});
     }
     setMcpUrl(normalizedMcpUrl);
     setLocalSaveMessage('MCP URL saved on this device.');
