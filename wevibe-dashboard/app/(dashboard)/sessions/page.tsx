@@ -1,88 +1,38 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Badge from '@/components/ui/badge';
 import ClientTime from '@/components/ui/client-time';
+import Spinner from '@/components/ui/spinner';
 import type {
   SessionSummary,
   SessionDetail,
-  MemoryCandidate,
-  ExtractionStatus,
 } from '@/lib/session-types';
 import { getIdentity } from '@/lib/wevibe-auth';
-import { buildSubmitMemoryPayload, submitMemoryBatchToHub } from '@/lib/wevibe-submit';
-import { useOrgContext, type MemberOrgEntry } from '@/lib/org-context';
-import { getConfig } from '@/lib/config';
+import { enqueueExtraction, statusForSession, useExtractionQueue } from '@/lib/extraction-queue';
+import {
+  getDraft,
+  loadDrafts,
+} from '@/lib/draft-store';
 
-type MemoryDerivation = 'verbatim' | 'edited-after-extraction';
+type SessionSortKey = 'updated' | 'title' | 'message_count';
+type SortDirection = 'asc' | 'desc';
 
-interface ExtractionMeta {
-  source: 'org-profile' | 'wevibe-default';
-  preset_id: string | null;
-  model: string;
-  num_ctx: number | null;
-  prompt_fingerprint: string;
+const SESSION_SORT_STORAGE_KEY = 'wevibe.sessions.sort.v1';
+
+interface LlmSettingsSnapshot {
+  llm_provider: 'ollama' | 'openrouter';
+  ollama_model: string;
+  openrouter_model: string;
 }
 
-interface ExtractionHashPayload {
-  implement: string;
-  context: string;
-  dnd: string | null;
-  stack: string[];
-}
-
-function isExtractionMeta(value: unknown): value is ExtractionMeta {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  return (
-    (candidate.source === 'org-profile' || candidate.source === 'wevibe-default')
-    && (candidate.preset_id === null || typeof candidate.preset_id === 'string')
-    && typeof candidate.model === 'string'
-    && (
-      candidate.num_ctx === null
-      || (typeof candidate.num_ctx === 'number' && Number.isFinite(candidate.num_ctx))
-    )
-    && typeof candidate.prompt_fingerprint === 'string'
-  );
-}
-
-function bufferToHex(buffer: ArrayBuffer): string {
-  return Array.from(new Uint8Array(buffer))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function sortedExtractionHashPayload(
-  payload: ExtractionHashPayload,
-): Record<string, string | string[] | null> {
-  const sortedPayload: Record<string, string | string[] | null> = {};
-  for (const key of Object.keys(payload).sort()) {
-    sortedPayload[key] = payload[key as keyof ExtractionHashPayload];
-  }
-  return sortedPayload;
-}
-
-async function computeExtractionHash(payload: ExtractionHashPayload): Promise<string> {
-  const canonicalPayload = sortedExtractionHashPayload(payload);
-  const bytes = new TextEncoder().encode(JSON.stringify(canonicalPayload));
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return bufferToHex(digest);
-}
-
-async function deriveMemorySubmissionAttestation(memory: MemoryCandidate): Promise<MemoryDerivation> {
-  const extractedHash = memory.extraction_hash.trim().toLowerCase();
-  const recomputedHash = await computeExtractionHash({
-    implement: memory.implement,
-    context: memory.context,
-    dnd: memory.dnd,
-    stack: memory.stack,
-  });
-  return recomputedHash === extractedHash ? 'verbatim' : 'edited-after-extraction';
-}
+const DEFAULT_LLM_SETTINGS: LlmSettingsSnapshot = {
+  llm_provider: 'ollama',
+  ollama_model: 'qwen2.5:14b',
+  openrouter_model: '',
+};
 
 export default function SessionsPage() {
   const router = useRouter();
@@ -92,24 +42,45 @@ export default function SessionsPage() {
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
-  const [extractionStatus, setExtractionStatus] = useState<ExtractionStatus>('idle');
+  const [sessionDetailLoading, setSessionDetailLoading] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
-  const [extractElapsed, setExtractElapsed] = useState(0);
-  const [memories, setMemories] = useState<MemoryCandidate[]>([]);
-  const [extractionMeta, setExtractionMeta] = useState<ExtractionMeta | null>(null);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [memoryOrgs, setMemoryOrgs] = useState<Map<number, string>>(new Map());
-
-  const [submitting, setSubmitting] = useState(false);
-  const [submitProgress, setSubmitProgress] = useState<string | null>(null);
-  const [submitResult, setSubmitResult] = useState<string | null>(null);
-  const [submitFindings, setSubmitFindings] = useState<import('@/lib/hub-client').SanitizationFinding[] | null>(null);
   const [identity, setIdentity] = useState<{ pubkeyHex: string } | null>(null);
+  const [pubkeyHex, setPubkeyHex] = useState<string | null>(null);
+  const [extractedDraftCount, setExtractedDraftCount] = useState(0);
 
-  const { orgs, activeOrg } = useOrgContext();
+  const [llmSettings, setLlmSettings] = useState<LlmSettingsSnapshot>(DEFAULT_LLM_SETTINGS);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortKey, setSortKey] = useState<SessionSortKey>('updated');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+
+  const queueSnapshot = useExtractionQueue();
+
+  const openRouterModel = llmSettings.openrouter_model.trim();
+  const ollamaModel = llmSettings.ollama_model.trim() || DEFAULT_LLM_SETTINGS.ollama_model;
+  const useOpenRouter = llmSettings.llm_provider === 'openrouter'
+    && openRouterModel.length > 0;
+  const providerLabel = useOpenRouter
+    ? `OpenRouter (cloud) · ${openRouterModel}`
+    : `Ollama (local) · ${ollamaModel}`;
+  const etaText = useOpenRouter ? '~5–20s' : '~30–90s';
+  const queueCtaLabel = queueSnapshot.activeCount > 0 ? 'Add to queue' : 'Extract';
 
   useEffect(() => {
-    getIdentity().then(setIdentity);
+    let cancelled = false;
+
+    void getIdentity().then((nextIdentity) => {
+      if (cancelled) {
+        return;
+      }
+
+      setIdentity(nextIdentity);
+      const normalizedPubkey = nextIdentity?.pubkeyHex?.trim() ?? '';
+      setPubkeyHex(normalizedPubkey.length > 0 ? normalizedPubkey : null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -132,280 +103,189 @@ export default function SessionsPage() {
   }, []);
 
   useEffect(() => {
-    if (extractionStatus !== 'extracting') {
-      setExtractElapsed(0);
+    let cancelled = false;
+
+    async function loadSettings() {
+      try {
+        const response = await fetch('/api/settings');
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as Partial<LlmSettingsSnapshot>;
+        if (cancelled) {
+          return;
+        }
+
+        setLlmSettings({
+          llm_provider: data.llm_provider === 'openrouter' ? 'openrouter' : 'ollama',
+          ollama_model: typeof data.ollama_model === 'string'
+            ? data.ollama_model
+            : DEFAULT_LLM_SETTINGS.ollama_model,
+          openrouter_model: typeof data.openrouter_model === 'string'
+            ? data.openrouter_model
+            : DEFAULT_LLM_SETTINGS.openrouter_model,
+        });
+      } catch {
+        // keep defaults
+      }
+    }
+
+    void loadSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
       return;
     }
 
-    const timer = window.setInterval(() => {
-      setExtractElapsed((prev) => prev + 1);
-    }, 1000);
+    try {
+      const raw = window.localStorage.getItem(SESSION_SORT_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
 
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [extractionStatus]);
+      const parsed = JSON.parse(raw) as { key?: unknown; direction?: unknown };
+
+      if (parsed.key === 'updated' || parsed.key === 'title' || parsed.key === 'message_count') {
+        setSortKey(parsed.key);
+      }
+      if (parsed.direction === 'asc' || parsed.direction === 'desc') {
+        setSortDirection(parsed.direction);
+      }
+    } catch {
+      // ignore malformed saved sort state
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(
+        SESSION_SORT_STORAGE_KEY,
+        JSON.stringify({ key: sortKey, direction: sortDirection }),
+      );
+    } catch {
+      // ignore local storage errors
+    }
+  }, [sortDirection, sortKey]);
+
+  const loadSessionDetail = useCallback(async (id: string) => {
+    setSessionDetailLoading(true);
+    setExtractionError(null);
+
+    try {
+      const resp = await fetch(`/api/sessions/${id}/messages`);
+      if (!resp.ok) {
+        throw new Error('Failed to load session');
+      }
+      const detail = (await resp.json()) as SessionDetail;
+      setSessionDetail(detail);
+    } catch (err) {
+      setSessionDetail(null);
+      setExtractionError((err as Error).message);
+    } finally {
+      setSessionDetailLoading(false);
+    }
+  }, []);
 
   const selectSession = useCallback(
-    async (id: string) => {
+    (id: string) => {
       if (activeSessionId === id) {
         setActiveSessionId(null);
         setSessionDetail(null);
-        setMemories([]);
-        setExtractionMeta(null);
-        setSelected(new Set());
-        setExtractionStatus('idle');
+        setSessionDetailLoading(false);
         setExtractionError(null);
-        setSubmitResult(null);
-        setSubmitProgress(null);
         return;
       }
 
       setActiveSessionId(id);
-      setMemories([]);
-      setExtractionMeta(null);
-      setSelected(new Set());
-      setMemoryOrgs(new Map());
-      setExtractionStatus('idle');
+      setSessionDetail(null);
+      setSessionDetailLoading(true);
       setExtractionError(null);
-      setSubmitResult(null);
-      setSubmitProgress(null);
 
-      setExtractionStatus('loading-transcript');
-      try {
-        const resp = await fetch(`/api/sessions/${id}/messages`);
-        if (!resp.ok) throw new Error('Failed to load session');
-        const detail = (await resp.json()) as SessionDetail;
-        setSessionDetail(detail);
-        setExtractionStatus('idle');
-      } catch (err) {
-        setExtractionError((err as Error).message);
-        setExtractionStatus('error');
-      }
+      void loadSessionDetail(id);
     },
-    [activeSessionId],
+    [activeSessionId, loadSessionDetail],
   );
 
-  const extractMemories = useCallback(async () => {
-    if (!sessionDetail) return;
-
-    setExtractionStatus('extracting');
-    setExtractElapsed(0);
-    setExtractionError(null);
-    setMemories([]);
-    setExtractionMeta(null);
-    setSelected(new Set());
-    setMemoryOrgs(new Map());
-    setSubmitResult(null);
-    setSubmitProgress(null);
-
-    try {
-      const resp = await fetch('/api/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transcript: sessionDetail.transcript,
-          title: sessionDetail.title,
-          directory: sessionDetail.directory,
-          model: sessionDetail.model,
-        }),
-      });
-
-      const data = (await resp.json()) as {
-        memories: MemoryCandidate[];
-        extraction_meta?: unknown;
-        error?: string;
-      };
-
-      if (data.error && (data.memories ?? []).length === 0) {
-        throw new Error(data.error);
-      }
-
-      setMemories(data.memories ?? []);
-      setSelected(new Set((data.memories ?? []).map((_, i) => i)));
-      setExtractionMeta(isExtractionMeta(data.extraction_meta) ? data.extraction_meta : null);
-      setExtractionStatus('done');
-    } catch (err) {
-      setExtractionError((err as Error).message);
-      setExtractionStatus('error');
-    }
-  }, [sessionDetail]);
-
-  const toggleMemory = (index: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(index)) {
-        next.delete(index);
-      } else {
-        next.add(index);
-      }
-      return next;
-    });
-  };
-
-  const selectAll = () => setSelected(new Set(memories.map((_, i) => i)));
-  const selectNone = () => setSelected(new Set());
-
-  const setMemoryOrg = (index: number, orgId: string) => {
-    setMemoryOrgs(prev => {
-      const next = new Map(prev);
-      next.set(index, orgId);
-      return next;
-    });
-  };
-
-  const submitSelected = useCallback(async () => {
-    if (selected.size === 0 || !sessionDetail) return;
-
-    const defaultOrgId = activeOrg?.org_id;
-    const fallbackOrgId = orgs.length > 0 ? orgs[0].org_id : null;
-
-    if (!defaultOrgId && !fallbackOrgId) {
-      setSubmitResult(
-        'No org available. Configure your org in Settings first.',
-      );
+  const enqueueActiveSession = useCallback(() => {
+    if (!sessionDetail || !pubkeyHex) {
       return;
     }
 
-    setSubmitting(true);
-    setSubmitProgress('Preparing batch payloads...');
-    setSubmitResult(null);
-    setSubmitFindings(null);
+    enqueueExtraction({
+      sessionId: sessionDetail.session_id,
+      pubkeyHex,
+      transcript: sessionDetail.transcript,
+      title: sessionDetail.title,
+      directory: sessionDetail.directory,
+      model: sessionDetail.model,
+    });
+  }, [pubkeyHex, sessionDetail]);
 
-    const hubUrl = getConfig().hubUrl;
-
-    interface OrgGroup {
-      orgId: string;
-      indices: number[];
+  const draftReadySessionIds = useMemo(() => {
+    if (!pubkeyHex) {
+      return new Set<string>();
     }
 
-    const orgGroups: OrgGroup[] = [];
-    for (const idx of selected) {
-      const orgId = memoryOrgs.get(idx) ?? defaultOrgId ?? fallbackOrgId!;
-      const existing = orgGroups.find(g => g.orgId === orgId);
-      if (existing) {
-        existing.indices.push(idx);
-      } else {
-        orgGroups.push({ orgId, indices: [idx] });
+    const ready = new Set<string>();
+    for (const session of sessions) {
+      if (getDraft(pubkeyHex, session.id)) {
+        ready.add(session.id);
       }
     }
+    return ready;
+  }, [sessions, pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs]);
 
-    let submitted = 0;
-    const errors: string[] = [];
-    let allFindings: import('@/lib/hub-client').SanitizationFinding[] = [];
-    const groupSummaries: Array<{ orgId: string; requested: number }> = [];
-    const totalSelected = selected.size;
-    let preparedCount = 0;
-    let completedBatches = 0;
+  useEffect(() => {
+    if (!pubkeyHex) {
+      setExtractedDraftCount(0);
+      return;
+    }
 
-    try {
-      for (const group of orgGroups) {
-        const { orgId, indices } = group;
-        groupSummaries.push({ orgId, requested: indices.length });
+    setExtractedDraftCount(Object.keys(loadDrafts(pubkeyHex)).length);
+  }, [pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs]);
 
-        const modEntry = orgs.find(o => o.org_id === orgId);
-        const modPubkey = modEntry?.mod_pubkey;
+  const visibleSessions = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    const filtered = sessions.filter((session) => {
+      if (!query) {
+        return true;
+      }
+      return session.title.toLowerCase().includes(query)
+        || session.directory.toLowerCase().includes(query);
+    });
 
-        if (!modPubkey) {
-          const settingsResp = await fetch('/api/settings');
-          if (settingsResp.ok) {
-            const settingsData = await settingsResp.json() as { mod_pubkey?: string };
-            if (!settingsData.mod_pubkey) {
-              errors.push(`No mod_pubkey for org ${orgId}`);
-              continue;
-            }
-          }
-        }
+    const directionMultiplier = sortDirection === 'asc' ? 1 : -1;
+    const sorted = [...filtered].sort((a, b) => {
+      if (sortKey === 'title') {
+        const aTitle = (a.title || 'Untitled Session').toLowerCase();
+        const bTitle = (b.title || 'Untitled Session').toLowerCase();
+        return aTitle.localeCompare(bTitle) * directionMultiplier;
+      }
 
-        const epochResp = await fetch(`${hubUrl}/v1/orgs/${orgId}`);
-        if (!epochResp.ok) {
-          errors.push(`Failed to fetch org ${orgId} epoch: HTTP ${epochResp.status}`);
-          continue;
-        }
-        const epochData = (await epochResp.json()) as { current_epoch?: number };
-        const epochId = epochData.current_epoch ?? 0;
-
-        const payloads = [];
-
-        for (const idx of indices) {
-          const memory = memories[idx];
-          if (!memory) continue;
-
-          const memoryText = `${memory.implement}${memory.context ? `\n\nContext: ${memory.context}` : ''}${memory.dnd ? `\n\nDon't: ${memory.dnd}` : ''}`;
-          const derivation = await deriveMemorySubmissionAttestation(memory);
-
-          const prepared = await buildSubmitMemoryPayload({
-            memoryText,
-            stackHint: memory.stack,
-            orgId,
-            epochId,
-            memoryType: memory.memory_type,
-            preferenceConfidence: memory.preference_confidence,
-            derivation,
-            modPubkeyHex: modPubkey || '',
-            hubUrl,
-          });
-
-          preparedCount++;
-          setSubmitProgress(`Prepared ${preparedCount} of ${totalSelected} memories...`);
-
-          if (prepared.status === 'ok') {
-            payloads.push(prepared.payload);
-          } else {
-            errors.push(prepared.error ?? 'unknown error');
-          }
-        }
-
-        if (payloads.length === 0) {
-          completedBatches++;
-          continue;
-        }
-
-        setSubmitProgress(`Submitting batch ${completedBatches + 1} of ${orgGroups.length}...`);
-        const batchResult = await submitMemoryBatchToHub(hubUrl, orgId, payloads);
-        submitted += batchResult.submitted;
-        completedBatches++;
-
-        for (const entry of batchResult.results) {
-          if (entry.status === 'error') {
-            errors.push(entry.error ?? `submission ${entry.submission_hash} failed`);
-          }
-          if (entry.sanitization_findings && entry.sanitization_findings.length > 0) {
-            allFindings = allFindings.concat(entry.sanitization_findings);
-          }
+      if (sortKey === 'message_count') {
+        const byMessages = a.message_count - b.message_count;
+        if (byMessages !== 0) {
+          return byMessages * directionMultiplier;
         }
       }
-    } catch (err) {
-      errors.push((err as Error).message);
-    }
 
-    setSubmitting(false);
-    setSubmitProgress(null);
+      const aUpdated = Date.parse(a.time_updated) || 0;
+      const bUpdated = Date.parse(b.time_updated) || 0;
+      return (aUpdated - bUpdated) * directionMultiplier;
+    });
 
-    if (allFindings.length > 0) {
-      setSubmitFindings(allFindings);
-    }
-
-    if (orgGroups.length > 1) {
-      const orgNames = groupSummaries.map(g => {
-        const entry = orgs.find(o => o.org_id === g.orgId);
-        return `${g.requested}→${entry?.org_name ?? g.orgId}`;
-      }).join(', ');
-      if (submitted > 0 && errors.length === 0) {
-        setSubmitResult(`Submitted: ${orgNames}`);
-      } else {
-        setSubmitResult(`${submitted} submitted, ${errors.length} failed. ${orgNames}`);
-      }
-    } else if (submitted > 0 && errors.length === 0) {
-      setSubmitResult(`${submitted} memory(ies) submitted for review!`);
-    } else if (submitted > 0) {
-      setSubmitResult(
-        `${submitted} submitted, ${errors.length} failed: ${errors[0]}`,
-      );
-    } else {
-      setSubmitResult(`Submission failed: ${errors[0] ?? 'unknown error'}`);
-    }
-  }, [selected, memories, sessionDetail, memoryOrgs, activeOrg, orgs]);
+    return sorted;
+  }, [searchTerm, sessions, sortDirection, sortKey]);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -413,8 +293,14 @@ export default function SessionsPage() {
         <h1 className="text-3xl font-semibold tracking-tight">Sessions</h1>
         <p className="text-sm text-wv-dim">
           Extract technical memories from your coding sessions.
-          Memories are processed locally — only selected memories are submitted to your org.
+          Memories are extracted with your configured provider — only selected memories are submitted to your org.
         </p>
+        <Link
+          href="/sessions/extracted"
+          className="inline-flex text-sm font-semibold text-wv-violet underline decoration-[rgba(124,92,255,0.6)] underline-offset-2 hover:text-wv-text"
+        >
+          Extracted ({extractedDraftCount}) →
+        </Link>
       </header>
 
       {loadError && (
@@ -458,19 +344,62 @@ export default function SessionsPage() {
         </div>
       )}
 
+      {!loading && sessions.length > 0 && (
+        <div className="flex flex-col gap-3 rounded-xl border border-wv-line bg-wv-panel p-4 sm:flex-row sm:items-center sm:justify-between">
+          <input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search title or directory"
+            className="w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none sm:max-w-sm"
+          />
+          <div className="flex items-center gap-2">
+            <select
+              value={sortKey}
+              onChange={(event) => setSortKey(event.target.value as SessionSortKey)}
+              className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text focus:border-wv-violet focus:outline-none"
+            >
+              <option value="updated">Last updated</option>
+              <option value="title">Title (A→Z)</option>
+              <option value="message_count">Message count</option>
+            </select>
+            <button
+              onClick={() => setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+              className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
+            >
+              {sortDirection === 'asc' ? 'Ascending' : 'Descending'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!loading && sessions.length > 0 && visibleSessions.length === 0 && (
+        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-12 text-center text-sm text-wv-dim">
+          No sessions match your search.
+        </div>
+      )}
+
       <div className="space-y-3">
-        {sessions.map((session) => {
+        {visibleSessions.map((session) => {
           const isActive = activeSessionId === session.id;
+          const sessionQueueStatus = statusForSession(session.id);
+          const isQueued = sessionQueueStatus === 'queued';
+          const isRunning = sessionQueueStatus === 'running';
+          const isQueueLocked = isQueued || isRunning;
+          const hasDraft = draftReadySessionIds.has(session.id);
+          const activeDraft = isActive && pubkeyHex ? getDraft(pubkeyHex, session.id) : null;
+          const extractedMemoryCount = activeDraft?.memories.length ?? 0;
 
           return (
             <div key={session.id}>
               <button
+                disabled={isQueueLocked}
                 onClick={() => selectSession(session.id)}
-                className={`w-full rounded-2xl border bg-wv-panel p-5 text-left shadow-wv-sm transition
+                className={`w-full rounded-2xl border bg-wv-panel p-5 text-left shadow-wv-sm transition disabled:cursor-not-allowed
                   ${isActive
                     ? 'border-[rgba(124,92,255,0.4)] ring-2 ring-[rgba(124,92,255,0.22)]'
                     : 'border-wv-line hover:border-wv-line-2'
-                  }`}
+                  }
+                  ${isQueueLocked ? 'opacity-60' : ''}`}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -481,12 +410,17 @@ export default function SessionsPage() {
                       {session.directory}
                     </p>
                   </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
+                  <div className="flex shrink-0 flex-col items-end gap-1">
                     <ClientTime
                       value={session.time_updated}
                       mode="relative"
                       className="font-mono text-xs text-wv-faint"
                     />
+                    <div className="text-[11px] font-medium">
+                      {isRunning && <span className="text-wv-violet">Extracting…</span>}
+                      {!isRunning && isQueued && <span className="text-wv-amber">Queued</span>}
+                      {!isRunning && !isQueued && hasDraft && <span className="text-wv-green">Draft ready</span>}
+                    </div>
                     <div className="flex gap-2">
                       {session.model && (
                         <Badge>{session.model.split('/').pop()}</Badge>
@@ -508,42 +442,18 @@ export default function SessionsPage() {
                     <p><span className="font-medium text-wv-dim">Messages:</span> {sessionDetail?.message_count ?? session.message_count}</p>
                   </div>
 
-                  {extractionStatus === 'idle' && sessionDetail && (
-                    <button
-                      onClick={extractMemories}
-                      className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v"
-                    >
-                      Extract Memories
-                    </button>
-                  )}
-
-                  {extractionStatus === 'loading-transcript' && (
+                  {sessionDetailLoading && (
                     <div className="flex items-center gap-3 py-4 text-sm text-wv-dim">
                       <div className="h-5 w-5 animate-spin rounded-full border-2 border-wv-line-2 border-t-wv-violet" />
                       Loading session transcript…
                     </div>
                   )}
 
-                  {extractionStatus === 'extracting' && (
-                    <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] p-8 text-center">
-                      <div className="mx-auto h-8 w-8 animate-spin rounded-full border-3 border-[rgba(124,92,255,0.22)] border-t-wv-violet" />
-                      <p className="mt-4 text-sm font-medium text-wv-text">
-                        Analyzing your session with your local model…
-                      </p>
-                      <p className="mt-1 text-xs text-wv-violet">
-                        {`${sessionDetail?.message_count ?? ''} messages · local extraction can take ~30-60s · ${extractElapsed}s elapsed`}
-                      </p>
-                    </div>
-                  )}
-
-                  {extractionStatus === 'error' && extractionError && (
+                  {!sessionDetailLoading && extractionError && (
                     <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
                       {extractionError}
                       <button
-                        onClick={() => {
-                          setExtractionStatus('idle');
-                          setExtractionError(null);
-                        }}
+                        onClick={() => void loadSessionDetail(session.id)}
                         className="ml-3 text-wv-red underline"
                       >
                         Try again
@@ -551,219 +461,54 @@ export default function SessionsPage() {
                     </div>
                   )}
 
-                  {extractionStatus === 'done' && memories.length > 0 && (
-                    <div className="space-y-4">
-                      <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
-                        <span className="font-semibold">
-                          Your session produced {memories.length} memor{memories.length !== 1 ? 'ies' : 'y'}!
-                        </span>
-                        <span className="ml-2 text-wv-green">
-                          Select which to submit for review.
-                        </span>
-                      </div>
+                  {!sessionDetailLoading && sessionDetail && isRunning && (
+                    <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] p-6">
+                      <Spinner
+                        text={`Extracting with ${providerLabel}…`}
+                        className="text-sm"
+                      />
+                      <p className="mt-2 text-xs text-wv-violet">
+                        {`ETA ${etaText}`}
+                      </p>
+                    </div>
+                  )}
 
-                      {extractionMeta && (
-                        <div className="font-mono text-xs text-wv-dim">
-                          Extracted with: {extractionMeta.preset_id || (extractionMeta.source === 'wevibe-default' ? 'WeVibe default' : 'custom')} · model {extractionMeta.model} · num_ctx {extractionMeta.num_ctx ?? 'null'} · prompt {extractionMeta.prompt_fingerprint}
-                          {extractionMeta.source === 'wevibe-default' && (
-                            <span className="ml-2 text-wv-faint">(org has not set a default)</span>
-                          )}
-                        </div>
-                      )}
+                  {!sessionDetailLoading && sessionDetail && !isRunning && isQueued && (
+                    <div className="inline-flex items-center rounded-lg border border-wv-line bg-wv-panel px-4 py-2 text-sm font-medium text-wv-amber opacity-80">
+                      Queued
+                    </div>
+                  )}
 
-                      <div className="flex items-center gap-3 text-xs">
-                        <button
-                          onClick={selectAll}
-                          className="text-wv-violet hover:text-wv-text"
-                        >
-                          Select All
-                        </button>
-                        <span className="text-wv-faint">|</span>
-                        <button
-                          onClick={selectNone}
-                          className="text-wv-violet hover:text-wv-text"
-                        >
-                          Select None
-                        </button>
-                        <span className="ml-auto font-mono text-wv-dim">
-                          {selected.size} of {memories.length} selected
-                        </span>
-                      </div>
-
-                      {memories.map((memory, idx) => {
-                        const isSelected = selected.has(idx);
-                        const currentOrgId = memoryOrgs.get(idx) ?? activeOrg?.org_id ?? (orgs.length > 0 ? orgs[0].org_id : '');
-                        const currentOrgEntry = orgs.find(o => o.org_id === currentOrgId);
-                        const showOrgDropdown = orgs.length > 1;
-                        const preferenceBadge = memory.preference_confidence > 0.8
-                          ? (
-                              <span className="rounded-full bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-xs font-medium text-wv-red">
-                                Likely preference · low quality
-                              </span>
-                            )
-                          : memory.preference_confidence > 0.5
-                            ? (
-                                <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
-                                  Possible preference
-                                </span>
-                              )
-                            : null;
-
-                        return (
-                          <div
-                            key={idx}
-                            className={`rounded-xl border p-4 transition
-                              ${isSelected
-                                ? 'border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] ring-1 ring-[rgba(124,92,255,0.28)]'
-                                : 'border-wv-line bg-wv-panel hover:border-wv-line-2'
-                              }`}
-                          >
-                            <div className="flex items-start gap-3">
-                              <button
-                                onClick={() => toggleMemory(idx)}
-                                className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 flex items-center justify-center transition
-                                  ${isSelected
-                                    ? 'border-wv-violet bg-wv-violet'
-                                    : 'border-wv-line-2 bg-wv-panel'
-                                  }`}
-                              >
-                                {isSelected && (
-                                  <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                  </svg>
-                                )}
-                              </button>
-
-                              <div className="min-w-0 flex-1 space-y-2">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <span
-                                      className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green"
-                                    >
-                                      Memory
-                                    </span>
-                                    {preferenceBadge}
-                                  </div>
-
-                                  {showOrgDropdown && (
-                                    <select
-                                      value={currentOrgId}
-                                      onChange={e => {
-                                        e.stopPropagation();
-                                        setMemoryOrg(idx, e.target.value);
-                                      }}
-                                      onClick={e => e.stopPropagation()}
-                                      className="rounded-md border border-wv-line-2 bg-wv-panel-2 px-2 py-1 text-xs text-wv-text hover:border-wv-violet focus:border-wv-violet focus:outline-none"
-                                    >
-                                      {orgs.map(org => (
-                                        <option key={org.org_id} value={org.org_id}>
-                                          {org.org_name}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  )}
-                                  {!showOrgDropdown && currentOrgEntry && (
-                                    <span className="text-xs font-mono text-wv-dim">
-                                      → {currentOrgEntry.org_name}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-sm font-medium text-wv-text">
-                                  {memory.implement}
-                                </p>
-
-                                {memory.context && (
-                                  <p className="text-xs text-wv-dim">
-                                    <span className="font-mono font-medium">Context:</span> {memory.context}
-                                  </p>
-                                )}
-
-                                {memory.dnd && (
-                                  <p className="rounded bg-[rgba(255,178,85,0.12)] px-2 py-1 text-xs text-wv-amber">
-                                    <span className="font-mono font-medium">⚠ Don&apos;t:</span> {memory.dnd}
-                                  </p>
-                                )}
-
-                                {memory.stack.length > 0 && (
-                                  <div className="flex flex-wrap gap-1">
-                                    {memory.stack.map((tech) => (
-                                      <span
-                                        key={tech}
-                                        className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs font-mono text-wv-dim"
-                                      >
-                                        {tech}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      <div className="flex items-center gap-4 pt-2">
-                        <button
-                          onClick={submitSelected}
-                          disabled={selected.size === 0 || submitting}
-                          className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {submitting ? (
-                            <>
-                              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-[rgba(236,237,246,0.3)] border-t-wv-text" />
-                              Submitting Batch…
-                            </>
-                          ) : (
-                            `Submit ${selected.size} Memor${selected.size !== 1 ? 'ies' : 'y'}`
-                          )}
-                        </button>
-
-                        <button
-                          onClick={extractMemories}
-                          className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-text shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
-                        >
-                          Re-extract
-                        </button>
-                      </div>
-
-                      {submitProgress && (
-                        <div className="font-mono text-xs text-wv-violet">
-                          {submitProgress}
-                        </div>
-                      )}
-
-                      {submitFindings && submitFindings.length > 0 && (
-                        <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-4 py-3 text-sm">
-                          <div className="mb-1 font-medium text-wv-amber">
-                            Content flagged during sanitization
-                          </div>
-                          <div className="text-wv-amber">
-                            {submitFindings.length} finding{submitFindings.length !== 1 ? 's' : ''} detected: {submitFindings.map(f => f.category).filter((v, i, a) => a.indexOf(v) === i).join(', ')}
-                          </div>
-                          <div className="mt-1 text-wv-amber">
-                            Your submission was received. The moderator will see these findings during review.
-                          </div>
-                        </div>
-                      )}
-
-                      {submitResult && (
-                        <div
-                          className={`rounded-lg border px-4 py-3 text-sm ${
-                            submitResult.includes('failed')
-                              ? 'border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] text-wv-red'
-                              : 'border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] text-wv-green'
-                          }`}
-                        >
-                          {submitResult}
-                        </div>
+                  {!sessionDetailLoading && sessionDetail && !isRunning && !isQueued && !hasDraft && (
+                    <div className="space-y-2">
+                      <button
+                        onClick={enqueueActiveSession}
+                        disabled={!pubkeyHex}
+                        className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {queueCtaLabel}
+                      </button>
+                      <p className="text-xs text-wv-dim">
+                        Extracts with {providerLabel} · {etaText}
+                      </p>
+                      {!pubkeyHex && (
+                        <p className="text-xs text-wv-amber">
+                          Create an identity first to queue extraction.
+                        </p>
                       )}
                     </div>
                   )}
 
-                  {extractionStatus === 'done' && memories.length === 0 && (
-                    <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel p-6 text-center text-sm text-wv-dim">
-                      No technical insights found in this session.
-                      Try a session with more problem-solving or configuration work.
+                  {!sessionDetailLoading && sessionDetail && !isRunning && !isQueued && hasDraft && (
+                    <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
+                      <span className="font-semibold">
+                        ✓ {extractedMemoryCount} memor{extractedMemoryCount !== 1 ? 'ies' : 'y'} extracted
+                      </span>
+                      <span className="ml-2">
+                        <Link href="/sessions/extracted" className="underline hover:text-wv-text">
+                          Review in Extracted →
+                        </Link>
+                      </span>
                     </div>
                   )}
                 </div>

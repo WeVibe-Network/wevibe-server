@@ -303,6 +303,8 @@ export async function POST(request: NextRequest) {
       source: profileOverrides ? 'org-profile' : 'wevibe-default',
       preset_id: profileOverrides?.presetId ?? null,
       model: resolvedModel,
+      provider: useOpenRouter ? 'openrouter' : 'ollama',
+      is_local: !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
       prompt_fingerprint: computePromptFingerprint(mcpExtractRequestBody.prompt),
     },
