@@ -437,9 +437,7 @@ func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, t
 		return nil
 	}
 
-	wasContributor := oldRole == "contributor"
-	isContributor := newRole == "contributor"
-	if wasContributor == isContributor {
+	if oldRole == newRole {
 		return nil
 	}
 
@@ -452,7 +450,7 @@ func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, t
 	`, orgID).Scan(&orgName)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
-			w.logger.Warn("failed to load org name for contributor role notification",
+			w.logger.Warn("failed to load org name for role-change notification",
 				"org_id", orgID,
 				"pubkey", pubkey,
 				"tx_hash", txHash,
@@ -462,13 +460,35 @@ func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, t
 		orgLabel = orgName
 	}
 
-	category := "contributor_revoked"
-	title := "Contributor access revoked"
-	body := fmt.Sprintf("Your contributor access to %s has been revoked.", orgLabel)
-	if isContributor {
-		category = "contributor_promoted"
-		title = "Promoted to Contributor"
-		body = fmt.Sprintf("You can now contribute memories to %s.", orgLabel)
+	var category, title, body string
+	switch newRole {
+	case "moderator":
+		category = "moderator_promoted"
+		title = "Promoted to Moderator"
+		body = fmt.Sprintf("You're now a moderator of %s. You can review submissions and contribute memories.", orgLabel)
+	case "contributor":
+		if oldRole == "moderator" {
+			category = "moderator_revoked"
+			title = "Moderator role removed"
+			body = fmt.Sprintf("You're no longer a moderator of %s. You can still contribute memories.", orgLabel)
+		} else {
+			category = "contributor_promoted"
+			title = "Promoted to Contributor"
+			body = fmt.Sprintf("You can now contribute memories to %s.", orgLabel)
+		}
+	case "member":
+		if oldRole == "moderator" {
+			category = "moderator_revoked"
+			title = "Moderator role removed"
+			body = fmt.Sprintf("You're no longer a moderator of %s.", orgLabel)
+		} else {
+			category = "contributor_revoked"
+			title = "Contributor access revoked"
+			body = fmt.Sprintf("Your contributor access to %s has been revoked.", orgLabel)
+		}
+	default:
+		// Unrecognized target role — no notification.
+		return nil
 	}
 
 	if err := notifications.EmitUserNotification(
@@ -483,7 +503,7 @@ func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, t
 		txHash,
 		orgID,
 	); err != nil {
-		return fmt.Errorf("failed to emit contributor role notification: %w", err)
+		return fmt.Errorf("failed to emit role-change notification: %w", err)
 	}
 
 	return nil

@@ -78,6 +78,10 @@ func routeForCategory(category string) string {
 		return "/my-org"
 	case "contributor_revoked":
 		return "/my-org"
+	case "moderator_promoted":
+		return "/my-org"
+	case "moderator_revoked":
+		return "/my-org"
 	case "test_notification":
 		return "/activity"
 	default:

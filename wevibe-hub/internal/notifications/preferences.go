@@ -16,6 +16,8 @@ var supportedCategories = []string{
 	"join_denied",
 	"contributor_promoted",
 	"contributor_revoked",
+	"moderator_promoted",
+	"moderator_revoked",
 	"test_notification",
 }
 
