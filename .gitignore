@@ -9,8 +9,13 @@ dist/
 venv/
 .env
 *.env
-# Never commit prompt strings
+# Never commit prompt-string OVERRIDE files (runtime overrides / scratch prompt dirs).
+# The canonical extraction prompts ARE committed as .md (single source of truth, D-5.6):
+# source of truth = wevibe-mcp/prompts/; vendored + go:embed'd into the hub (synced via
+# `make sync-extraction-prompts`). The hub embed dir below is force-included.
 prompts/
+!wevibe-hub/internal/api/handlers/prompts/
+!wevibe-hub/internal/api/handlers/prompts/**
 WEVIBE_EXTRACTION_PROMPT
 WEVIBE_KEYWORD_PROMPT
 terraform/.terraform/
