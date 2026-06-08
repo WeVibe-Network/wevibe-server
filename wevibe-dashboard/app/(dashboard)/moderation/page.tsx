@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { ConnectionState, WeVibeMcpClient, getMcpClient } from '@/lib/mcp-client';
 import { SanitizationFinding } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
@@ -55,12 +56,7 @@ export default function ModerationPage() {
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
   const [items, setItems] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [editTarget, setEditTarget] = useState<QueueItem | null>(null);
-  const [editedContent, setEditedContent] = useState('');
-  const [editNote, setEditNote] = useState('');
 
   const clientRef = useRef<WeVibeMcpClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -88,15 +84,13 @@ export default function ModerationPage() {
     }
 
     setLoading(true);
-    setError(null);
-    setNotice(null);
 
     try {
       const queue = await client.callTool<QueueItem[]>('wevibe_mod_queue');
       const loadedQueue = queue ?? [];
       setItems(loadedQueue);
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setLoading(false);
     }
@@ -115,15 +109,14 @@ export default function ModerationPage() {
   }, [clientState, loadQueue]);
 
   const approve = useCallback(async (hash: string) => {
+    const id = toast.loading('Approving…');
     const client = clientRef.current;
     if (!client || client.state !== 'connected') {
-      setError('Connect to the dashboard MCP server in Settings before moderating.');
+      toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
       return;
     }
 
     setBusy(hash);
-    setError(null);
-    setNotice(null);
 
     try {
       const result = await client.callTool<ApproveResponse>('wevibe_mod_approve', { submission_hash: hash });
@@ -131,34 +124,28 @@ export default function ModerationPage() {
         throw new Error(result.error ?? 'Approval failed');
       }
 
-      const similar = (result.similar_memories ?? [])
-        .slice(0, 3)
-        .map(mem => `${mem.cid}${mem.score ? ` (${mem.score.toFixed(2)})` : ''}`)
-        .join(', ');
-
-      setNotice(
-        similar
-          ? `Approved ${hash}. Similar memories: ${similar}`
-          : `Approved ${hash}.`,
-      );
+      const similarCount = result.similar_memories?.length ?? 0;
+      const message = similarCount > 0
+        ? `Approved ${hash}. ${similarCount} similar memory${similarCount === 1 ? '' : 'ies'} found.`
+        : `Approved ${hash}.`;
+      toast.success(message, { id });
       await loadQueue();
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message, { id });
     } finally {
       setBusy(null);
     }
   }, [loadQueue]);
 
   const vote = useCallback(async (hash: string) => {
+    const id = toast.loading('Recording vote…');
     const client = clientRef.current;
     if (!client || client.state !== 'connected') {
-      setError('Connect to the dashboard MCP server in Settings before moderating.');
+      toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
       return;
     }
 
     setBusy(hash);
-    setError(null);
-    setNotice(null);
 
     try {
       const result = await client.callTool<VoteResponse>('wevibe_mod_vote', { submission_hash: hash });
@@ -167,13 +154,13 @@ export default function ModerationPage() {
       }
 
       if (result.ready) {
-        setNotice(`Quorum reached for ${hash} — ${result.votes} of ${result.required_approvals} approvals recorded.`);
+        toast.success(`Quorum reached for ${hash} — ${result.votes} of ${result.required_approvals} approvals recorded.`, { id });
       } else {
-        setNotice(`Voted: ${result.votes} of ${result.required_approvals} approvals for ${hash}.`);
+        toast.success(`Voted: ${result.votes} of ${result.required_approvals} approvals for ${hash}.`, { id });
       }
       await loadQueue();
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message, { id });
     } finally {
       setBusy(null);
     }
@@ -185,15 +172,14 @@ export default function ModerationPage() {
       return;
     }
 
+    const id = toast.loading('Denying…');
     const client = clientRef.current;
     if (!client || client.state !== 'connected') {
-      setError('Connect to the dashboard MCP server in Settings before moderating.');
+      toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
       return;
     }
 
     setBusy(hash);
-    setError(null);
-    setNotice(null);
 
     try {
       const result = await client.callTool<DenyResponse>('wevibe_mod_deny', {
@@ -205,68 +191,14 @@ export default function ModerationPage() {
         throw new Error(result.error ?? 'Denial failed');
       }
 
-      setNotice(`Denied ${hash} — ${reason}`);
+      toast.success(`Denied ${hash} — ${reason}`, { id });
       await loadQueue();
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message, { id });
     } finally {
       setBusy(null);
     }
   }, [loadQueue]);
-
-  const openEditFlow = useCallback((item: QueueItem) => {
-    setEditTarget(item);
-    setEditedContent(item.plaintext ?? '');
-    setEditNote('');
-    setError(null);
-    setNotice(null);
-  }, []);
-
-  const saveAndApproveFallback = useCallback(async () => {
-    const item = editTarget;
-    if (!item) return;
-
-    const client = clientRef.current;
-    if (!client || client.state !== 'connected') {
-      setError('Connect to the dashboard MCP server in Settings before moderating.');
-      return;
-    }
-
-    const original = item.plaintext ?? '';
-    const note = editNote.trim() || 'No moderator note provided.';
-    const reason = [
-      'edit_before_approval_fallback',
-      `moderator_note:${note}`,
-      'original_content:',
-      original,
-      'edited_content:',
-      editedContent,
-      'audit_note:encrypted submission cannot be rewritten at approval time; denied with edit note.',
-    ].join('\n');
-
-    setBusy(item.submission_hash);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const result = await client.callTool<DenyResponse>('wevibe_mod_deny', {
-        submission_hash: item.submission_hash,
-        reason,
-      });
-
-      if (result.status !== 'denied') {
-        throw new Error(result.error ?? 'Fallback denial failed');
-      }
-
-      setNotice(`Saved edit note and denied ${item.submission_hash}. Original and edited content preserved in denial reason for audit.`);
-      setEditTarget(null);
-      await loadQueue();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [editNote, editTarget, editedContent, loadQueue]);
 
   if (clientState !== 'connected') {
     return (
@@ -305,18 +237,6 @@ export default function ModerationPage() {
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </header>
-
-      {error && (
-        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
-          {error}
-        </div>
-      )}
-
-      {notice && (
-        <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
-          {notice}
-        </div>
-      )}
 
       {loading && items.length === 0 ? (
         <p className="text-sm text-wv-dim">Loading moderation queue…</p>
@@ -371,7 +291,7 @@ export default function ModerationPage() {
                 </p>
               </div>
 
-              <div className="flex flex-col items-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 {(item.required_approvals ?? 1) > 1 ? (
                   <>
                     <div className="flex items-center gap-2">
@@ -409,7 +329,7 @@ export default function ModerationPage() {
                     disabled={busy === item.submission_hash || loading}
                     className="inline-flex items-center rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-1.5 text-sm font-medium text-wv-green transition hover:bg-[rgba(54,211,153,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    Memory is good
+                    Approve
                   </button>
                 )}
                 <button
@@ -419,14 +339,6 @@ export default function ModerationPage() {
                   className="inline-flex items-center rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-1.5 text-sm font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Deny
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openEditFlow(item)}
-                  disabled={busy === item.submission_hash || loading}
-                  className="inline-flex items-center rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-1.5 text-sm font-medium text-wv-amber transition hover:bg-[rgba(255,178,85,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Edit + Save & Approve
                 </button>
               </div>
             </div>
@@ -457,59 +369,6 @@ export default function ModerationPage() {
         ))}
       </div>
 
-      {editTarget && (
-        <section className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-5">
-          <h2 className="text-base font-semibold text-wv-amber">Edit Before Approval</h2>
-          <p className="mt-1 text-xs text-wv-amber">
-            Crypto pipeline constraint: approved memories are immutable encrypted submissions. Save & Approve uses deny-with-edit-note fallback and records both original and edited content for audit.
-          </p>
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <div>
-              <p className="mb-1 text-xs font-medium text-wv-amber">Original Content</p>
-              <textarea
-                value={editTarget.plaintext ?? ''}
-                readOnly
-                className="h-40 w-full rounded-lg bg-wv-panel-2 border border-wv-line-2 px-3 py-2 text-xs text-wv-text placeholder:text-wv-faint focus:outline-none focus:border-wv-violet"
-              />
-            </div>
-            <div>
-              <p className="mb-1 text-xs font-medium text-wv-amber">Edited Content</p>
-              <textarea
-                value={editedContent}
-                onChange={event => setEditedContent(event.target.value)}
-                className="h-40 w-full rounded-lg bg-wv-panel-2 border border-wv-line-2 px-3 py-2 text-xs text-wv-text placeholder:text-wv-faint focus:outline-none focus:border-wv-violet"
-              />
-            </div>
-          </div>
-          <div className="mt-3">
-            <label className="text-xs font-medium text-wv-amber">Edit Note</label>
-            <input
-              type="text"
-              value={editNote}
-              onChange={event => setEditNote(event.target.value)}
-              placeholder="Why this edit is needed"
-              className="mt-1 w-full rounded-lg bg-wv-panel-2 border border-wv-line-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:outline-none focus:border-wv-violet"
-            />
-          </div>
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => saveAndApproveFallback()}
-              disabled={busy === editTarget.submission_hash}
-              className="inline-flex items-center rounded-lg bg-wv-amber px-4 py-2 text-sm font-medium text-white hover:bg-[rgba(255,178,85,0.85)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busy === editTarget.submission_hash ? 'Saving…' : 'Save & Approve (Fallback)'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setEditTarget(null)}
-              className="inline-flex items-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-dim hover:bg-wv-line"
-            >
-              Cancel
-            </button>
-          </div>
-        </section>
-      )}
     </div>
   );
 }
