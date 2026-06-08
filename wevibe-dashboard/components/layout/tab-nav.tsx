@@ -26,7 +26,10 @@ export default function TabNav() {
   const [indicator, setIndicator] = useState<IndicatorState>({ left: 0, width: 0 });
 
   const activeHref = useMemo(() => {
-    const activeTab = subTabs.find(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
+    const activeTab =
+      [...subTabs]
+        .filter(({ href }) => pathname === href || pathname.startsWith(`${href}/`))
+        .sort((a, b) => b.href.length - a.href.length)[0] ?? null;
     return activeTab?.href ?? null;
   }, [pathname, subTabs]);
 
