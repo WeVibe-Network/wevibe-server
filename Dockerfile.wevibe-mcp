@@ -35,6 +35,7 @@ ENV WEVIBE_UMBRAL_SIDECAR_BIN=/usr/local/bin/wevibe-umbral
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/prompts ./prompts
 COPY --from=umbral-builder /build/target/release/wevibe-umbral /usr/local/bin/wevibe-umbral
 COPY wevibe-sdk/pkg-nodejs /wevibe-sdk/pkg-nodejs
 
