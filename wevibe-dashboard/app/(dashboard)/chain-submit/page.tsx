@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   getSubmissionsByStatus,
+  listKeywords,
   submitKeywordResults,
   verifyKeywords,
   rerunKeywords,
@@ -13,23 +14,38 @@ import {
   type KeywordWeight,
   type OrgHealth,
   type VerificationResult,
-  type SanitizationFinding,
 } from '@/lib/hub-client';
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
 import {
   buildApproveMemoryMsg,
-  buildDenialBatchMsg,
   buildSubmitCommitmentMsg,
   directBroadcast,
   getOrgAccountAddress,
 } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
-import { getConfig } from '@/lib/config';
 import { useOrgContext } from '@/lib/org-context';
 
 type MemoryKeywordResult = {
   submission_hash: string;
   classified: KeywordWeight[];
+};
+
+type DecryptBatchItem = {
+  id: string;
+  plaintext: string | null;
+  error?: string;
+};
+
+type KeywordSuggestion = {
+  keyword: string;
+  weight: number;
+  rationale: string;
+};
+
+type ExtractKeywordsBatchItem = {
+  id: string;
+  classified: KeywordWeight[];
+  suggestions: KeywordSuggestion[];
 };
 
 function hexToBytes(hex: string): Uint8Array {
@@ -55,9 +71,7 @@ export default function ChainSubmitPage() {
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
   const [verifyResults, setVerifyResults] = useState<VerificationResult[] | null>(null);
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
-  const [pendingDenialCount, setPendingDenialCount] = useState<number>(0);
-  const [denialSubmitting, setDenialSubmitting] = useState(false);
-  const [denialResult, setDenialResult] = useState<{ txHash?: string; error?: string } | null>(null);
+  const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
 
   const clientRef = { current: getMcpClient() };
 
@@ -82,24 +96,60 @@ export default function ChainSubmitPage() {
     setLoading(true);
     setError(null);
     try {
-      const HUB_URL = getConfig().hubUrl;
-      const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
-      const [health, pk, rk, pc] = await Promise.all([
+      const [health, pendingKeywordRaw, pendingChainRaw, keywords] = await Promise.all([
         getOrgHealth(orgId),
         getSubmissionsByStatus(orgId, 'pending_keyword'),
-        getSubmissionsByStatus(orgId, 'pending_keyword'),
         getSubmissionsByStatus(orgId, 'pending_chain'),
+        listKeywords(orgId),
       ]);
-      setOrgHealth(health);
-      const reviewable = rk.filter(s => s.extraction_result && s.extraction_result.length > 0);
-      setPendingKeyword(pk.filter(s => !s.extraction_result || s.extraction_result.length === 0));
-      setReviewKeywords(reviewable);
-      setPendingChain(pc);
-      const denialCountRes = await fetch(`${HUB_URL}/v1/orgs/${orgId}/denials/pending-count`, { headers: authHeaders });
-      if (denialCountRes.ok) {
-        const data = await denialCountRes.json();
-        setPendingDenialCount(data.pending_count ?? 0);
+
+      const vocabulary = new Set(
+        keywords
+          .map((entry) => entry.keyword.trim().toLowerCase())
+          .filter((keyword) => keyword.length > 0),
+      );
+
+      const decryptItems = [...pendingKeywordRaw, ...pendingChainRaw]
+        .filter((submission): submission is Submission & { ciphertext_hex: string; wrapped_dek_mod: string } => (
+          typeof submission.ciphertext_hex === 'string'
+          && submission.ciphertext_hex.length > 0
+          && typeof submission.wrapped_dek_mod === 'string'
+          && submission.wrapped_dek_mod.length > 0
+        ))
+        .map((submission) => ({
+          id: submission.submission_hash,
+          ciphertext_hex: submission.ciphertext_hex,
+          wrapped_dek_mod: submission.wrapped_dek_mod,
+        }));
+
+      const plaintextByHash = new Map<string, string | null>();
+      if (decryptItems.length > 0) {
+        const decrypted = await getMcpClient().callTool<DecryptBatchItem[]>('wevibe_decrypt_batch', {
+          items: decryptItems,
+        });
+        for (const item of decrypted) {
+          plaintextByHash.set(item.id, item.plaintext ?? null);
+        }
       }
+
+      const applyPlaintext = (items: Submission[]): Submission[] => (
+        items.map((item) => ({
+          ...item,
+          plaintext: plaintextByHash.has(item.submission_hash)
+            ? (plaintextByHash.get(item.submission_hash) ?? null)
+            : (item.plaintext ?? null),
+        }))
+      );
+
+      const keywordQueue = applyPlaintext(pendingKeywordRaw);
+      const chainQueue = applyPlaintext(pendingChainRaw);
+
+      setOrgHealth(health);
+      setOrgVocabulary(vocabulary);
+      const reviewable = keywordQueue.filter(s => s.extraction_result && s.extraction_result.length > 0);
+      setPendingKeyword(keywordQueue.filter(s => !s.extraction_result || s.extraction_result.length === 0));
+      setReviewKeywords(reviewable);
+      setPendingChain(chainQueue);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -138,19 +188,40 @@ export default function ChainSubmitPage() {
         return;
       }
 
-      const plaintexts = toProcess.map(s => s.plaintext ?? '');
-      const result = await client.callTool<{ results: MemoryKeywordResult[] }>('wevibe_extract_keywords_batch', { plaintexts });
-
-      if (result.results && result.results.length > 0) {
-        const mapped: MemoryKeywordResult[] = toProcess.map((s, i) => ({
-          submission_hash: s.submission_hash,
-          classified: result.results[i]?.classified ?? [],
-        }));
-        await submitKeywordResults(orgId, mapped);
-        setNotice(`Keyword extraction complete for ${mapped.length} memories.`);
-      } else {
-        setNotice('No keywords extracted.');
+      const processable = toProcess.filter((submission) => (submission.plaintext ?? '').trim().length > 0);
+      if (processable.length === 0) {
+        setNotice('No decrypted plaintext available for keyword extraction.');
+        return;
       }
+
+      const result = await client.callTool<ExtractKeywordsBatchItem[]>('wevibe_extract_keywords_batch', {
+        memories: processable.map((submission) => ({
+          id: submission.submission_hash,
+          plaintext: submission.plaintext ?? '',
+          stack_hint: submission.stack_hint ?? [],
+          memory_type: submission.memory_type ?? 'memory',
+        })),
+      });
+
+      const resultById = new Map(result.map((entry) => [entry.id, entry]));
+      const mapped: MemoryKeywordResult[] = processable.map((submission) => {
+        const extracted = resultById.get(submission.submission_hash);
+        const suggestions = (extracted?.suggestions ?? []).map((keyword) => ({
+          keyword: keyword.keyword,
+          weight: keyword.weight,
+        }));
+
+        return {
+          submission_hash: submission.submission_hash,
+          classified: [
+            ...(extracted?.classified ?? []),
+            ...suggestions,
+          ],
+        };
+      });
+
+      await submitKeywordResults(orgId, mapped);
+      setNotice(`Keyword extraction complete for ${mapped.length} memories.`);
 
       await loadAll();
     } catch (err) {
@@ -306,55 +377,6 @@ export default function ChainSubmitPage() {
       setBusy(null);
     }
   }, [orgId, pendingChain, resolveOrgAccountForGas]);
-
-  const handleDenialBatchSubmit = useCallback(async () => {
-    if (!orgId) return;
-    const HUB_URL = getConfig().hubUrl;
-    const { connectWallet } = await import('@/lib/wallet-connect');
-    const walletConnection = await connectWallet().catch(() => null);
-    const walletAddress = walletConnection?.address ?? null;
-    if (!walletAddress) {
-      setDenialResult({ error: 'No wallet connected' });
-      return;
-    }
-    setDenialSubmitting(true);
-    setDenialResult(null);
-    try {
-      const authHeaders = { 'Authorization': `Bearer ${localStorage.getItem('wevibe_token') ?? ''}` };
-      const listRes = await fetch(`${HUB_URL}/v1/orgs/${orgId}/denials/pending`, { headers: authHeaders });
-      if (!listRes.ok) throw new Error(`Failed to fetch pending denials: ${listRes.status}`);
-      const listData = await listRes.json();
-      if (!listData.denials || listData.denials.length === 0) {
-        setDenialResult({ error: 'No pending denials to submit' });
-        return;
-      }
-      const epochResp = await fetch(`${HUB_URL}/v1/orgs/${orgId}`, { headers: authHeaders });
-      const epochData = await epochResp.json() as { current_epoch?: number };
-      const epoch = epochData.current_epoch ?? 0;
-      const msg = buildDenialBatchMsg(
-        walletAddress,
-        orgId,
-        epoch,
-        listData.denials.map((d: { nullifier: string; memory_hash: string; deny_key?: string; reason?: string }) => ({
-          nullifier: d.nullifier,
-          memory_hash: d.memory_hash,
-          deny_key: d.deny_key ?? '',
-          reason: d.reason ?? '',
-        }))
-      );
-      const result = await directBroadcast(walletAddress, [msg]);
-      if (result.code === 0) {
-        setDenialResult({ txHash: result.txHash });
-        setPendingDenialCount(0);
-      } else {
-        setDenialResult({ error: `Chain rejected: ${result.rawLog}` });
-      }
-    } catch (err) {
-      setDenialResult({ error: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setDenialSubmitting(false);
-    }
-  }, [orgId]);
 
   if (!orgId) {
     return (
@@ -568,6 +590,9 @@ export default function ChainSubmitPage() {
             <p className="mt-1 text-xs text-wv-amber">
               Higher preference = more subjective / lower quality — weigh before committing on-chain.
             </p>
+            <p className="mt-1 text-xs text-wv-dim">
+              <span className="text-wv-green">green</span> = in org vocabulary · <span className="text-wv-red">red</span> = new
+            </p>
           </div>
           <button
             type="button"
@@ -602,16 +627,21 @@ export default function ChainSubmitPage() {
                   <div className="mt-3">
                     <p className="text-xs font-medium text-wv-dim">Keywords:</p>
                     <div className="mt-1 flex flex-wrap gap-2">
-                      {item.extraction_result.map((kw, idx) => (
-                        <span
-                          key={idx}
-                          className="inline-flex items-center rounded-full border border-[rgba(124,92,255,0.28)] bg-[rgba(124,92,255,0.10)] px-2.5 py-0.5 text-xs font-medium text-wv-violet"
-                          title={`Weight: ${(kw.weight * 100).toFixed(0)}%`}
-                        >
-                          {kw.keyword}
-                          <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
-                        </span>
-                      ))}
+                      {item.extraction_result.map((kw, idx) => {
+                        const inVocabulary = orgVocabulary.has(kw.keyword.toLowerCase());
+                        return (
+                          <span
+                            key={idx}
+                            className={inVocabulary
+                              ? 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green'
+                              : 'inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red'}
+                            title={`${inVocabulary ? 'In org vocabulary' : 'New keyword'} · Weight: ${(kw.weight * 100).toFixed(0)}%`}
+                          >
+                            {kw.keyword}
+                            <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -651,40 +681,6 @@ export default function ChainSubmitPage() {
               </div>
             ))}
           </div>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.08)] p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-wv-text">Pending Denials</h2>
-            <p className="mt-1 text-sm text-wv-dim">
-              {pendingDenialCount} denial{pendingDenialCount !== 1 ? 's' : ''} queued for chain submission
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleDenialBatchSubmit()}
-            disabled={denialSubmitting || !pendingDenialCount}
-            className="inline-flex items-center rounded-lg bg-wv-red px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:bg-[rgba(255,107,107,0.85)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-          >
-            {denialSubmitting ? 'Submitting…' : 'Batch Submit Denials'}
-          </button>
-        </div>
-
-        {pendingDenialCount === 0 && (
-          <p className="mt-4 text-sm text-wv-dim">No pending consumer denials.</p>
-        )}
-
-        {denialResult?.txHash && (
-          <p className="mt-3 text-sm font-mono text-wv-green">
-            ✓ Submitted — tx: {denialResult.txHash.slice(0, 16)}…
-          </p>
-        )}
-        {denialResult?.error && (
-          <p className="mt-3 text-sm text-wv-red">
-            ✗ {denialResult.error}
-          </p>
         )}
       </section>
 
@@ -735,14 +731,19 @@ export default function ChainSubmitPage() {
                   <div className="mt-3">
                     <p className="text-xs font-medium text-wv-dim">Keywords:</p>
                     <div className="mt-1 flex flex-wrap gap-2">
-                      {item.extraction_result.map((kw, idx) => (
-                        <span
-                          key={idx}
-                          className="inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green"
-                        >
-                          {kw.keyword} {(kw.weight * 100).toFixed(0)}%
-                        </span>
-                      ))}
+                      {item.extraction_result.map((kw, idx) => {
+                        const inVocabulary = orgVocabulary.has(kw.keyword.toLowerCase());
+                        return (
+                          <span
+                            key={idx}
+                            className={inVocabulary
+                              ? 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green'
+                              : 'inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red'}
+                          >
+                            {kw.keyword} {(kw.weight * 100).toFixed(0)}%
+                          </span>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

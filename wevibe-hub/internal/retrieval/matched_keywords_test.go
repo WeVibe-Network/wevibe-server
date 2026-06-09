@@ -116,13 +116,13 @@ func TestQueryByKeywords_MatchedKeywords_FullOverlap(t *testing.T) {
 	}
 }
 
-// TestQueryByKeywords_MatchedKeywords_NoOverlap_FilteredOut verifies that
-// when the query supplies keywords that do not appear in any candidate, the
-// candidate is dropped from results (consistent with applyNewMemoryBoost's
-// base==0 short-circuit).
+// TestQueryByKeywords_MatchedKeywords_NoOverlap_NotFiltered verifies that
+// with keyword gating disabled, candidates without keyword overlap remain
+// eligible and simply report an empty matched-keyword set.
 //
-// Memory keywords: {alpha}. Query keywords: {beta}. Expected: zero results.
-func TestQueryByKeywords_MatchedKeywords_NoOverlap_FilteredOut(t *testing.T) {
+// Memory keywords: {alpha}. Query keywords: {beta}. Expected: one result,
+// matched keywords empty.
+func TestQueryByKeywords_MatchedKeywords_NoOverlap_NotFiltered(t *testing.T) {
 	client, cleanup := newMockQueryClient(t, []map[string]any{
 		mockSearchResult("cid-3", 0.92, map[string]float64{"alpha": 1}),
 	})
@@ -142,7 +142,10 @@ func TestQueryByKeywords_MatchedKeywords_NoOverlap_FilteredOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
 	}
-	if len(results) != 0 {
-		t.Fatalf("expected 0 results, got %d", len(results))
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if len(results[0].MatchedKeywords) != 0 {
+		t.Fatalf("expected empty matched keywords, got %v", results[0].MatchedKeywords)
 	}
 }

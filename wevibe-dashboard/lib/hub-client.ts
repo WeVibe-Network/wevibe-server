@@ -604,8 +604,11 @@ export interface Submission {
   epoch_id: number;
   memory_type: MemoryType;
   status: SubmissionStatus;
+  stack_hint?: string[] | null;
   matched_keywords?: string[];
   plaintext?: string | null;
+  ciphertext_hex?: string | null;
+  wrapped_dek_mod?: string | null;
   memory_cid?: string | null;
   encrypted_envelope?: string | null;
   extraction_result?: KeywordWeight[] | null;

@@ -2,6 +2,7 @@ package chain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 )
@@ -22,12 +24,21 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 
 	var epochID int64
 	var extractionResult json.RawMessage
+	var embeddingVectorRaw json.RawMessage
+	var embeddingModelID sql.NullString
+	var embeddingSchemaVersion sql.NullString
 
 	err := w.db.QueryRow(ctx, `
-		SELECT epoch_id, extraction_result
+		SELECT epoch_id, extraction_result, embedding_vector, embedding_model_id, embedding_schema_version
 		FROM pending_submissions
 		WHERE org_id = $1 AND submission_hash = $2 AND status = $3
-	`, orgID, contentHashHex, protocol.SubmissionStatusPendingChain).Scan(&epochID, &extractionResult)
+	`, orgID, contentHashHex, protocol.SubmissionStatusPendingChain).Scan(
+		&epochID,
+		&extractionResult,
+		&embeddingVectorRaw,
+		&embeddingModelID,
+		&embeddingSchemaVersion,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			logger.Warn("pending_submission not found for memory bookkeeping",
@@ -61,13 +72,11 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		keywordWeights[strings.ToLower(classified.Keyword)] = classified.Weight
 	}
 
-	var vector []float32
-	if len(keywords) > 0 {
-		vec, err := w.computeEmbedding(ctx, keywords)
-		if err != nil {
-			logger.Warn("failed to compute embedding", "error", err)
-		} else {
-			vector = vec
+	var leaderVector []float32
+	if len(embeddingVectorRaw) > 0 {
+		if err := json.Unmarshal(embeddingVectorRaw, &leaderVector); err != nil {
+			logger.Warn("failed to parse embedding_vector", "error", err)
+			leaderVector = nil
 		}
 	}
 
@@ -81,23 +90,45 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 	}
 
 	entry := protocol.IndexEntry{
-		CID:                  contentHashHex,
-		OrgID:                orgID,
-		EpochID:              int32(epochID),
-		Keywords:             keywordWithWeightSlice,
-		KeywordWeights:       keywordWeights,
-		Vector:               vector,
-		LifecycleState:       "ACTIVE",
-		MemoryType:           memoryType,
-		EmbeddingSchemaVersion: "1.0",
+		CID:            contentHashHex,
+		OrgID:          orgID,
+		EpochID:        int32(epochID),
+		Keywords:       keywordWithWeightSlice,
+		KeywordWeights: keywordWeights,
+		LifecycleState: "ACTIVE",
+		MemoryType:     memoryType,
 	}
 
-	if len(vector) > 0 {
-		entry.VectorDim = len(vector)
+	shouldUpsertVector := false
+	if len(leaderVector) == embed.EMBED_DIM {
+		entry.Vector = leaderVector
+		entry.VectorDim = len(leaderVector)
+
+		modelID := strings.TrimSpace(embeddingModelID.String)
+		if modelID == "" {
+			modelID = "nomic-embed-text"
+		}
+		schemaVersion := strings.TrimSpace(embeddingSchemaVersion.String)
+		if schemaVersion == "" {
+			schemaVersion = "retrieval-card-v1"
+		}
+		entry.EmbeddingModelID = modelID
+		entry.EmbeddingSchemaVersion = schemaVersion
+		shouldUpsertVector = true
+	} else if len(leaderVector) > 0 {
+		logger.Warn("leader embedding vector has invalid dimension; skipping vector index — memory committed but not vector-retrievable until re-embedded",
+			"cid", contentHashHex,
+			"vector_dim", len(leaderVector),
+			"expected_dim", embed.EMBED_DIM)
+	} else {
+		logger.Warn("no leader embedding vector for memory; skipping vector index — memory committed but not vector-retrievable until re-embedded",
+			"cid", contentHashHex)
 	}
 
-	if err := retrieval.AddToIndex(ctx, w.qdrantClient, entry); err != nil {
-		logger.Warn("failed to add entry to qdrant index", "error", err)
+	if shouldUpsertVector {
+		if err := retrieval.AddToIndex(ctx, w.qdrantClient, entry); err != nil {
+			logger.Warn("failed to add entry to qdrant index", "error", err)
+		}
 	}
 
 	for _, kw := range keywords {

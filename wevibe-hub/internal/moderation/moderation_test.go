@@ -272,7 +272,7 @@ func TestApproveSubmission_UpdatesStatus(t *testing.T) {
 	req, _ := buildReq(t, orgID)
 	hash := submitValid(t, ctx, pool, req)
 
-	if err := moderation.ApproveSubmission(ctx, pool, orgID, hash, modPubkey, req.MemoryType); err != nil {
+	if err := moderation.ApproveSubmission(ctx, pool, orgID, hash, modPubkey, req.MemoryType, nil, "", ""); err != nil {
 		t.Fatalf("approval should succeed: %v", err)
 	}
 

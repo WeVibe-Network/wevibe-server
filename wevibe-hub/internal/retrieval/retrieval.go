@@ -600,7 +600,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 
 	out := ScoreAndRank(cands, RankQuery{KeywordWeights: queryWeightsMap}, RankOpts{
-		Gate:               true,
+		Gate:               false,
 		KeywordBoostFactor: keywordBoostFactor,
 		NewMemBoost:        ranker.NewMemBoostMult > 0 && ranker.NewMemBoostWindow > 0,
 		Grace:              float64(ranker.GraceEpochs),

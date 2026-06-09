@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"time"
@@ -285,7 +286,7 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 	return currentVotes, required, ready, nil
 }
 
-func ApproveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey, memoryType string) error {
+func ApproveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey, memoryType string, vector []float32, embeddingModelID string, embeddingSchemaVersion string) error {
 	role, err := members.GetMemberRole(ctx, pool, orgID, moderatorPubkey)
 	if err != nil || (role != "moderator" && role != "leader") {
 		return fmt.Errorf("forbidden: not authorized")
@@ -309,15 +310,31 @@ func ApproveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissio
 		return fmt.Errorf("invalid status for approval: %s (expected 'pending')", currentStatus)
 	}
 
+	var embeddingVectorJSON any
+	var persistedEmbeddingModelID any
+	var persistedEmbeddingSchemaVersion any
+	if len(vector) > 0 {
+		marshaledVector, err := json.Marshal(vector)
+		if err != nil {
+			return fmt.Errorf("marshal embedding_vector: %w", err)
+		}
+		embeddingVectorJSON = marshaledVector
+		persistedEmbeddingModelID = embeddingModelID
+		persistedEmbeddingSchemaVersion = embeddingSchemaVersion
+	}
+
 	result, err := pool.Exec(ctx, `
         UPDATE pending_submissions
 		SET status = 'pending_keyword',
 		    moderator_pubkey = $1,
 		    memory_type = $4,
+		    embedding_vector = $5,
+		    embedding_model_id = $6,
+		    embedding_schema_version = $7,
 		    approved_at = NOW(),
 		    updated_at = NOW()
 		WHERE submission_hash = $2 AND org_id = $3 AND status = 'pending'
-	`, moderatorPubkey, submissionHash, orgID, memoryType)
+	`, moderatorPubkey, submissionHash, orgID, memoryType, embeddingVectorJSON, persistedEmbeddingModelID, persistedEmbeddingSchemaVersion)
 	if err != nil {
 		return fmt.Errorf("update submission: %w", err)
 	}

@@ -47,6 +47,8 @@ type SubmissionRecord struct {
 	OrgID                string           `json:"org_id"`
 	EpochID              int              `json:"epoch_id"`
 	ContributorPubkey    string           `json:"contributor_pubkey"`
+	CiphertextHex        string           `json:"ciphertext_hex"`
+	WrappedDekMod        string           `json:"wrapped_dek_mod"`
 	Status               string           `json:"status"`
 	MemoryType           string           `json:"memory_type"`
 	PreferenceConfidence float64          `json:"preference_confidence"`
@@ -722,7 +724,7 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	}
 	if statusFilter != "" {
 		rows, err = pool.Query(r.Context(), `
-			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, status, memory_type,
+			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, status, memory_type,
 			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
 			       COALESCE(se.matched_keywords, ARRAY[]::TEXT[])
 			FROM pending_submissions ps
@@ -740,7 +742,7 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 		`, orgID, statusFilter)
 	} else {
 		rows, err = pool.Query(r.Context(), `
-			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, status, memory_type,
+			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, status, memory_type,
 			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
 			       COALESCE(se.matched_keywords, ARRAY[]::TEXT[])
 			FROM pending_submissions ps
@@ -776,7 +778,7 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	for qr.Next() {
 		var sub SubmissionRecord
 		err := qr.Scan(&sub.SubmissionHash, &sub.OrgID, &sub.EpochID, &sub.ContributorPubkey,
-			&sub.Status, &sub.MemoryType, &sub.PreferenceConfidence, &sub.Derivation, &sub.ExtractionResult, &sub.ExtractionFeedback,
+			&sub.CiphertextHex, &sub.WrappedDekMod, &sub.Status, &sub.MemoryType, &sub.PreferenceConfidence, &sub.Derivation, &sub.ExtractionResult, &sub.ExtractionFeedback,
 			&sub.ModeratorPubkey, &sub.ApprovedAt, &sub.VerifiedAt, &sub.UpdatedAt, &sub.CreatedAt,
 			&sub.MatchedKeywords)
 		if err != nil {

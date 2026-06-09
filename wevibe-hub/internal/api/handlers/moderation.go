@@ -592,7 +592,17 @@ func ApproveSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := moderation.ApproveSubmission(r.Context(), pool, orgID, submissionHash, req.SignedBy, req.MemoryType); err != nil {
+	if err := moderation.ApproveSubmission(
+		r.Context(),
+		pool,
+		orgID,
+		submissionHash,
+		req.SignedBy,
+		req.MemoryType,
+		req.Vector,
+		req.EmbeddingModelID,
+		req.EmbeddingSchemaVersion,
+	); err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "forbidden") {
 			http.Error(w, `{"error":"forbidden: not a moderator"}`, http.StatusForbidden)
