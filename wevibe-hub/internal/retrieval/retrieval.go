@@ -507,7 +507,6 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		return nil, false, fmt.Errorf("load pending denial counts: %w", err)
 	}
 
-	scoredResults := make([]scoredResult, 0, len(searchResp.Result))
 	currentEpoch := uint64(0)
 	for _, e := range epochs {
 		if e < 0 {
@@ -518,6 +517,26 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		}
 	}
 	ranker := getRanker()
+
+	type queryPointRichData struct {
+		orgID              string
+		epochID            int32
+		lifecycleState     string
+		memoryType         string
+		contentFlags       []string
+		keywords           []protocol.KeywordWithWeight
+		memoryCreatedEpoch uint64
+	}
+
+	ageFrom := func(currentEpoch, memoryCreatedEpoch uint64) int {
+		if currentEpoch > memoryCreatedEpoch {
+			return int(currentEpoch - memoryCreatedEpoch)
+		}
+		return 0
+	}
+
+	cands := make([]RankCandidate, 0, len(searchResp.Result))
+	richDataByCID := make(map[string]queryPointRichData, len(searchResp.Result))
 
 	for _, r := range searchResp.Result {
 		payload := r.Payload
@@ -543,44 +562,9 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		}
 
 		vectorScore := r.Score
-		if vectorScore <= 0 {
-			continue
-		}
 
 		contentFlags := getRESTStringSlice(payload, "content_flags")
 		storedWeights := getRESTStringFloatMap(payload, "keyword_weights")
-		storedKeywords := make([]string, 0, len(storedWeights))
-		for kw := range storedWeights {
-			storedKeywords = append(storedKeywords, kw)
-		}
-
-		keywordBoost, matchedKeywordDetails, _ := computeKeywordScore(storedWeights, storedKeywords, queryWeightsMap)
-
-		matchedKeywords := make([]string, 0, len(matchedKeywordDetails))
-		seenMatched := make(map[string]struct{}, len(matchedKeywordDetails))
-		for _, detail := range matchedKeywordDetails {
-			keyword := strings.ToLower(strings.TrimSpace(detail.Keyword))
-			if keyword == "" {
-				continue
-			}
-			if _, exists := seenMatched[keyword]; exists {
-				continue
-			}
-			seenMatched[keyword] = struct{}{}
-			matchedKeywords = append(matchedKeywords, keyword)
-		}
-		sort.Strings(matchedKeywords)
-
-		if len(queryWeightsMap) > 0 && len(matchedKeywords) == 0 {
-			continue
-		}
-
-		finalScore := vectorScore + keywordBoost*keywordBoostFactor
-		if count := pendingDenialCounts[cid]; count > 0 {
-			// D-2026-05-25-A invariant: consumer denials must impact ranking
-			// immediately, before chain confirmation settles keyword weights.
-			finalScore = applyPendingDenialDecay(finalScore, count)
-		}
 
 		lifecycleState, _ := payload["lifecycle_state"].(string)
 		lifecycleState = strings.ToUpper(strings.TrimSpace(lifecycleState))
@@ -596,32 +580,59 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			keywords = append(keywords, protocol.KeywordWithWeight{Keyword: keyword, Weight: weight})
 		}
 
-		scoredResults = append(scoredResults, scoredResult{
-			result: protocol.MemoryResult{
-				CID:             cid,
-				OrgID:           orgID,
-				EpochID:         int(epochID),
-				LifecycleState:  lifecycleState,
-				MemoryType:      memoryType,
-				ContentFlags:    contentFlags,
-				Keywords:        keywords,
-				MatchedKeywords: matchedKeywords,
-			},
-			weightedScore:      finalScore,
-			memoryCreatedEpoch: memoryCreatedEpoch,
+		cands = append(cands, RankCandidate{
+			ID:             cid,
+			VectorScore:    vectorScore,
+			KeywordWeights: storedWeights,
+			PendingDenials: pendingDenialCounts[cid],
+			Age:            ageFrom(currentEpoch, memoryCreatedEpoch),
 		})
+
+		richDataByCID[cid] = queryPointRichData{
+			orgID:              orgID,
+			epochID:            epochID,
+			lifecycleState:     lifecycleState,
+			memoryType:         memoryType,
+			contentFlags:       contentFlags,
+			keywords:           keywords,
+			memoryCreatedEpoch: memoryCreatedEpoch,
+		}
 	}
 
-	sort.SliceStable(scoredResults, func(i, j int) bool {
-		return scoredResults[i].weightedScore > scoredResults[j].weightedScore
+	out := ScoreAndRank(cands, RankQuery{KeywordWeights: queryWeightsMap}, RankOpts{
+		Gate:               true,
+		KeywordBoostFactor: keywordBoostFactor,
+		NewMemBoost:        ranker.NewMemBoostMult > 0 && ranker.NewMemBoostWindow > 0,
+		Grace:              float64(ranker.GraceEpochs),
+		BoostWindow:        float64(ranker.NewMemBoostWindow),
+		NewMemMult:         ranker.NewMemBoostMult,
 	})
-	for i := range scoredResults {
-		// D-9.4 new-memory boost (linear decay over grace+boostWindow epochs).
-		scoredResults[i].weightedScore = ranker.applyNewMemoryBoost(scoredResults[i].weightedScore, scoredResults[i].memoryCreatedEpoch, currentEpoch)
+
+	scoredResults := make([]scoredResult, 0, len(out.Rows))
+	for _, row := range out.Rows {
+		richData, ok := richDataByCID[row.ID]
+		if !ok {
+			continue
+		}
+
+		matchedKeywords := append([]string(nil), row.Matched...)
+		sort.Strings(matchedKeywords)
+
+		scoredResults = append(scoredResults, scoredResult{
+			result: protocol.MemoryResult{
+				CID:             row.ID,
+				OrgID:           richData.orgID,
+				EpochID:         int(richData.epochID),
+				LifecycleState:  richData.lifecycleState,
+				MemoryType:      richData.memoryType,
+				ContentFlags:    richData.contentFlags,
+				Keywords:        richData.keywords,
+				MatchedKeywords: matchedKeywords,
+			},
+			weightedScore:      row.Final,
+			memoryCreatedEpoch: richData.memoryCreatedEpoch,
+		})
 	}
-	sort.SliceStable(scoredResults, func(i, j int) bool {
-		return scoredResults[i].weightedScore > scoredResults[j].weightedScore
-	})
 
 	if limit == 0 || limit > uint64(len(scoredResults)) {
 		limit = uint64(len(scoredResults))
