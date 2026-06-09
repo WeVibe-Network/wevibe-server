@@ -70,22 +70,6 @@ export async function mockHubApi(page: Page): Promise<MockHubController> {
       });
     }
 
-    if (request.method() === 'POST' && url.includes('/transfer-leadership')) {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ status: 'ok' }),
-      });
-    }
-
-    if (request.method() === 'POST' && url.includes('/close')) {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ status: 'closed' }),
-      });
-    }
-
     if (request.method() === 'GET' && url.match(/\/v1\/orgs\/[^/]+\/keywords/)) {
       console.log('[MOCK] GET /keywords matched, URL:', url);
       return route.fulfill({

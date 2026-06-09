@@ -191,32 +191,6 @@ export async function updateMemberRoleCanonical(
   return new TextEncoder().encode(msg);
 }
 
-export async function transferLeadershipCanonical(
-  orgId: string,
-  newLeaderPubkey: string,
-  signedBy: string,
-): Promise<Uint8Array> {
-  const msg = [
-    'wevibe.transfer_leadership.v1',
-    `org_id:${orgId}`,
-    `new_leader_pubkey:${newLeaderPubkey}`,
-    `signed_by:${signedBy}`,
-  ].join('\n');
-  return new TextEncoder().encode(msg);
-}
-
-export async function closeOrgCanonical(
-  orgId: string,
-  signedBy: string,
-): Promise<Uint8Array> {
-  const msg = [
-    'wevibe.close_org.v1',
-    `org_id:${orgId}`,
-    `signed_by:${signedBy}`,
-  ].join('\n');
-  return new TextEncoder().encode(msg);
-}
-
 export async function getWalletAddress(): Promise<string> {
   const available = detectWallets();
   if (available.length === 0) {

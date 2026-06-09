@@ -1,12 +1,14 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { listMembers, transferLeadership, closeOrg, enableMemberRecall, type MemberRecord } from '@/lib/hub-client'
+import { listMembers, enableMemberRecall, type MemberRecord } from '@/lib/hub-client'
 import { getIdentity } from '@/lib/wevibe-auth'
 import { connectWallet } from '@/lib/wallet-connect'
 import {
   buildAddMemberMsg,
+  buildCloseOrgMsg,
   buildRemoveMemberMsg,
+  buildTransferLeadershipMsg,
   buildUpdateMemberRoleMsg,
   directBroadcast,
   getOrgAccountAddress,
@@ -185,7 +187,26 @@ export default function MembersPage() {
   async function handleTransfer(pubkey: string) {
     setTransferLoading(true)
     try {
-      await transferLeadership(orgId, pubkey)
+      const targetMember = members.find(member => member.pubkey === pubkey)
+      if (!targetMember) {
+        throw new Error('Selected member not found')
+      }
+
+      const targetWalletAddress = targetMember.wallet_address?.trim()
+      if (!targetWalletAddress) {
+        setError('The new leader must link a wallet address before leadership can be transferred.')
+        return
+      }
+
+      const walletConn = await connectWallet()
+      const msgTransferLeadership = buildTransferLeadershipMsg(
+        walletConn.address,
+        orgId,
+        pubkey,
+        targetWalletAddress,
+      )
+      const orgAccount = await resolveOrgAccountForGas()
+      await directBroadcast(walletConn.address, [msgTransferLeadership], orgAccount)
       setTransferTarget(null)
       await refreshMembers()
     } catch (err) {
@@ -198,7 +219,10 @@ export default function MembersPage() {
   async function handleCloseOrg() {
     setCloseLoading(true)
     try {
-      await closeOrg(orgId)
+      const walletConn = await connectWallet()
+      const msgCloseOrg = buildCloseOrgMsg(walletConn.address, orgId)
+      const orgAccount = await resolveOrgAccountForGas()
+      await directBroadcast(walletConn.address, [msgCloseOrg], orgAccount)
       setCloseDialogOpen(false)
       await refreshMembers()
     } catch (err) {

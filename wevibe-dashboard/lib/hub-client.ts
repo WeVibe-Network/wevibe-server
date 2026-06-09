@@ -1,5 +1,5 @@
 import { buildAuthHeaders, getIdentity, signWithIdentity } from './wevibe-auth';
-import { linkWalletCanonical, transferLeadershipCanonical, closeOrgCanonical } from './wevibe-signing';
+import { linkWalletCanonical } from './wevibe-signing';
 import type { OrgRole } from './org-role';
 import type { MemberOrgEntry } from './org-context';
 import { getConfig } from '@/lib/config';
@@ -446,43 +446,6 @@ export async function recordOrg(body: RecordOrgRequest): Promise<CreateOrgRespon
 
 
 
-export async function transferLeadership(orgId: string, newLeaderPubkey: string): Promise<void> {
-  const identity = await getIdentity();
-  if (!identity) {
-    throw new Error('No dashboard identity');
-  }
-
-  const canonical = await transferLeadershipCanonical(orgId, newLeaderPubkey, identity.pubkeyHex);
-  const signature = await signWithIdentity(canonical);
-
-  await hubFetch<{ status: string }>(`/v1/orgs/${orgId}/transfer-leadership`, {
-    method: 'POST',
-    body: JSON.stringify({
-      new_leader_pubkey: newLeaderPubkey,
-      signed_by: identity.pubkeyHex,
-      signature,
-    }),
-  });
-}
-
-export async function closeOrg(orgId: string): Promise<void> {
-  const identity = await getIdentity();
-  if (!identity) {
-    throw new Error('No dashboard identity');
-  }
-
-  const canonical = await closeOrgCanonical(orgId, identity.pubkeyHex);
-  const signature = await signWithIdentity(canonical);
-
-  await hubFetch<{ status: string }>(`/v1/orgs/${orgId}/close`, {
-    method: 'POST',
-    body: JSON.stringify({
-      signed_by: identity.pubkeyHex,
-      signature,
-    }),
-  });
-}
-
 // === CO-215 Task D additions ===
 
 export interface KeywordRecord {
@@ -886,7 +849,7 @@ export async function discoverOrgs(params?: {
 export interface JoinRequest {
   request_id: string;
   requester_pubkey: string;
-  status: 'pending' | 'approved' | 'denied';
+  status: 'pending' | 'confirming' | 'approved' | 'denied';
   requested_at: string;
   reviewed_by: string | null;
   reviewed_at: string | null;
@@ -933,6 +896,19 @@ export async function approveJoinRequest(orgId: string, requestId: string, trial
     body: JSON.stringify({
       signed_by: identity.pubkeyHex,
       trial,
+    }),
+  });
+}
+
+export async function cancelJoinApproval(orgId: string, requestId: string): Promise<void> {
+  const identity = await getIdentity();
+  if (!identity) {
+    throw new Error('No identity');
+  }
+  await hubFetch<{ status: string }>(`/v1/orgs/${orgId}/join-requests/${requestId}/cancel-approval`, {
+    method: 'POST',
+    body: JSON.stringify({
+      signed_by: identity.pubkeyHex,
     }),
   });
 }

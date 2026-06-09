@@ -19,6 +19,8 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.org.v1.MsgRemoveMember',
   '/wevibe.org.v1.MsgSetOrgConfig',
   '/wevibe.org.v1.MsgUpdateMemberRole',
+  '/wevibe.org.v1.MsgTransferLeadership',
+  '/wevibe.org.v1.MsgCloseOrg',
   '/wevibe.org.v1.MsgSetServingKey',
   '/wevibe.org.v1.MsgSetServingInfo',
   '/wevibe.reputation.v1.MsgIncrementContribution',
@@ -354,6 +356,40 @@ export function buildUpdateMemberRoleMsg(
 
   return {
     typeUrl: '/wevibe.org.v1.MsgUpdateMemberRole',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildTransferLeadershipMsg(
+  signer: string,
+  orgId: string,
+  newLeaderPubkey: string,
+  newLeaderWallet: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+    ...encodeStringField(0x1a, newLeaderPubkey),
+    ...encodeStringField(0x22, newLeaderWallet),
+  ];
+
+  return {
+    typeUrl: '/wevibe.org.v1.MsgTransferLeadership',
+    value: Uint8Array.from(fields),
+  };
+}
+
+export function buildCloseOrgMsg(
+  signer: string,
+  orgId: string,
+): EncodeObject {
+  const fields: number[] = [
+    ...encodeStringField(0x0a, signer),
+    ...encodeStringField(0x12, orgId),
+  ];
+
+  return {
+    typeUrl: '/wevibe.org.v1.MsgCloseOrg',
     value: Uint8Array.from(fields),
   };
 }

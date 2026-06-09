@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { listJoinRequests, approveJoinRequest, denyJoinRequest, JoinRequest } from '@/lib/hub-client';
+import { listJoinRequests, approveJoinRequest, cancelJoinApproval, denyJoinRequest, JoinRequest } from '@/lib/hub-client';
 import { connectWallet } from '@/lib/wallet-connect';
 import { buildAddMemberMsg, directBroadcast, getOrgAccountAddress } from '@/lib/chain-client';
 import { useOrgContext } from '@/lib/org-context';
@@ -77,10 +77,17 @@ export default function JoinRequestsPage() {
         delete next[requestId];
         return next;
       });
+      alert('Approved — confirming on-chain; the member will appear once the transaction is confirmed.');
     } catch (err) {
       console.error('Failed to approve:', err);
       if (hubApproved) {
-        alert('Request was approved in hub, but on-chain add-member failed — the org account may need VIBE for gas.');
+        try {
+          await cancelJoinApproval(orgId, requestId);
+          alert('On-chain approval was cancelled or failed. The request was returned to pending.');
+        } catch (cancelErr) {
+          console.error('Failed to cancel join approval:', cancelErr);
+          alert('On-chain approval was cancelled or failed, but restoring pending status failed. Please refresh and retry.');
+        }
       } else {
         alert('Failed to approve request');
       }
