@@ -50,8 +50,8 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, orgID string, req protoc
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, wallet_address, membership_active)
-		VALUES ($1, $2, $3, 'leader', 0, $4, TRUE)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, wallet_address, membership_active, chain_confirmed)
+		VALUES ($1, $2, $3, 'leader', 0, $4, TRUE, TRUE)
 	`, orgID, req.LeaderPubkey, req.LeaderX25519Pubkey, leaderWallet)
 	if err != nil {
 		return nil, fmt.Errorf("insert leader member: %w", err)
@@ -402,85 +402,6 @@ func EpochExists(ctx context.Context, pool *pgxpool.Pool, orgID string, epochID 
 		return false, err
 	}
 	return exists, nil
-}
-
-func TransferLeadership(ctx context.Context, pool *pgxpool.Pool, orgID, currentLeaderPubkey, newLeaderPubkey string) error {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	var newLeaderActive bool
-	err = tx.QueryRow(ctx, `
-		SELECT active FROM members WHERE org_id = $1 AND pubkey = $2 AND active = true
-	`, orgID, newLeaderPubkey).Scan(&newLeaderActive)
-	if err != nil {
-		return fmt.Errorf("new leader must be an active member of the org: %w", err)
-	}
-
-	var currentLeaderRole string
-	err = tx.QueryRow(ctx, `
-		SELECT role FROM members WHERE org_id = $1 AND pubkey = $2 AND active = true
-	`, orgID, currentLeaderPubkey).Scan(&currentLeaderRole)
-	if err != nil {
-		return fmt.Errorf("current leader not found: %w", err)
-	}
-	if currentLeaderRole != "leader" {
-		return fmt.Errorf("caller is not the current leader")
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE members SET role = 'member', updated_at = NOW()
-		WHERE org_id = $1 AND pubkey = $2 AND active = true
-	`, orgID, currentLeaderPubkey)
-	if err != nil {
-		return fmt.Errorf("demote current leader: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE members SET role = 'leader', updated_at = NOW()
-		WHERE org_id = $1 AND pubkey = $2 AND active = true
-	`, orgID, newLeaderPubkey)
-	if err != nil {
-		return fmt.Errorf("promote new leader: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE orgs SET leader_pubkey = $1, updated_at = NOW()
-		WHERE org_id = $2
-	`, newLeaderPubkey, orgID)
-	if err != nil {
-		return fmt.Errorf("update org leader_pubkey: %w", err)
-	}
-
-	return tx.Commit(ctx)
-}
-
-func CloseOrg(ctx context.Context, pool *pgxpool.Pool, orgID string) error {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	_, err = tx.Exec(ctx, `
-		UPDATE orgs SET status = 'closed', updated_at = NOW()
-		WHERE org_id = $1
-	`, orgID)
-	if err != nil {
-		return fmt.Errorf("close org: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE members SET active = false, updated_at = NOW()
-		WHERE org_id = $1 AND active = true
-	`, orgID)
-	if err != nil {
-		return fmt.Errorf("deactivate members: %w", err)
-	}
-
-	return tx.Commit(ctx)
 }
 
 func GetOrgStatus(ctx context.Context, pool *pgxpool.Pool, orgID string) (string, error) {

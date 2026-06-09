@@ -129,6 +129,9 @@ func main() {
 				if err := chain.SyncEpochData(ctx, chainClient, qdrantClient, pool); err != nil {
 					log.Printf("ERROR: epoch sync failed: %v", err)
 				}
+				if err := chain.ReconcileMembership(ctx, chainClient, pool); err != nil {
+					log.Printf("ERROR: membership reconcile failed: %v", err)
+				}
 			case <-ctx.Done():
 				return
 			}
@@ -150,7 +153,7 @@ func main() {
 	handlers.SetNotificationDispatcher(notificationDispatcher)
 
 	txDecoder := chain.BuildTxDecoder(chainClient.GetCodec())
-	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, cfg.OllamaURL)
+	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, cfg.OllamaURL, umbralService)
 	watcher.SetDispatcher(notificationDispatcher)
 	go func() {
 		if err := watcher.Start(ctx); err != nil {
@@ -218,8 +221,6 @@ func main() {
 			r.Post("/members/{pubkey}/enable-recall", handlers.EnableMemberRecall)
 			r.Post("/members/{pubkey}/pre-key", handlers.RegisterPreKey)
 			r.Get("/members/{pubkey}/pre-key", handlers.GetPreKey)
-			r.Delete("/members/{pubkey}", handlers.RemoveMember)
-			r.Patch("/members/{pubkey}/role", handlers.UpdateMemberRole)
 			r.Post("/members/wallet", handlers.LinkWallet)
 			r.Get("/keys/envelope", handlers.GetKeyEnvelope)
 
@@ -276,11 +277,10 @@ func main() {
 			r.Get("/credits", handlers.GetOrgCredits)
 			r.Get("/finances", handlers.GetOrgFinances)
 			r.Get("/chain-config", handlers.GetOrgChainConfig)
-			r.Post("/transfer-leadership", handlers.TransferLeadership)
-			r.Post("/close", handlers.CloseOrg)
 
 			r.Get("/join-requests", handlers.ListJoinRequests)
 			r.Post("/join-requests/{requestID}/approve", handlers.ApproveJoinRequest)
+			r.Post("/join-requests/{requestID}/cancel-approval", handlers.CancelJoinApproval)
 			r.Post("/join-requests/{requestID}/deny", handlers.DenyJoinRequest)
 		})
 	})

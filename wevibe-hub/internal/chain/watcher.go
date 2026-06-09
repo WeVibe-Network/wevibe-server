@@ -25,20 +25,25 @@ import (
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
 )
 
 type ChainWatcher struct {
-	chainClient  *GrpcClient
-	db           *pgxpool.Pool
-	logger       *slog.Logger
-	subscriber   *CometBFTSubscriber
-	txDecoder    TxDecoderFunc
-	notifHub     *notifications.NotificationHub
-	dispatcher   *notifications.Dispatcher
-	qdrantClient *retrieval.QdrantClient
-	embedURL     string
+	chainClient   *GrpcClient
+	db            *pgxpool.Pool
+	logger        *slog.Logger
+	subscriber    *CometBFTSubscriber
+	txDecoder     TxDecoderFunc
+	notifHub      *notifications.NotificationHub
+	dispatcher    *notifications.Dispatcher
+	qdrantClient  *retrieval.QdrantClient
+	embedURL      string
+	umbralService *umbral.Service
 }
 
 type TxDecoderFunc func(txBytes []byte) (TxInterface, error)
@@ -84,15 +89,16 @@ func BuildTxDecoder(cdc codec.Codec) TxDecoderFunc {
 	}
 }
 
-func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, txDecoder TxDecoderFunc, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, embedURL string) *ChainWatcher {
+func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, txDecoder TxDecoderFunc, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, embedURL string, umbralService *umbral.Service) *ChainWatcher {
 	return &ChainWatcher{
-		chainClient:  chainClient,
-		db:           db,
-		logger:       logger,
-		txDecoder:    txDecoder,
-		notifHub:     notifHub,
-		qdrantClient: qdrantClient,
-		embedURL:     embedURL,
+		chainClient:   chainClient,
+		db:            db,
+		logger:        logger,
+		txDecoder:     txDecoder,
+		notifHub:      notifHub,
+		qdrantClient:  qdrantClient,
+		embedURL:      embedURL,
+		umbralService: umbralService,
 	}
 }
 
@@ -398,6 +404,18 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 				w.logger.Error("processRemoveMemberBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
 			}
 
+		case *orgtypes.MsgTransferLeadership:
+			if err := w.processTransferLeadershipBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.NewLeader, m.NewLeaderWallet); err != nil {
+				w.logger.Error("processTransferLeadershipBookkeeping failed", "err", err, "org_id", m.OrgId, "new_leader", m.NewLeader)
+			}
+
+		case *orgtypes.MsgCloseOrg:
+			if err := w.processCloseOrgBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId); err != nil {
+				w.logger.Error("processCloseOrgBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
 		case *memorytypes.MsgSubmitCommitment,
 			*reputationtypes.MsgIncrementContribution,
 			*reputationtypes.MsgIncrementServe,
@@ -423,6 +441,7 @@ func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, t
 	tag, err := w.db.Exec(ctx, `
 		UPDATE members
 		SET role = $1,
+		    chain_confirmed = TRUE,
 		    updated_at = NOW()
 		WHERE org_id = $2 AND pubkey = $3
 	`, newRole, orgID, pubkey)
@@ -510,20 +529,70 @@ func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, t
 }
 
 func (w *ChainWatcher) processRemoveMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string) error {
-	tag, err := w.db.Exec(ctx, `
-		UPDATE members
-		SET active = false,
-		    updated_at = NOW()
-		WHERE org_id = $1 AND pubkey = $2
-	`, orgID, pubkey)
+	currentEpoch, err := orgs.GetCurrentEpoch(ctx, w.db, orgID)
 	if err != nil {
-		return fmt.Errorf("failed to mark member inactive: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.logger.Warn("org row not found during remove-member bookkeeping; skipping member deactivation",
+				"org_id", orgID,
+				"pubkey", pubkey,
+				"tx_hash", txHash)
+		} else {
+			w.logger.Warn("failed to load current epoch during remove-member bookkeeping; skipping member deactivation",
+				"org_id", orgID,
+				"pubkey", pubkey,
+				"tx_hash", txHash,
+				"err", err)
+		}
+	} else {
+		if err := members.RemoveMember(ctx, w.db, orgID, pubkey, currentEpoch); err != nil {
+			errLower := strings.ToLower(err.Error())
+			if errors.Is(err, pgx.ErrNoRows) || strings.Contains(errLower, "not found") || strings.Contains(errLower, "inactive") {
+				w.logger.Info("remove-member bookkeeping already applied",
+					"org_id", orgID,
+					"pubkey", pubkey,
+					"tx_hash", txHash,
+					"err", err)
+			} else {
+				w.logger.Warn("failed to mark member inactive during remove-member bookkeeping",
+					"org_id", orgID,
+					"pubkey", pubkey,
+					"tx_hash", txHash,
+					"err", err)
+			}
+		}
 	}
-	if tag.RowsAffected() == 0 {
-		w.logger.Warn("member row not found during remove-member bookkeeping",
+
+	if err := envelopes.Delete(ctx, w.db, orgID, pubkey); err != nil {
+		w.logger.Warn("failed to delete key envelope during remove-member bookkeeping",
 			"org_id", orgID,
 			"pubkey", pubkey,
-			"tx_hash", txHash)
+			"tx_hash", txHash,
+			"err", err)
+	}
+
+	memberPKBytes, err := hex.DecodeString(pubkey)
+	if err != nil {
+		w.logger.Warn("failed to decode removed member pubkey during remove-member bookkeeping",
+			"org_id", orgID,
+			"pubkey", pubkey,
+			"tx_hash", txHash,
+			"err", err)
+	} else if w.umbralService != nil {
+		if _, err := w.umbralService.OnMemberRemoved(ctx, orgID, memberPKBytes); err != nil {
+			w.logger.Error("failed to delete kfrags from sidecar during remove-member bookkeeping; manual cleanup required",
+				"org_id", orgID,
+				"pubkey", pubkey,
+				"tx_hash", txHash,
+				"err", err)
+		}
+	}
+
+	if err := orgs.SetRotationPending(ctx, w.db, orgID); err != nil {
+		w.logger.Warn("failed to set rotation pending during remove-member bookkeeping",
+			"org_id", orgID,
+			"pubkey", pubkey,
+			"tx_hash", txHash,
+			"err", err)
 	}
 
 	return nil
@@ -533,16 +602,237 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 	tag, err := w.db.Exec(ctx, `
 		UPDATE members
 		SET role = $1,
+		    chain_confirmed = TRUE,
+		    active = TRUE,
 		    updated_at = NOW()
 		WHERE org_id = $2 AND pubkey = $3
 	`, role, orgID, pubkey)
 	if err != nil {
-		return fmt.Errorf("failed to sync added member role: %w", err)
+		return fmt.Errorf("failed to mark member chain-confirmed: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		w.logger.Warn("member row not found during add-member bookkeeping",
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+
+	var (
+		requestID       string
+		prePubkey       []byte
+		approvalTier    *string
+		approvalIsTrial bool
+	)
+
+	joinReqErr := w.db.QueryRow(ctx, `
+		SELECT request_id, pre_pubkey, approval_tier, approval_is_trial
+		FROM join_requests
+		WHERE org_id = $1 AND requester_pubkey = $2 AND status IN ('confirming', 'pending')
+		ORDER BY (status = 'confirming') DESC, requested_at DESC
+		LIMIT 1
+	`, orgID, pubkey).Scan(&requestID, &prePubkey, &approvalTier, &approvalIsTrial)
+	if joinReqErr != nil && !errors.Is(joinReqErr, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to load join request for promoted member: %w", joinReqErr)
+	}
+
+	var currentEpoch int
+	var trialDays int
+	if err := w.db.QueryRow(ctx, `
+		SELECT current_epoch, COALESCE(trial_days, 7)
+		FROM orgs
+		WHERE org_id = $1
+	`, orgID).Scan(&currentEpoch, &trialDays); err != nil {
+		return fmt.Errorf("failed to load org epoch/trial settings: %w", err)
+	}
+
+	if joinReqErr == nil {
+		if _, err := w.db.Exec(ctx, `
+			INSERT INTO members (
+				org_id,
+				pubkey,
+				x25519_pubkey,
+				pre_pubkey,
+				role,
+				join_epoch,
+				member_tier,
+				is_trial,
+				trial_expires_at,
+				chain_confirmed,
+				active
+			)
+			VALUES (
+				$1,
+				$2,
+				'',
+				$3,
+				$4,
+				$5,
+				COALESCE($6, 'member'),
+				$7,
+				CASE WHEN $7 THEN NOW() + ($8 * INTERVAL '1 day') ELSE NULL END,
+				TRUE,
+				TRUE
+			)
+			ON CONFLICT (org_id, pubkey) DO UPDATE
+			SET role = EXCLUDED.role,
+			    chain_confirmed = TRUE,
+			    active = TRUE,
+			    updated_at = NOW()
+		`, orgID, pubkey, prePubkey, role, currentEpoch, approvalTier, approvalIsTrial, trialDays); err != nil {
+			return fmt.Errorf("failed to upsert confirmed member from join request: %w", err)
+		}
+
+		if _, err := w.db.Exec(ctx, `
+			UPDATE join_requests
+			SET status = 'approved',
+			    reviewed_at = NOW()
+			WHERE request_id = $1
+		`, requestID); err != nil {
+			return fmt.Errorf("failed to mark join request approved: %w", err)
+		}
+
+		return nil
+	}
+
+	if _, err := w.db.Exec(ctx, `
+		INSERT INTO members (
+			org_id,
+			pubkey,
+			x25519_pubkey,
+			pre_pubkey,
+			role,
+			join_epoch,
+			member_tier,
+			is_trial,
+			trial_expires_at,
+			chain_confirmed,
+			active
+		)
+		VALUES (
+			$1,
+			$2,
+			'',
+			NULL,
+			$3,
+			$4,
+			'member',
+			FALSE,
+			NULL,
+			TRUE,
+			TRUE
+		)
+		ON CONFLICT (org_id, pubkey) DO UPDATE
+		SET role = EXCLUDED.role,
+		    chain_confirmed = TRUE,
+		    active = TRUE,
+		    updated_at = NOW()
+	`, orgID, pubkey, role, currentEpoch); err != nil {
+		return fmt.Errorf("failed to upsert confirmed invited member: %w", err)
+	}
+
+	w.logger.Info("confirmed invited member without join request; awaiting key registration",
+		"org_id", orgID,
+		"pubkey", pubkey,
+		"tx_hash", txHash)
+
+	return nil
+}
+
+func (w *ChainWatcher) processTransferLeadershipBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, newLeader string, newLeaderWallet string) error {
+	var currentLeaderPubkey string
+	err := w.db.QueryRow(ctx, `
+		SELECT leader_pubkey
+		FROM orgs
+		WHERE org_id = $1
+	`, orgID).Scan(&currentLeaderPubkey)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			w.logger.Warn("org row not found when resolving current leader",
+				"org_id", orgID,
+				"tx_hash", txHash)
+		} else {
+			return fmt.Errorf("failed to load current org leader: %w", err)
+		}
+	}
+
+	demoteTag, err := w.db.Exec(ctx, `
+		UPDATE members
+		SET role = 'member',
+		    updated_at = NOW()
+		WHERE org_id = $1 AND role = 'leader'
+	`, orgID)
+	if err != nil {
+		return fmt.Errorf("failed to demote previous leader: %w", err)
+	}
+	if demoteTag.RowsAffected() == 0 {
+		w.logger.Warn("no leader row demoted during transfer-leadership bookkeeping",
 			"org_id", orgID,
-			"pubkey", pubkey,
+			"current_leader_pubkey", currentLeaderPubkey,
+			"new_leader", newLeader,
+			"tx_hash", txHash)
+	}
+
+	promoteTag, err := w.db.Exec(ctx, `
+		UPDATE members
+		SET role = 'leader',
+		    wallet_address = $1,
+		    chain_confirmed = TRUE,
+		    active = TRUE,
+		    updated_at = NOW()
+		WHERE org_id = $2 AND pubkey = $3
+	`, newLeaderWallet, orgID, newLeader)
+	if err != nil {
+		return fmt.Errorf("failed to promote new leader: %w", err)
+	}
+	if promoteTag.RowsAffected() == 0 {
+		w.logger.Warn("new leader row not found during transfer-leadership bookkeeping",
+			"org_id", orgID,
+			"new_leader", newLeader,
+			"tx_hash", txHash)
+	}
+
+	orgTag, err := w.db.Exec(ctx, `
+		UPDATE orgs
+		SET leader_pubkey = $1
+		WHERE org_id = $2
+	`, newLeader, orgID)
+	if err != nil {
+		return fmt.Errorf("failed to update org leader pointer: %w", err)
+	}
+	if orgTag.RowsAffected() == 0 {
+		w.logger.Warn("org row not found during transfer-leadership bookkeeping",
+			"org_id", orgID,
+			"new_leader", newLeader,
+			"tx_hash", txHash)
+	}
+
+	return nil
+}
+
+func (w *ChainWatcher) processCloseOrgBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string) error {
+	orgTag, err := w.db.Exec(ctx, `
+		UPDATE orgs
+		SET status = 'closed'
+		WHERE org_id = $1
+	`, orgID)
+	if err != nil {
+		return fmt.Errorf("failed to mark org closed: %w", err)
+	}
+	if orgTag.RowsAffected() == 0 {
+		w.logger.Warn("org row not found during close-org bookkeeping",
+			"org_id", orgID,
+			"tx_hash", txHash)
+	}
+
+	memberTag, err := w.db.Exec(ctx, `
+		UPDATE members
+		SET active = false,
+		    updated_at = NOW()
+		WHERE org_id = $1
+	`, orgID)
+	if err != nil {
+		return fmt.Errorf("failed to deactivate members for closed org: %w", err)
+	}
+	if memberTag.RowsAffected() == 0 {
+		w.logger.Warn("no member rows updated during close-org bookkeeping",
+			"org_id", orgID,
 			"tx_hash", txHash)
 	}
 

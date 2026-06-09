@@ -249,9 +249,8 @@ func ApproveJoinRequest(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var requesterPubkey string
-	var prePubkey []byte
 	var status string
-	err = pool.QueryRow(ctx, `SELECT requester_pubkey, pre_pubkey, status FROM join_requests WHERE request_id=$1 AND org_id=$2`, requestID, orgID).Scan(&requesterPubkey, &prePubkey, &status)
+	err = pool.QueryRow(ctx, `SELECT requester_pubkey, status FROM join_requests WHERE request_id=$1 AND org_id=$2`, requestID, orgID).Scan(&requesterPubkey, &status)
 	if err == pgx.ErrNoRows {
 		http.Error(w, `{"error":"join request not found"}`, http.StatusNotFound)
 		return
@@ -265,50 +264,82 @@ func ApproveJoinRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = pool.Exec(ctx, `UPDATE join_requests SET status='approved', reviewed_by=$1, reviewed_at=NOW() WHERE request_id=$2`, signed.Pubkey, requestID)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	var currentEpoch int
-	var trialDays int
-	_ = pool.QueryRow(ctx, `SELECT current_epoch, COALESCE(trial_days, 7) FROM orgs WHERE org_id=$1`, orgID).Scan(&currentEpoch, &trialDays)
-
-	var isTrial bool
-	memberTier := "member"
+	approvalTier := "member"
 	if req.Trial {
-		isTrial = true
-		memberTier = "trial"
+		approvalTier = "trial"
 	}
 
-	_, err = pool.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, pre_pubkey, role, join_epoch, member_tier, is_trial, trial_expires_at)
-		VALUES ($1, $2, '', $3, 'member', $4, $5, $6,
-			CASE WHEN $6 THEN NOW() + ($7 * INTERVAL '1 day') ELSE NULL END)
-	`, orgID, requesterPubkey, prePubkey, currentEpoch, memberTier, isTrial, trialDays)
+	result, err := pool.Exec(ctx, `
+		UPDATE join_requests
+		   SET status='confirming',
+		       reviewed_by=$1,
+		       reviewed_at=NOW(),
+		       approval_tier=$2,
+		       approval_is_trial=$3
+		 WHERE request_id=$4 AND org_id=$5 AND status='pending'
+	`, signed.Pubkey, approvalTier, req.Trial, requestID, orgID)
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
-
-	// Admission is gated on-chain (MsgAddMember + org VIBE for gas), not by hub
-	// credits. Credits only gate RECALL via membership_active, which remains
-	// false on admission and is enabled by a future explicit enable-recall action.
-
-	_ = emitUserNotification(ctx,
-		requesterPubkey,
-		"join_approved",
-		"Join Request Approved",
-		"Your join request was approved",
-		requestID,
-		orgID,
-	)
+	if result.RowsAffected() == 0 {
+		http.Error(w, `{"error":"join request is not pending"}`, http.StatusBadRequest)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":        "approved",
+		"status":        "confirming",
 		"member_pubkey": requesterPubkey,
+	})
+}
+
+func CancelJoinApproval(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	requestID := chi.URLParam(r, "requestID")
+	if orgID == "" || requestID == "" {
+		http.Error(w, `{"error":"org_id and request_id required"}`, http.StatusBadRequest)
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
+	if err != nil || (role != "leader" && role != "moderator") {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+
+	result, err := pool.Exec(r.Context(), `
+		UPDATE join_requests
+		   SET status='pending',
+		       reviewed_by=NULL,
+		       reviewed_at=NULL,
+		       approval_tier=NULL,
+		       approval_is_trial=FALSE
+		 WHERE request_id=$1 AND org_id=$2 AND status='confirming'
+	`, requestID, orgID)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	if result.RowsAffected() == 0 {
+		http.Error(w, `{"error":"no confirming request to cancel"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "pending",
 	})
 }
 

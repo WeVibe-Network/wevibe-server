@@ -69,9 +69,12 @@ CREATE TABLE IF NOT EXISTS members (
     history_access_from_epoch   INTEGER     NOT NULL DEFAULT 0,
     authorized_until_epoch      INTEGER,
     -- `active`            : org-membership soft-delete (CloseOrg/TransferLeadership toggle this)
+    -- `chain_confirmed`   : TRUE once watcher observed MsgAddMember (or leader MsgRegisterOrg).
+    --                       A member is fully usable only when active = TRUE AND chain_confirmed = TRUE.
     -- `membership_active` : subscription gate — TRUE once the member is subscribed (org credit
     --                       pool debited). Recall requests require membership_active = TRUE.
     active                      BOOLEAN     NOT NULL DEFAULT TRUE,
+    chain_confirmed             BOOLEAN     NOT NULL DEFAULT FALSE,
     membership_active           BOOLEAN     NOT NULL DEFAULT FALSE,
     joined_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -480,7 +483,12 @@ CREATE TABLE IF NOT EXISTS join_requests (
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     requester_pubkey TEXT       NOT NULL,
     pre_pubkey      BYTEA,
-    status          TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied')),
+    -- 'confirming' = leader approved + MsgAddMember broadcast, pending watcher confirmation.
+    -- Watcher promotes confirming -> approved on-chain observation; reconcile may revert to pending.
+    status          TEXT        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirming', 'approved', 'denied')),
+    -- Leader approval intent (hub-only) before chain confirmation.
+    approval_tier   TEXT,
+    approval_is_trial BOOLEAN   NOT NULL DEFAULT FALSE,
     requested_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     reviewed_by     TEXT,
     reviewed_at     TIMESTAMPTZ,

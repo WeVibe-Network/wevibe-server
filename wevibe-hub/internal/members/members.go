@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
 var ErrInvalidPrePubkey = errors.New("invalid pre_pubkey")
@@ -233,28 +233,4 @@ func ListOrgsForMember(ctx context.Context, pool *pgxpool.Pool, pubkey string) (
 		return nil, err
 	}
 	return entries, nil
-}
-
-func UpdateMemberRole(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey, newRole string) error {
-	validRoles := map[string]bool{"moderator": true, "member": true, "contributor": true}
-	if !validRoles[newRole] {
-		return fmt.Errorf("invalid role: %s (must be 'moderator', 'contributor', or 'member')", newRole)
-	}
-
-	tag, err := pool.Exec(ctx, `
-		UPDATE members
-		SET role = $1,
-			member_tier = 'member',
-			is_trial = false,
-			trial_expires_at = NULL,
-			updated_at = NOW()
-		WHERE org_id = $2 AND pubkey = $3 AND active = true
-	`, newRole, orgID, pubkey)
-	if err != nil {
-		return fmt.Errorf("update member role: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("member not found or inactive")
-	}
-	return nil
 }

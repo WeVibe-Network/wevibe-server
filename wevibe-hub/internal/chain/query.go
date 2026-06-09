@@ -72,6 +72,37 @@ func (c *GrpcClient) GetOrgFromChain(ctx context.Context, orgID string) (*orgtyp
 	}, nil
 }
 
+// GetOrgMembersFromChain queries the chain for org members.
+// Returns nil, nil if org not found.
+func (c *GrpcClient) GetOrgMembersFromChain(ctx context.Context, orgID string) ([]orgtypes.MemberInfo, error) {
+	if c == nil {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	resp, err := c.orgQuery.GetMembers(ctx, &orgtypes.QueryGetMembersRequest{
+		OrgId: orgID,
+	})
+	if err != nil {
+		if c.isNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	members := make([]orgtypes.MemberInfo, 0, len(resp.Members))
+	for _, member := range resp.Members {
+		if member == nil {
+			continue
+		}
+		members = append(members, *member)
+	}
+
+	return members, nil
+}
+
 // GetOrgConfigFromChain queries chain org configuration.
 // Returns nil, nil if org config is not found.
 func (c *GrpcClient) GetOrgConfigFromChain(ctx context.Context, orgID string) (*orgtypes.StoredOrgConfig, error) {
