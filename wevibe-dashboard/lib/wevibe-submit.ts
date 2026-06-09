@@ -5,6 +5,7 @@ import {
 } from './wevibe-signing';
 import { encryptSymmetric, sealToPubkey } from './wevibe-crypto';
 import type { SanitizationFinding } from './hub-client';
+import type { MemoryCandidateKeywords } from './session-types';
 
 function bufToHex(buf: ArrayBuffer): string {
   return Array.from(new Uint8Array(buf))
@@ -68,6 +69,7 @@ export interface SubmitMemoryParams {
   epochId: number;
   memoryType: MemoryType;
   preferenceConfidence: number;
+  keywords?: MemoryCandidateKeywords;
   derivation: string;
   modPubkeyHex: string;
   hubUrl: string;
@@ -88,6 +90,7 @@ export interface SubmitMemoryPayload {
   contributor_sig: string;
   stack_hint: string[];
   preference_confidence: number;
+  keywords?: MemoryCandidateKeywords;
   derivation: string;
   attestation: null;
 }
@@ -115,6 +118,7 @@ export async function buildSubmitMemoryPayload(
     epochId,
     memoryType,
     preferenceConfidence,
+    keywords,
     derivation,
     modPubkeyHex,
   } = params;
@@ -187,6 +191,7 @@ export async function buildSubmitMemoryPayload(
       contributor_sig: signatureHex,
       stack_hint: stackHint,
       preference_confidence: preferenceConfidence,
+      keywords,
       derivation,
       attestation: null,
     },

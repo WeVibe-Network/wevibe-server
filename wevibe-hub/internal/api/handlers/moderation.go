@@ -177,9 +177,7 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Trial members cannot contribute. Upgrade to full membership."}`, http.StatusForbidden)
 		return
 	}
-	var req struct {
-		Submissions []protocol.SubmitMemoryRequest `json:"submissions"`
-	}
+	var req protocol.SubmitMemoryBatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return

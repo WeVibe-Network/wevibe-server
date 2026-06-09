@@ -14,6 +14,11 @@ import {
 
 type MemoryDerivation = 'verbatim' | 'edited-after-extraction';
 
+const EMPTY_MEMORY_KEYWORDS: NonNullable<MemoryCandidate['keywords']> = {
+  classified: [],
+  suggestions: [],
+};
+
 interface ExtractionHashPayload {
   implement: string;
   context: string;
@@ -241,6 +246,7 @@ export default function MemoryReview({
             epochId,
             memoryType: memory.memory_type,
             preferenceConfidence: memory.preference_confidence,
+            keywords: memory.keywords ?? EMPTY_MEMORY_KEYWORDS,
             derivation,
             modPubkeyHex: modPubkey || '',
             hubUrl,

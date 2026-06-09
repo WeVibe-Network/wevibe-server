@@ -1,11 +1,13 @@
 package moderation
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"time"
 
@@ -99,17 +101,28 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		derivation = "verbatim"
 	}
 
+	var extractionResult any
+	rawKeywords := req.Keywords
+	if keywords := bytes.TrimSpace(rawKeywords); len(keywords) > 0 {
+		var parsedKeywords map[string]any
+		if err := json.Unmarshal(keywords, &parsedKeywords); err != nil {
+			log.Printf("warn: skipping malformed keywords metadata for submission %s: %v", req.SubmissionHash, err)
+		} else if len(parsedKeywords) > 0 {
+			extractionResult = string(rawKeywords)
+		}
+	}
+
 	_, err = pool.Exec(ctx, `
 		INSERT INTO pending_submissions
 			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex,
 			 plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash,
-			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings, extraction_result)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb)
 	`,
 		req.SubmissionHash, req.OrgID, req.EpochID, req.ContributorPubkey,
 		req.Ciphertext, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash,
 		req.WrappedDekMod, req.ContributorSig, req.StackHint, req.MemoryType,
-		preferenceConfidence, derivation, sanitizationFindings,
+		preferenceConfidence, derivation, sanitizationFindings, extractionResult,
 	)
 	return err
 }

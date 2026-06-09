@@ -642,10 +642,23 @@ export async function rerunKeywords(orgId: string, hash: string, feedback: strin
   });
 }
 
-export async function updateKeywords(orgId: string, hash: string, classified: KeywordWeight[]): Promise<{ status: string }> {
+export async function updateKeywords(
+  orgId: string,
+  hash: string,
+  classified: KeywordWeight[],
+  suggestions?: KeywordWeight[],
+): Promise<{ status: string }> {
+  const payload: { hash: string; classified: KeywordWeight[]; suggestions?: KeywordWeight[] } = {
+    hash,
+    classified,
+  };
+  if (suggestions) {
+    payload.suggestions = suggestions;
+  }
+
   return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/update-keywords`, {
     method: 'PUT',
-    body: JSON.stringify({ hash, classified }),
+    body: JSON.stringify(payload),
   });
 }
 

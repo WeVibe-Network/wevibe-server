@@ -5,7 +5,12 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
 import { loadSettings } from '@/lib/settings';
-import type { MemoryCandidate } from '@/lib/session-types';
+import type {
+  ClassifiedKeyword,
+  MemoryCandidate,
+  MemoryCandidateKeywords,
+  SuggestedKeyword,
+} from '@/lib/session-types';
 
 export const dynamic = 'force-dynamic';
 const DEFAULT_EXTRACTION_NUM_CTX = 32768;
@@ -46,22 +51,114 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function isMemoryCandidate(value: unknown): value is MemoryCandidate {
+function emptyKeywords(): MemoryCandidateKeywords {
+  return {
+    classified: [],
+    suggestions: [],
+  };
+}
+
+function isClassifiedKeyword(value: unknown): value is ClassifiedKeyword {
   if (!isRecord(value)) {
     return false;
   }
 
   return (
-    typeof value.implement === 'string'
-    && typeof value.context === 'string'
-    && (value.dnd === null || typeof value.dnd === 'string')
-    && Array.isArray(value.stack)
-    && value.stack.every((entry) => typeof entry === 'string')
-    && value.memory_type === 'memory'
-    && typeof value.preference_confidence === 'number'
-    && Number.isFinite(value.preference_confidence)
-    && typeof value.extraction_hash === 'string'
+    typeof value.keyword === 'string'
+    && typeof value.weight === 'number'
+    && Number.isFinite(value.weight)
   );
+}
+
+function isSuggestedKeyword(value: unknown): value is SuggestedKeyword {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    typeof value.keyword === 'string'
+    && typeof value.weight === 'number'
+    && Number.isFinite(value.weight)
+    && typeof value.rationale === 'string'
+  );
+}
+
+function normalizeKeywords(value: unknown): MemoryCandidateKeywords {
+  if (!isRecord(value)) {
+    return emptyKeywords();
+  }
+
+  const { classified, suggestions } = value;
+  if (!Array.isArray(classified) || !Array.isArray(suggestions)) {
+    return emptyKeywords();
+  }
+
+  if (!classified.every(isClassifiedKeyword) || !suggestions.every(isSuggestedKeyword)) {
+    return emptyKeywords();
+  }
+
+  return {
+    classified: classified.map((entry) => ({
+      keyword: entry.keyword,
+      weight: entry.weight,
+    })),
+    suggestions: suggestions.map((entry) => ({
+      keyword: entry.keyword,
+      weight: entry.weight,
+      rationale: entry.rationale,
+    })),
+  };
+}
+
+function normalizeMemoryCandidate(value: unknown): MemoryCandidate | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const {
+    implement,
+    context,
+    dnd,
+    stack,
+    memory_type: memoryType,
+    preference_confidence: preferenceConfidence,
+    extraction_hash: extractionHash,
+  } = value;
+
+  if (typeof implement !== 'string' || typeof context !== 'string') {
+    return null;
+  }
+
+  if (dnd !== null && typeof dnd !== 'string') {
+    return null;
+  }
+
+  if (!Array.isArray(stack) || !stack.every((entry) => typeof entry === 'string')) {
+    return null;
+  }
+
+  if (memoryType !== 'memory') {
+    return null;
+  }
+
+  if (typeof preferenceConfidence !== 'number' || !Number.isFinite(preferenceConfidence)) {
+    return null;
+  }
+
+  if (typeof extractionHash !== 'string') {
+    return null;
+  }
+
+  return {
+    implement,
+    context,
+    dnd,
+    stack: [...stack],
+    memory_type: memoryType,
+    preference_confidence: preferenceConfidence,
+    extraction_hash: extractionHash,
+    keywords: normalizeKeywords(value.keywords),
+  };
 }
 
 function resolveServerHubBaseUrl(): string {
@@ -202,7 +299,8 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = loadSettings();
-  const profileOverrides = await fetchOrgExtractionProfileOverrides(settings.org_id);
+  const activeOrgId = settings.org_id.trim();
+  const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId);
   const modelFromSettings = settings.ollama_model.trim();
   const resolvedOllamaModel = profileOverrides?.model ?? modelFromSettings;
   const openRouterModel = settings.openrouter_model.trim();
@@ -224,10 +322,15 @@ export async function POST(request: NextRequest) {
     provider?: string;
     api_key?: string;
     base_url?: string;
+    org_id?: string;
   } = {
     transcript: body.transcript,
     project_context: projectContext,
   };
+
+  if (activeOrgId.length > 0) {
+    mcpExtractRequestBody.org_id = activeOrgId;
+  }
 
   if (profileOverrides?.prompt) {
     mcpExtractRequestBody.prompt = profileOverrides.prompt;
@@ -290,15 +393,20 @@ export async function POST(request: NextRequest) {
   }
 
   const memories = responseBody.memories;
-  if (!memories.every(isMemoryCandidate)) {
-    return NextResponse.json(
-      { error: 'MCP extraction returned invalid memory payload' },
-      { status: 502 },
-    );
+  const normalizedMemories: MemoryCandidate[] = [];
+  for (const memory of memories) {
+    const normalizedMemory = normalizeMemoryCandidate(memory);
+    if (!normalizedMemory) {
+      return NextResponse.json(
+        { error: 'MCP extraction returned invalid memory payload' },
+        { status: 502 },
+      );
+    }
+    normalizedMemories.push(normalizedMemory);
   }
 
   return NextResponse.json({
-    memories,
+    memories: normalizedMemories,
     extraction_meta: {
       source: profileOverrides ? 'org-profile' : 'wevibe-default',
       preset_id: profileOverrides?.presetId ?? null,

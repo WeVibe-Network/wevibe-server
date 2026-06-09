@@ -18,6 +18,20 @@ export interface SessionDetail {
   transcript: string;
 }
 
+export interface ClassifiedKeyword {
+  keyword: string;
+  weight: number;
+}
+
+export interface SuggestedKeyword extends ClassifiedKeyword {
+  rationale: string;
+}
+
+export interface MemoryCandidateKeywords {
+  classified: ClassifiedKeyword[];
+  suggestions: SuggestedKeyword[];
+}
+
 export interface MemoryCandidate {
   implement: string;
   context: string;
@@ -26,6 +40,7 @@ export interface MemoryCandidate {
   memory_type: 'memory';
   preference_confidence: number;
   extraction_hash: string;
+  keywords?: MemoryCandidateKeywords;
 }
 
 export type ExtractionStatus =
