@@ -688,6 +688,32 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			return fmt.Errorf("failed to mark join request approved: %w", err)
 		}
 
+		orgLabel := orgID
+		var orgName string
+		err = w.db.QueryRow(ctx, `
+			SELECT org_name
+			FROM orgs
+			WHERE org_id = $1
+		`, orgID).Scan(&orgName)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				w.logger.Warn("failed to load org name for join-approved notification",
+					"org_id", orgID,
+					"pubkey", pubkey,
+					"tx_hash", txHash,
+					"err", err)
+			}
+		} else if orgName != "" {
+			orgLabel = orgName
+		}
+
+		if err := notifications.EmitUserNotification(ctx, w.db, w.notifHub, w.dispatcher,
+			pubkey, "join_approved", "Join Request Approved",
+			fmt.Sprintf("You've been accepted into %s.", orgLabel),
+			requestID, orgID); err != nil {
+			w.logger.Warn("failed to emit join_approved notification", "org_id", orgID, "pubkey", pubkey, "err", err)
+		}
+
 		return nil
 	}
 

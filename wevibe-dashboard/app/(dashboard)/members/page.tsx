@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import { listMembers, enableMemberRecall, type MemberRecord } from '@/lib/hub-client'
 import { getIdentity } from '@/lib/wevibe-auth'
 import { connectWallet } from '@/lib/wallet-connect'
@@ -15,6 +16,7 @@ import {
 } from '@/lib/chain-client'
 import type { OrgRole } from '@/lib/org-role'
 import { useOrgContext } from '@/lib/org-context'
+import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast'
 import Button from '@/components/ui/button'
 import Card from '@/components/ui/card'
 import ClientTime from '@/components/ui/client-time'
@@ -115,18 +117,24 @@ export default function MembersPage() {
     setInviteLoading(true)
     setInviteError('')
     setInviteSuccess('')
+    const id = txToast('Invite')
     try {
       const walletConn = await connectWallet()
+      txConfirming(id, 'Invite')
       const msgAddMember = buildAddMemberMsg(walletConn.address, orgId, invitePubkey, inviteRole)
       const orgAccount = await resolveOrgAccountForGas()
       await directBroadcast(walletConn.address, [msgAddMember], orgAccount)
-      setInviteSuccess(`Invited ${invitePubkey.slice(0, 12)}... as ${inviteRole}`)
+      const successMessage = `Invited ${invitePubkey.slice(0, 12)}… as ${inviteRole}`
+      txSuccess(id, successMessage)
+      setInviteSuccess(successMessage)
       setInvitePubkey('')
       setInviteX25519Pubkey('')
       setInviteRole('member')
       await refreshMembers()
     } catch (err) {
-      setInviteError((err as Error).message)
+      const message = (err as Error).message
+      setInviteError(message)
+      txError(id, message)
     } finally {
       setInviteLoading(false)
     }
@@ -134,15 +142,20 @@ export default function MembersPage() {
 
   async function handleRoleChange(pubkey: string, newRole: string) {
     setRoleChangeLoading(true)
+    const id = txToast('Role change')
     try {
       const walletConn = await connectWallet()
+      txConfirming(id, 'Role change')
       const msgUpdateMemberRole = buildUpdateMemberRoleMsg(walletConn.address, orgId, pubkey, newRole)
       const orgAccount = await resolveOrgAccountForGas()
       await directBroadcast(walletConn.address, [msgUpdateMemberRole], orgAccount)
       setRoleChangeTarget(null)
       await refreshMembers()
+      txSuccess(id, `Role updated to ${newRole}`)
     } catch (err) {
-      setError((err as Error).message)
+      const message = (err as Error).message
+      setError(message)
+      txError(id, message)
     } finally {
       setRoleChangeLoading(false)
     }
@@ -150,15 +163,20 @@ export default function MembersPage() {
 
   async function handleRemove(pubkey: string) {
     setRemoveLoading(true)
+    const id = txToast('Remove member')
     try {
       const walletConn = await connectWallet()
+      txConfirming(id, 'Remove member')
       const msgRemoveMember = buildRemoveMemberMsg(walletConn.address, orgId, pubkey)
       const orgAccount = await resolveOrgAccountForGas()
       await directBroadcast(walletConn.address, [msgRemoveMember], orgAccount)
       setRemoveTarget(null)
       await refreshMembers()
+      txSuccess(id, 'Member removed')
     } catch (err) {
-      setError((err as Error).message)
+      const message = (err as Error).message
+      setError(message)
+      txError(id, message)
     } finally {
       setRemoveLoading(false)
     }
@@ -167,17 +185,22 @@ export default function MembersPage() {
   async function handleEnableRecall(pubkey: string) {
     setEnableRecallTarget(pubkey)
     setError('')
+    const id = toast.loading('Enabling recall…')
     try {
       await enableMemberRecall(orgId, pubkey)
       await refreshMembers()
+      toast.success('Recall enabled for this member', { id })
     } catch (err) {
       const status = typeof err === 'object' && err !== null
         ? (err as { status?: number }).status
         : undefined
       if (status === 402) {
         setError('Org has insufficient credits to enable recall')
+        toast.error('Org has insufficient recall credits — top up to enable recall.', { id })
       } else {
-        setError((err as Error).message)
+        const message = (err as Error).message
+        setError(message)
+        toast.error(message, { id })
       }
     } finally {
       setEnableRecallTarget(null)
@@ -186,6 +209,7 @@ export default function MembersPage() {
 
   async function handleTransfer(pubkey: string) {
     setTransferLoading(true)
+    const id = txToast('Transfer leadership')
     try {
       const targetMember = members.find(member => member.pubkey === pubkey)
       if (!targetMember) {
@@ -194,11 +218,14 @@ export default function MembersPage() {
 
       const targetWalletAddress = targetMember.wallet_address?.trim()
       if (!targetWalletAddress) {
-        setError('The new leader must link a wallet address before leadership can be transferred.')
+        const message = 'The new leader must link a wallet address before leadership can be transferred.'
+        setError(message)
+        txError(id, message)
         return
       }
 
       const walletConn = await connectWallet()
+      txConfirming(id, 'Transfer leadership')
       const msgTransferLeadership = buildTransferLeadershipMsg(
         walletConn.address,
         orgId,
@@ -209,8 +236,11 @@ export default function MembersPage() {
       await directBroadcast(walletConn.address, [msgTransferLeadership], orgAccount)
       setTransferTarget(null)
       await refreshMembers()
+      txSuccess(id, 'Leadership transferred')
     } catch (err) {
-      setError((err as Error).message)
+      const message = (err as Error).message
+      setError(message)
+      txError(id, message)
     } finally {
       setTransferLoading(false)
     }
@@ -218,15 +248,20 @@ export default function MembersPage() {
 
   async function handleCloseOrg() {
     setCloseLoading(true)
+    const id = txToast('Close org')
     try {
       const walletConn = await connectWallet()
+      txConfirming(id, 'Close org')
       const msgCloseOrg = buildCloseOrgMsg(walletConn.address, orgId)
       const orgAccount = await resolveOrgAccountForGas()
       await directBroadcast(walletConn.address, [msgCloseOrg], orgAccount)
       setCloseDialogOpen(false)
       await refreshMembers()
+      txSuccess(id, 'Org closed')
     } catch (err) {
-      setError((err as Error).message)
+      const message = (err as Error).message
+      setError(message)
+      txError(id, message)
     } finally {
       setCloseLoading(false)
     }

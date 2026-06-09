@@ -6,6 +6,7 @@ import { connectWallet } from '@/lib/wallet-connect';
 import { buildAddMemberMsg, directBroadcast, getOrgAccountAddress } from '@/lib/chain-client';
 import { useOrgContext } from '@/lib/org-context';
 import ClientTime from '@/components/ui/client-time';
+import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 
 function truncatePubkey(pubkey: string): string {
   if (!pubkey) return 'N/A';
@@ -50,6 +51,7 @@ export default function JoinRequestsPage() {
   const handleApprove = async (requestId: string) => {
     if (!orgId) return;
     setProcessing(requestId);
+    const id = txToast('Approve');
     let hubApproved = false;
     try {
       const request = requests.find(r => r.request_id === requestId);
@@ -61,6 +63,7 @@ export default function JoinRequestsPage() {
       const mode = approvalMode[requestId] ?? 'full';
       await approveJoinRequest(orgId, requestId, mode === 'trial');
       hubApproved = true;
+      txConfirming(id, 'Approve');
 
       const msgAddMember = buildAddMemberMsg(
         walletConn.address,
@@ -77,19 +80,19 @@ export default function JoinRequestsPage() {
         delete next[requestId];
         return next;
       });
-      alert('Approved — confirming on-chain; the member will appear once the transaction is confirmed.');
+      txSuccess(id, 'Approved — confirming on-chain; the member appears once the tx is confirmed.');
     } catch (err) {
       console.error('Failed to approve:', err);
       if (hubApproved) {
         try {
           await cancelJoinApproval(orgId, requestId);
-          alert('On-chain approval was cancelled or failed. The request was returned to pending.');
+          txError(id, 'On-chain approval was cancelled/failed — request returned to pending.');
         } catch (cancelErr) {
           console.error('Failed to cancel join approval:', cancelErr);
-          alert('On-chain approval was cancelled or failed, but restoring pending status failed. Please refresh and retry.');
+          txError(id, 'On-chain approval failed and restoring pending status failed. Refresh and retry.');
         }
       } else {
-        alert('Failed to approve request');
+        txError(id, 'Failed to approve request');
       }
     } finally {
       setProcessing(null);
@@ -99,14 +102,16 @@ export default function JoinRequestsPage() {
   const handleDeny = async (requestId: string) => {
     if (!orgId) return;
     setProcessing(requestId);
+    const id = txToast('Deny');
     try {
       await denyJoinRequest(orgId, requestId, denialReason || undefined);
       setRequests(prev => prev.filter(r => r.request_id !== requestId));
       setDenyingId(null);
       setDenialReason('');
+      txSuccess(id, 'Request denied');
     } catch (err) {
       console.error('Failed to deny:', err);
-      alert('Failed to deny request');
+      txError(id, 'Failed to deny request');
     } finally {
       setProcessing(null);
     }
