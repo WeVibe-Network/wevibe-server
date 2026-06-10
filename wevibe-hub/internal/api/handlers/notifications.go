@@ -6,9 +6,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
-	"github.com/gorilla/websocket"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
 var notificationHub *notifications.NotificationHub
@@ -260,6 +261,32 @@ func NotificationWebSocket(w http.ResponseWriter, r *http.Request) {
 
 				if authMsg.Pubkey == "" || authMsg.Signature == "" {
 					conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","data":"missing auth fields"}`))
+					conn.Close()
+					return
+				}
+
+				if authMsg.Timestamp == "" {
+					conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","data":"missing auth timestamp"}`))
+					conn.Close()
+					return
+				}
+
+				ts, err := time.Parse(time.RFC3339, authMsg.Timestamp)
+				if err != nil {
+					conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","data":"invalid timestamp format, use RFC3339"}`))
+					conn.Close()
+					return
+				}
+
+				now := time.Now()
+				if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
+					conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","data":"timestamp expired or too far in future"}`))
+					conn.Close()
+					return
+				}
+
+				if err := verify.RequestSignature(authMsg.Pubkey, authMsg.Signature, []byte(authMsg.Timestamp)); err != nil {
+					conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","data":"unauthorized"}`))
 					conn.Close()
 					return
 				}
