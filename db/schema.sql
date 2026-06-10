@@ -495,6 +495,7 @@ CREATE TABLE IF NOT EXISTS join_requests (
     request_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     requester_pubkey TEXT       NOT NULL,
+    x25519_pubkey   TEXT        NOT NULL,
     pre_pubkey      BYTEA,
     -- 'confirming' = leader approved + MsgAddMember broadcast, pending watcher confirmation.
     -- Watcher promotes confirming -> approved on-chain observation; reconcile may revert to pending.

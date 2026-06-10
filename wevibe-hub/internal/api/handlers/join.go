@@ -60,10 +60,16 @@ func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		RequesterPubkey string `json:"requester_pubkey"`
+		X25519Pubkey    string `json:"x25519_pubkey"`
 		PrePubkey       string `json:"pre_pubkey,omitempty"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.X25519Pubkey == "" {
+		http.Error(w, `{"error":"x25519_pubkey required"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -108,10 +114,10 @@ func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
 
 	var requestID string
 	err = pool.QueryRow(ctx, `
-		INSERT INTO join_requests (org_id, requester_pubkey, pre_pubkey, status)
-		VALUES ($1, $2, $3, 'pending')
+		INSERT INTO join_requests (org_id, requester_pubkey, x25519_pubkey, pre_pubkey, status)
+		VALUES ($1, $2, $3, $4, 'pending')
 		RETURNING request_id
-	`, orgID, requesterPubkey, prePubkey).Scan(&requestID)
+	`, orgID, requesterPubkey, req.X25519Pubkey, prePubkey).Scan(&requestID)
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
@@ -143,6 +149,7 @@ func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
 type JoinRequestRecord struct {
 	RequestID       string  `json:"request_id"`
 	RequesterPubkey string  `json:"requester_pubkey"`
+	X25519Pubkey    string  `json:"x25519_pubkey"`
 	Status          string  `json:"status"`
 	RequestedAt     string  `json:"requested_at"`
 	ReviewedBy      *string `json:"reviewed_by"`
@@ -187,7 +194,7 @@ func ListJoinRequests(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	rows, err := pool.Query(ctx, `
-		SELECT request_id, requester_pubkey, status, requested_at, reviewed_by, reviewed_at, denial_reason, cooldown_until
+		SELECT request_id, requester_pubkey, x25519_pubkey, status, requested_at, reviewed_by, reviewed_at, denial_reason, cooldown_until
 		FROM join_requests
 		WHERE org_id=$1 AND (CASE WHEN $2='all' THEN true ELSE status=$2 END)
 		ORDER BY requested_at DESC
@@ -205,7 +212,7 @@ func ListJoinRequests(w http.ResponseWriter, r *http.Request) {
 		var requestedAt time.Time
 		var reviewedAt *time.Time
 		var cooldownUntil *time.Time
-		if err := rows.Scan(&jr.RequestID, &jr.RequesterPubkey, &jr.Status, &requestedAt, &jr.ReviewedBy, &reviewedAt, &jr.DenialReason, &cooldownUntil); err != nil {
+		if err := rows.Scan(&jr.RequestID, &jr.RequesterPubkey, &jr.X25519Pubkey, &jr.Status, &requestedAt, &jr.ReviewedBy, &reviewedAt, &jr.DenialReason, &cooldownUntil); err != nil {
 			log.Printf("ListJoinRequests scan error org=%s: %v", orgID, err)
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return

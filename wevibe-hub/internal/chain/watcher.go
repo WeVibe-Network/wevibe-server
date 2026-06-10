@@ -388,7 +388,7 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 
 		case *orgtypes.MsgAddMember:
 			if err := w.processAddMemberBookkeeping(ctx, txHashHex, height, timestamp,
-				m.OrgId, m.Pubkey, m.Role); err != nil {
+				m.OrgId, m.Pubkey, m.X25519Pubkey, m.Role); err != nil {
 				w.logger.Error("processAddMemberBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
 			}
 
@@ -598,7 +598,7 @@ func (w *ChainWatcher) processRemoveMemberBookkeeping(ctx context.Context, txHas
 	return nil
 }
 
-func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, role string) error {
+func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, x25519Pubkey string, role string) error {
 	tag, err := w.db.Exec(ctx, `
 		UPDATE members
 		SET role = $1,
@@ -660,13 +660,13 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			VALUES (
 				$1,
 				$2,
-				'',
 				$3,
 				$4,
 				$5,
-				COALESCE($6, 'member'),
-				$7,
-				CASE WHEN $7 THEN NOW() + ($8 * INTERVAL '1 day') ELSE NULL END,
+				$6,
+				COALESCE($7, 'member'),
+				$8,
+				CASE WHEN $8 THEN NOW() + ($9 * INTERVAL '1 day') ELSE NULL END,
 				TRUE,
 				TRUE
 			)
@@ -675,7 +675,7 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			    chain_confirmed = TRUE,
 			    active = TRUE,
 			    updated_at = NOW()
-		`, orgID, pubkey, prePubkey, role, currentEpoch, approvalTier, approvalIsTrial, trialDays); err != nil {
+		`, orgID, pubkey, x25519Pubkey, prePubkey, role, currentEpoch, approvalTier, approvalIsTrial, trialDays); err != nil {
 			return fmt.Errorf("failed to upsert confirmed member from join request: %w", err)
 		}
 
@@ -734,10 +734,10 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 		VALUES (
 			$1,
 			$2,
-			'',
-			NULL,
 			$3,
+			NULL,
 			$4,
+			$5,
 			'member',
 			FALSE,
 			NULL,
@@ -749,7 +749,7 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 		    chain_confirmed = TRUE,
 		    active = TRUE,
 		    updated_at = NOW()
-	`, orgID, pubkey, role, currentEpoch); err != nil {
+	`, orgID, pubkey, x25519Pubkey, role, currentEpoch); err != nil {
 		return fmt.Errorf("failed to upsert confirmed invited member: %w", err)
 	}
 
