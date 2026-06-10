@@ -86,8 +86,9 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, errMsg), http.StatusConflict)
 			return
 		}
-		if strings.Contains(errMsg, "memory_content_hash") || strings.Contains(errMsg, "nullifier") ||
-			strings.Contains(errMsg, "serve_key") || strings.Contains(errMsg, "contributor_id") ||
+		if strings.Contains(errMsg, "memory_content_hash") || strings.Contains(errMsg, "serve_key_pubkey") ||
+			strings.Contains(errMsg, "serve_sig") || strings.Contains(errMsg, "nonce") ||
+			strings.Contains(errMsg, "contributor_id") ||
 			strings.Contains(errMsg, "epoch_id") || strings.Contains(errMsg, "matched_keywords") {
 			http.Error(w, fmt.Sprintf(`{"error":"validation: %s"}`, errMsg), http.StatusBadRequest)
 			return
@@ -104,8 +105,8 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "recorded",
-		"nullifier": record.Nullifier,
+		"status":           "recorded",
+		"serve_key_pubkey": record.ServeKeyPubkey,
 	})
 }
 
@@ -413,9 +414,17 @@ func serveEntryFromRecord(record serves.ServeEventRecord) (chain.ServeEntryInput
 	if err != nil || len(memHash) != 32 {
 		return chain.ServeEntryInput{}, fmt.Errorf("invalid memory_content_hash %q", record.MemoryContentHash)
 	}
-	nullifier, err := hex.DecodeString(record.Nullifier)
-	if err != nil || len(nullifier) != 32 {
-		return chain.ServeEntryInput{}, fmt.Errorf("invalid nullifier %q", record.Nullifier)
+	serveKeyPubkey, err := hex.DecodeString(record.ServeKeyPubkey)
+	if err != nil || len(serveKeyPubkey) != 32 {
+		return chain.ServeEntryInput{}, fmt.Errorf("invalid serve_key_pubkey %q", record.ServeKeyPubkey)
+	}
+	serveSig, err := hex.DecodeString(record.ServeSig)
+	if err != nil || len(serveSig) != 64 {
+		return chain.ServeEntryInput{}, fmt.Errorf("invalid serve_sig %q", record.ServeSig)
+	}
+	nonce, err := hex.DecodeString(record.Nonce)
+	if err != nil || len(nonce) == 0 {
+		return chain.ServeEntryInput{}, fmt.Errorf("invalid nonce %q", record.Nonce)
 	}
 	if len(record.MatchedKeywords) == 0 {
 		return chain.ServeEntryInput{}, fmt.Errorf("matched_keywords cannot be empty")
@@ -423,10 +432,11 @@ func serveEntryFromRecord(record serves.ServeEventRecord) (chain.ServeEntryInput
 
 	return chain.ServeEntryInput{
 		MemoryContentHash: memHash,
-		ServeKey:          record.ServeKey,
+		ServeKeyPubkey:    serveKeyPubkey,
+		ServeSig:          serveSig,
+		Nonce:             nonce,
 		ContributorID:     record.ContributorID,
 		ContributorWallet: strings.TrimSpace(record.ContributorWallet),
-		Nullifier:         nullifier,
 		ModelID:           record.ModelID,
 		TurnCount:         uint32(record.TurnCount),
 		MatchedKeywords:   record.MatchedKeywords,
@@ -438,24 +448,30 @@ func denialEntryFromRecord(record serves.ServeEventRecord) (chain.DenialEntryInp
 	if err != nil || len(memHash) != 32 {
 		return chain.DenialEntryInput{}, fmt.Errorf("invalid memory_content_hash %q", record.MemoryContentHash)
 	}
-	nullifier, err := hex.DecodeString(record.Nullifier)
-	if err != nil || len(nullifier) != 32 {
-		return chain.DenialEntryInput{}, fmt.Errorf("invalid nullifier %q", record.Nullifier)
+	serveKeyPubkey, err := hex.DecodeString(record.ServeKeyPubkey)
+	if err != nil || len(serveKeyPubkey) != 32 {
+		return chain.DenialEntryInput{}, fmt.Errorf("invalid serve_key_pubkey %q", record.ServeKeyPubkey)
 	}
-	denyKey := strings.TrimSpace(record.ServeKey)
-	if denyKey == "" {
-		denyKey = strings.TrimSpace(record.ReporterPubkey)
+	serveSig, err := hex.DecodeString(record.ServeSig)
+	if err != nil || len(serveSig) != 64 {
+		return chain.DenialEntryInput{}, fmt.Errorf("invalid serve_sig %q", record.ServeSig)
 	}
-	if denyKey == "" {
-		return chain.DenialEntryInput{}, fmt.Errorf("deny key is empty")
+	serveFingerprint, err := hex.DecodeString(record.ServeFingerprint)
+	if err != nil || len(serveFingerprint) != 32 {
+		return chain.DenialEntryInput{}, fmt.Errorf("invalid serve_fingerprint %q", record.ServeFingerprint)
+	}
+	nonce, err := hex.DecodeString(record.Nonce)
+	if err != nil || len(nonce) == 0 {
+		return chain.DenialEntryInput{}, fmt.Errorf("invalid nonce %q", record.Nonce)
 	}
 
 	return chain.DenialEntryInput{
-		MemoryHash:      memHash,
-		Nullifier:       nullifier,
-		DenyKey:         denyKey,
-		Reason:          record.Reason,
-		MatchedKeywords: record.MatchedKeywords,
+		MemoryHash:       memHash,
+		Reason:           record.Reason,
+		ServeKeyPubkey:   serveKeyPubkey,
+		ServeSig:         serveSig,
+		ServeFingerprint: serveFingerprint,
+		Nonce:            nonce,
 	}, nil
 }
 
@@ -507,10 +523,13 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		EpochID    int    `json:"epoch_id"`
-		MemoryHash string `json:"memory_hash"`
-		Nullifier  string `json:"nullifier"`
-		Reason     string `json:"reason"`
+		EpochID          int    `json:"epoch_id"`
+		MemoryHash       string `json:"memory_hash"`
+		ServeKeyPubkey   string `json:"serve_key_pubkey"`
+		ServeSig         string `json:"serve_sig"`
+		Nonce            string `json:"nonce"`
+		ServeFingerprint string `json:"serve_fingerprint"`
+		Reason           string `json:"reason"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
@@ -531,7 +550,10 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 		OrgID:             orgID,
 		EpochID:           epoch,
 		MemoryContentHash: req.MemoryHash,
-		Nullifier:         req.Nullifier,
+		ServeKeyPubkey:    req.ServeKeyPubkey,
+		ServeSig:          req.ServeSig,
+		Nonce:             req.Nonce,
+		ServeFingerprint:  req.ServeFingerprint,
 		Reason:            req.Reason,
 	}, signed.Pubkey)
 	if err != nil {
@@ -540,7 +562,9 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, errMsg), http.StatusConflict)
 			return
 		}
-		if strings.Contains(errMsg, "memory_content_hash") || strings.Contains(errMsg, "nullifier") || strings.Contains(errMsg, "reason") {
+		if strings.Contains(errMsg, "memory_content_hash") || strings.Contains(errMsg, "serve_key_pubkey") ||
+			strings.Contains(errMsg, "serve_sig") || strings.Contains(errMsg, "nonce") ||
+			strings.Contains(errMsg, "serve_fingerprint") || strings.Contains(errMsg, "reason") {
 			http.Error(w, fmt.Sprintf(`{"error":"validation: %s"}`, errMsg), http.StatusBadRequest)
 			return
 		}
@@ -554,7 +578,7 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "recorded",
-		"nullifier": record.Nullifier,
+		"status":            "recorded",
+		"serve_fingerprint": record.ServeFingerprint,
 	})
 }

@@ -363,7 +363,7 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 					MemoryContentHash: s.MemoryContentHash,
 					ContributorWallet: s.ContributorWallet,
 					ServeCount:        uint64(s.TurnCount),
-					Nullifier:         hex.EncodeToString(s.Nullifier),
+					Fingerprint:       hex.EncodeToString(servetypes.ComputeServeFingerprint(s.MemoryContentHash, s.ServeKeyPubkey, m.Epoch)),
 					ModelID:           s.ModelId,
 				}
 			}
@@ -377,7 +377,6 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 			for i, d := range m.Entries {
 				denials[i] = DenialEntry{
 					MemoryContentHash: d.MemoryHash,
-					ContributorWallet: d.DenyKey,
 					DenialCount:       1,
 				}
 			}

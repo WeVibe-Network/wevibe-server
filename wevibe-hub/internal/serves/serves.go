@@ -17,14 +17,15 @@ const (
 )
 
 type RecordServeRequest struct {
-	OrgID             string   `json:"org_id"`
-	EpochID           int      `json:"epoch_id"`
-	MemoryContentHash string   `json:"memory_content_hash"`
-	ServeKey          string   `json:"serve_key"`
-	ContributorID     string   `json:"contributor_id"`
-	Nullifier         string   `json:"nullifier"`
-	ModelID           string   `json:"model_id"`
-	TurnCount         int      `json:"turn_count"`
+	OrgID             string `json:"org_id"`
+	EpochID           int    `json:"epoch_id"`
+	MemoryContentHash string `json:"memory_content_hash"`
+	ServeKeyPubkey    string `json:"serve_key_pubkey"`
+	ServeSig          string `json:"serve_sig"`
+	Nonce             string `json:"nonce"`
+	ContributorID     string `json:"contributor_id"`
+	ModelID           string `json:"model_id"`
+	TurnCount         int    `json:"turn_count"`
 	// MatchedKeywords is the intersection of the served memory's keywords and
 	// the query's keyword set, computed at retrieval time. Required, non-empty.
 	// Per DECISIONS.md D-4.2 Implementation Clarifications (DMO-007).
@@ -37,7 +38,10 @@ type RecordDenialRequest struct {
 	OrgID             string `json:"org_id"`
 	EpochID           int    `json:"epoch_id"`
 	MemoryContentHash string `json:"memory_content_hash"`
-	Nullifier         string `json:"nullifier"`
+	ServeKeyPubkey    string `json:"serve_key_pubkey"`
+	ServeSig          string `json:"serve_sig"`
+	Nonce             string `json:"nonce"`
+	ServeFingerprint  string `json:"serve_fingerprint"`
 	Reason            string `json:"reason"`
 }
 
@@ -46,10 +50,12 @@ type ServeEventRecord struct {
 	OrgID             string     `json:"org_id"`
 	EpochID           int        `json:"epoch_id"`
 	MemoryContentHash string     `json:"memory_content_hash"`
-	ServeKey          string     `json:"serve_key"`
+	ServeKeyPubkey    string     `json:"serve_key_pubkey"`
+	ServeSig          string     `json:"serve_sig"`
+	Nonce             string     `json:"nonce"`
+	ServeFingerprint  string     `json:"serve_fingerprint"`
 	ContributorID     string     `json:"contributor_id"`
 	ContributorWallet string     `json:"contributor_wallet"`
-	Nullifier         string     `json:"nullifier"`
 	ModelID           string     `json:"model_id"`
 	TurnCount         int        `json:"turn_count"`
 	MatchedKeywords   []string   `json:"matched_keywords"`
@@ -107,20 +113,38 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, req RecordServeRequest
 		return nil, fmt.Errorf("memory_content_hash must be valid hex")
 	}
 
-	if req.ServeKey == "" {
-		return nil, fmt.Errorf("serve_key is required")
+	if req.ServeKeyPubkey == "" {
+		return nil, fmt.Errorf("serve_key_pubkey is required")
+	}
+	serveKeyPubkey, err := hex.DecodeString(req.ServeKeyPubkey)
+	if err != nil {
+		return nil, fmt.Errorf("serve_key_pubkey must be valid hex")
+	}
+	if len(serveKeyPubkey) != 32 {
+		return nil, fmt.Errorf("serve_key_pubkey must be 64 hex characters (32 bytes)")
+	}
+	if req.ServeSig == "" {
+		return nil, fmt.Errorf("serve_sig is required")
+	}
+	serveSig, err := hex.DecodeString(req.ServeSig)
+	if err != nil {
+		return nil, fmt.Errorf("serve_sig must be valid hex")
+	}
+	if len(serveSig) != 64 {
+		return nil, fmt.Errorf("serve_sig must be 128 hex characters (64 bytes)")
+	}
+	if req.Nonce == "" {
+		return nil, fmt.Errorf("nonce is required")
+	}
+	nonce, err := hex.DecodeString(req.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("nonce must be valid hex")
+	}
+	if len(nonce) == 0 {
+		return nil, fmt.Errorf("nonce must decode to at least 1 byte")
 	}
 	if req.ContributorID == "" {
 		return nil, fmt.Errorf("contributor_id is required")
-	}
-	if req.Nullifier == "" {
-		return nil, fmt.Errorf("nullifier is required")
-	}
-	if len(req.Nullifier) != 64 {
-		return nil, fmt.Errorf("nullifier must be 64 hex characters (32 bytes)")
-	}
-	if _, err := hex.DecodeString(req.Nullifier); err != nil {
-		return nil, fmt.Errorf("nullifier must be valid hex")
 	}
 	if req.EpochID < 0 {
 		return nil, fmt.Errorf("epoch_id must be non-negative")
@@ -134,30 +158,34 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, req RecordServeRequest
 	var id int64
 	var createdAt time.Time
 	err = pool.QueryRow(ctx, `
-		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '', $11, 'pending')
-		ON CONFLICT (org_id, nullifier, event_type) DO UPDATE SET
+		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
+		VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, '', $12, 'pending')
+		ON CONFLICT (org_id, event_type, serve_key_pubkey, memory_content_hash, epoch_id) DO UPDATE SET
+			serve_sig = EXCLUDED.serve_sig,
+			nonce = EXCLUDED.nonce,
+			contributor_id = EXCLUDED.contributor_id,
+			model_id = EXCLUDED.model_id,
+			turn_count = EXCLUDED.turn_count,
 			matched_keywords = EXCLUDED.matched_keywords,
 			reporter_pubkey = EXCLUDED.reporter_pubkey,
 			reason = EXCLUDED.reason,
-			event_type = EXCLUDED.event_type,
 			created_at = EXCLUDED.created_at
 		RETURNING id, created_at
-	`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKey, req.ContributorID, req.Nullifier, req.ModelID, req.TurnCount, matchedKeywords, reporterPubkey, EventTypeServe).Scan(&id, &createdAt)
+	`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKeyPubkey, req.ServeSig, req.Nonce, req.ContributorID, req.ModelID, req.TurnCount, matchedKeywords, reporterPubkey, EventTypeServe).Scan(&id, &createdAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
-			return nil, fmt.Errorf("duplicate serve event: nullifier already recorded for this org")
+			return nil, fmt.Errorf("duplicate serve event: already recorded for this org/epoch/key/memory")
 		}
 		return nil, fmt.Errorf("insert serve event: %w", err)
 	}
 
 	var record ServeEventRecord
 	err = pool.QueryRow(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, COALESCE(serve_fingerprint, ''), contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events WHERE id = $1
 	`, id).Scan(
 		&record.ID, &record.OrgID, &record.EpochID, &record.MemoryContentHash,
-		&record.ServeKey, &record.ContributorID, &record.Nullifier, &record.ModelID,
+		&record.ServeKeyPubkey, &record.ServeSig, &record.Nonce, &record.ServeFingerprint, &record.ContributorID, &record.ModelID,
 		&record.TurnCount, &record.MatchedKeywords, &record.ReporterPubkey, &record.Reason, &record.EventType, &record.Status, &record.TxHash,
 		&record.CreatedAt, &record.SubmittedAt,
 	)
@@ -178,14 +206,45 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 	if _, err := hex.DecodeString(req.MemoryContentHash); err != nil {
 		return nil, fmt.Errorf("memory_content_hash must be valid hex")
 	}
-	if req.Nullifier == "" {
-		return nil, fmt.Errorf("nullifier is required")
+	if req.ServeKeyPubkey == "" {
+		return nil, fmt.Errorf("serve_key_pubkey is required")
 	}
-	if len(req.Nullifier) != 64 {
-		return nil, fmt.Errorf("nullifier must be 64 hex characters (32 bytes)")
+	serveKeyPubkey, err := hex.DecodeString(req.ServeKeyPubkey)
+	if err != nil {
+		return nil, fmt.Errorf("serve_key_pubkey must be valid hex")
 	}
-	if _, err := hex.DecodeString(req.Nullifier); err != nil {
-		return nil, fmt.Errorf("nullifier must be valid hex")
+	if len(serveKeyPubkey) != 32 {
+		return nil, fmt.Errorf("serve_key_pubkey must be 64 hex characters (32 bytes)")
+	}
+	if req.ServeSig == "" {
+		return nil, fmt.Errorf("serve_sig is required")
+	}
+	serveSig, err := hex.DecodeString(req.ServeSig)
+	if err != nil {
+		return nil, fmt.Errorf("serve_sig must be valid hex")
+	}
+	if len(serveSig) != 64 {
+		return nil, fmt.Errorf("serve_sig must be 128 hex characters (64 bytes)")
+	}
+	if req.Nonce == "" {
+		return nil, fmt.Errorf("nonce is required")
+	}
+	nonce, err := hex.DecodeString(req.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("nonce must be valid hex")
+	}
+	if len(nonce) == 0 {
+		return nil, fmt.Errorf("nonce must decode to at least 1 byte")
+	}
+	if req.ServeFingerprint == "" {
+		return nil, fmt.Errorf("serve_fingerprint is required")
+	}
+	serveFingerprint, err := hex.DecodeString(req.ServeFingerprint)
+	if err != nil {
+		return nil, fmt.Errorf("serve_fingerprint must be valid hex")
+	}
+	if len(serveFingerprint) != 32 {
+		return nil, fmt.Errorf("serve_fingerprint must be 64 hex characters (32 bytes)")
 	}
 	if req.Reason == "" {
 		return nil, fmt.Errorf("reason is required")
@@ -200,30 +259,33 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 	// NOT NULL but denial-side matched_keywords is out of CO-033a scope (Q2=(a),
 	// DenialEntry proto has no matched_keywords field at chain commit 533d18b).
 	// CO-033b may add denial matched_keywords if a chain proto change lands.
-	err := pool.QueryRow(ctx, `
-		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
-		VALUES ($1, $2, $3, $4, $5, $6, '', 0, '{}'::TEXT[], $7, $8, $9, 'pending')
-		ON CONFLICT (org_id, nullifier, event_type) DO UPDATE SET
+	err = pool.QueryRow(ctx, `
+		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', 0, '{}'::TEXT[], $9, $10, $11, 'pending')
+		ON CONFLICT (org_id, event_type, serve_key_pubkey, memory_content_hash, epoch_id) DO UPDATE SET
+			serve_sig = EXCLUDED.serve_sig,
+			nonce = EXCLUDED.nonce,
+			serve_fingerprint = EXCLUDED.serve_fingerprint,
+			contributor_id = EXCLUDED.contributor_id,
 			reporter_pubkey = EXCLUDED.reporter_pubkey,
 			reason = EXCLUDED.reason,
-			event_type = EXCLUDED.event_type,
 			created_at = EXCLUDED.created_at
 		RETURNING id, created_at
-	`, req.OrgID, req.EpochID, req.MemoryContentHash, reporterPubkey, reporterPubkey, req.Nullifier, reporterPubkey, req.Reason, EventTypeDenial).Scan(&id, &createdAt)
+	`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKeyPubkey, req.ServeSig, req.Nonce, req.ServeFingerprint, reporterPubkey, reporterPubkey, req.Reason, EventTypeDenial).Scan(&id, &createdAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
-			return nil, fmt.Errorf("duplicate denial event: nullifier already recorded for this org")
+			return nil, fmt.Errorf("duplicate denial event: already recorded for this org/epoch/key/memory")
 		}
 		return nil, fmt.Errorf("insert denial event: %w", err)
 	}
 
 	var record ServeEventRecord
 	err = pool.QueryRow(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, COALESCE(serve_fingerprint, ''), contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events WHERE id = $1
 	`, id).Scan(
 		&record.ID, &record.OrgID, &record.EpochID, &record.MemoryContentHash,
-		&record.ServeKey, &record.ContributorID, &record.Nullifier, &record.ModelID,
+		&record.ServeKeyPubkey, &record.ServeSig, &record.Nonce, &record.ServeFingerprint, &record.ContributorID, &record.ModelID,
 		&record.TurnCount, &record.MatchedKeywords, &record.ReporterPubkey, &record.Reason, &record.EventType, &record.Status, &record.TxHash,
 		&record.CreatedAt, &record.SubmittedAt,
 	)
@@ -236,7 +298,7 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 
 func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int) ([]ServeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT se.id, se.org_id, se.epoch_id, se.memory_content_hash, se.serve_key, se.contributor_id, se.nullifier, se.model_id, se.turn_count, se.matched_keywords, se.reporter_pubkey, se.reason, se.event_type, se.status, se.tx_hash, se.created_at, se.submitted_at, COALESCE(m.wallet_address, '')
+		SELECT se.id, se.org_id, se.epoch_id, se.memory_content_hash, se.serve_key_pubkey, se.serve_sig, se.nonce, COALESCE(se.serve_fingerprint, ''), se.contributor_id, se.model_id, se.turn_count, se.matched_keywords, se.reporter_pubkey, se.reason, se.event_type, se.status, se.tx_hash, se.created_at, se.submitted_at, COALESCE(m.wallet_address, '')
 		FROM serve_events se
 		JOIN members m ON m.org_id = se.org_id AND m.pubkey = se.contributor_id
 		WHERE se.org_id = $1 AND se.status = 'pending' AND se.event_type = 'serve'
@@ -253,7 +315,7 @@ func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, lim
 		var r ServeEventRecord
 		err := rows.Scan(
 			&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
-			&r.ServeKey, &r.ContributorID, &r.Nullifier, &r.ModelID,
+			&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
 			&r.TurnCount, &r.MatchedKeywords, &r.ReporterPubkey, &r.Reason, &r.EventType, &r.Status, &r.TxHash,
 			&r.CreatedAt, &r.SubmittedAt, &r.ContributorWallet,
 		)
@@ -271,7 +333,7 @@ func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, lim
 
 func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int) ([]ServeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, COALESCE(serve_fingerprint, ''), contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events
 		WHERE org_id = $1 AND status = 'pending' AND event_type = 'denial'
 		ORDER BY created_at ASC
@@ -287,7 +349,7 @@ func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, li
 		var r ServeEventRecord
 		err := rows.Scan(
 			&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
-			&r.ServeKey, &r.ContributorID, &r.Nullifier, &r.ModelID,
+			&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
 			&r.TurnCount, &r.MatchedKeywords, &r.ReporterPubkey, &r.Reason, &r.EventType, &r.Status, &r.TxHash,
 			&r.CreatedAt, &r.SubmittedAt,
 		)
@@ -394,15 +456,15 @@ func HasPendingEvents(ctx context.Context, pool *pgxpool.Pool, orgID string) (bo
 	return exists, nil
 }
 
-func GetServeEventByNullifier(ctx context.Context, pool *pgxpool.Pool, orgID, nullifier string) (*ServeEventRecord, error) {
+func GetServeEventByIdentity(ctx context.Context, pool *pgxpool.Pool, orgID, eventType, serveKeyPubkey, memoryContentHash string, epochID int) (*ServeEventRecord, error) {
 	var r ServeEventRecord
 	err := pool.QueryRow(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key, contributor_id, nullifier, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, COALESCE(serve_fingerprint, ''), contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events
-		WHERE org_id = $1 AND nullifier = $2
-	`, orgID, nullifier).Scan(
+		WHERE org_id = $1 AND event_type = $2 AND serve_key_pubkey = $3 AND memory_content_hash = $4 AND epoch_id = $5
+	`, orgID, eventType, serveKeyPubkey, memoryContentHash, epochID).Scan(
 		&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
-		&r.ServeKey, &r.ContributorID, &r.Nullifier, &r.ModelID,
+		&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
 		&r.TurnCount, &r.MatchedKeywords, &r.ReporterPubkey, &r.Reason, &r.EventType, &r.Status, &r.TxHash,
 		&r.CreatedAt, &r.SubmittedAt,
 	)

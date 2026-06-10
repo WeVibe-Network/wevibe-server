@@ -38,10 +38,11 @@ func TestBuildServeBatchMsg_MapsEntries(t *testing.T) {
 	client := &GrpcClient{}
 	entries := []ServeEntryInput{{
 		MemoryContentHash: bytes32(0x11),
-		ServeKey:          "serve-key-1",
+		ServeKeyPubkey:    bytes32(0x12),
+		ServeSig:          bytes64(0x13),
+		Nonce:             []byte{0x01},
 		ContributorID:     "contributor-1",
 		ContributorWallet: "wevibe1wallet",
-		Nullifier:         bytes32(0x22),
 		ModelID:           "model-1",
 		TurnCount:         3,
 		MatchedKeywords:   []string{"alpha", "beta"},
@@ -66,16 +67,23 @@ func TestBuildServeBatchMsg_MapsEntries(t *testing.T) {
 	if len(msg.Serves[0].MatchedKeywords) != 2 {
 		t.Fatalf("unexpected matched keyword count: got %d want %d", len(msg.Serves[0].MatchedKeywords), 2)
 	}
+	if len(msg.Serves[0].ServeKeyPubkey) != 32 {
+		t.Fatalf("unexpected serve key pubkey length: got %d want %d", len(msg.Serves[0].ServeKeyPubkey), 32)
+	}
+	if len(msg.Serves[0].ServeSig) != 64 {
+		t.Fatalf("unexpected serve sig length: got %d want %d", len(msg.Serves[0].ServeSig), 64)
+	}
 }
 
 func TestBuildServeBatchMsg_RejectsEmptyMatchedKeywords(t *testing.T) {
 	client := &GrpcClient{}
 	_, err := client.BuildServeBatchMsg("org-1", 9, []ServeEntryInput{{
 		MemoryContentHash: bytes32(0x11),
-		ServeKey:          "serve-key-1",
+		ServeKeyPubkey:    bytes32(0x12),
+		ServeSig:          bytes64(0x13),
+		Nonce:             []byte{0x01},
 		ContributorID:     "contributor-1",
 		ContributorWallet: "wevibe1wallet",
-		Nullifier:         bytes32(0x22),
 		ModelID:           "model-1",
 		TurnCount:         3,
 	}})
@@ -87,10 +95,12 @@ func TestBuildServeBatchMsg_RejectsEmptyMatchedKeywords(t *testing.T) {
 func TestBuildDenialBatchMsg_MapsEntries(t *testing.T) {
 	client := &GrpcClient{}
 	entries := []DenialEntryInput{{
-		MemoryHash: bytes32(0x31),
-		Nullifier:  bytes32(0x41),
-		DenyKey:    "deny-key-1",
-		Reason:     "spam",
+		MemoryHash:       bytes32(0x31),
+		Reason:           "spam",
+		ServeKeyPubkey:   bytes32(0x41),
+		ServeSig:         bytes64(0x42),
+		ServeFingerprint: bytes32(0x43),
+		Nonce:            []byte{0xaa, 0xbb},
 	}}
 
 	msg, err := client.BuildDenialBatchMsg("org-7", 11, entries)
@@ -109,4 +119,15 @@ func TestBuildDenialBatchMsg_MapsEntries(t *testing.T) {
 	if msg.Entries[0].Reason != "spam" {
 		t.Fatalf("unexpected denial reason: got %q want %q", msg.Entries[0].Reason, "spam")
 	}
+	if len(msg.Entries[0].ServeFingerprint) != 32 {
+		t.Fatalf("unexpected serve fingerprint length: got %d want %d", len(msg.Entries[0].ServeFingerprint), 32)
+	}
+}
+
+func bytes64(b byte) []byte {
+	out := make([]byte, 64)
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }

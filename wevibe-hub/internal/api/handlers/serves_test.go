@@ -249,10 +249,11 @@ func makeServeRecord(id int64, epoch int, seed byte) serves.ServeEventRecord {
 		OrgID:             "org-test",
 		EpochID:           epoch,
 		MemoryContentHash: hex32(seed),
-		ServeKey:          fmt.Sprintf("serve-key-%d", id),
+		ServeKeyPubkey:    hex32(seed + 1),
+		ServeSig:          hex64(seed + 2),
+		Nonce:             fmt.Sprintf("%02x", seed+3),
 		ContributorID:     fmt.Sprintf("contributor-%d", id),
 		ContributorWallet: "wevibe1contributorwallet",
-		Nullifier:         hex32(seed + 1),
 		ModelID:           "model-1",
 		TurnCount:         1,
 		MatchedKeywords:   []string{"alpha"},
@@ -263,13 +264,17 @@ func makeServeRecord(id int64, epoch int, seed byte) serves.ServeEventRecord {
 
 func makeDenialRecord(id int64, epoch int, seed byte) serves.ServeEventRecord {
 	record := makeServeRecord(id, epoch, seed)
-	record.ServeKey = fmt.Sprintf("deny-key-%d", id)
+	record.ServeFingerprint = hex32(seed + 4)
 	record.Reason = "spam"
 	return record
 }
 
 func hex32(seed byte) string {
 	return fmt.Sprintf("%x", bytes.Repeat([]byte{seed}, 32))
+}
+
+func hex64(seed byte) string {
+	return fmt.Sprintf("%x", bytes.Repeat([]byte{seed}, 64))
 }
 
 func assertServeMsgEpoch(t *testing.T, msg sdktypes.Msg, wantEpoch uint64) {

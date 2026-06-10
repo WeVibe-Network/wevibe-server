@@ -12,7 +12,7 @@ type ServeEntry struct {
 	MemoryContentHash []byte
 	ContributorWallet string
 	ServeCount        uint64
-	Nullifier         string
+	Fingerprint       string
 	ModelID           string
 }
 

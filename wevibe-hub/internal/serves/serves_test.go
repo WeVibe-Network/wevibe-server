@@ -52,7 +52,7 @@ func seedOrg(t *testing.T, pool *pgxpool.Pool, orgID string) {
 // TestRecordServe_PersistsMatchedKeywords drives the POST /v1/serves
 // persistence contract end-to-end: the matched_keywords array supplied by
 // the client must round-trip through serve_events and reappear on the read
-// path (GetServeEventByNullifier). Normalisation (lowercase / trim / dedupe)
+// path (GetServeEventByIdentity). Normalisation (lowercase / trim / dedupe)
 // runs before persistence per the validator contract.
 func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 	pool := testPool(t)
@@ -61,15 +61,17 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 	seedOrg(t, pool, orgID)
 
 	contentHash := strings.Repeat("a", 64)
-	nullifier := strings.Repeat("b", 64)
+	serveKeyPubkey := strings.Repeat("b", 64)
+	serveSig := strings.Repeat("c", 128)
 
 	req := RecordServeRequest{
 		OrgID:             orgID,
 		EpochID:           0,
 		MemoryContentHash: contentHash,
-		ServeKey:          "serve-key-1",
+		ServeKeyPubkey:    serveKeyPubkey,
+		ServeSig:          serveSig,
+		Nonce:             "01",
 		ContributorID:     strings.Repeat("c", 64),
-		Nullifier:         nullifier,
 		ModelID:           "test-model",
 		TurnCount:         3,
 		// Mixed-case + duplicate input exercises the normaliser. Expected
@@ -89,9 +91,9 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 
 	// Round-trip via the read path to confirm persistence, not just the
 	// return value from the post-INSERT SELECT inside RecordServe.
-	got, err := GetServeEventByNullifier(ctx, pool, orgID, nullifier)
+	got, err := GetServeEventByIdentity(ctx, pool, orgID, EventTypeServe, serveKeyPubkey, contentHash, 0)
 	if err != nil {
-		t.Fatalf("GetServeEventByNullifier failed: %v", err)
+		t.Fatalf("GetServeEventByIdentity failed: %v", err)
 	}
 	if got == nil {
 		t.Fatal("expected to find persisted serve_events row, got nil")
@@ -116,9 +118,10 @@ func TestRecordServe_RejectsEmptyMatchedKeywords(t *testing.T) {
 		OrgID:             orgID,
 		EpochID:           0,
 		MemoryContentHash: strings.Repeat("e", 64),
-		ServeKey:          "serve-key-reject",
+		ServeKeyPubkey:    strings.Repeat("f", 64),
+		ServeSig:          strings.Repeat("a", 128),
+		Nonce:             "0a",
 		ContributorID:     strings.Repeat("f", 64),
-		Nullifier:         strings.Repeat("9", 64),
 		ModelID:           "test-model",
 		TurnCount:         1,
 	}
@@ -135,9 +138,6 @@ func TestRecordServe_RejectsEmptyMatchedKeywords(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			req := baseReq
-			// Per-case nullifier so the unique constraint doesn't collapse
-			// retries from earlier subtests onto the same row.
-			req.Nullifier = strings.Repeat(fmt.Sprintf("%x", len(c.in)+1), 64)[:64]
 			req.MatchedKeywords = c.in
 
 			_, err := RecordServe(ctx, pool, req, strings.Repeat("d", 64))

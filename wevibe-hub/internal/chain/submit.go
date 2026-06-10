@@ -119,10 +119,11 @@ func buildSubmitCommitmentMsg(signer, orgID string, mem BatchMemory, submittedMe
 
 type ServeEntryInput struct {
 	MemoryContentHash []byte
-	ServeKey          string
+	ServeKeyPubkey    []byte
+	ServeSig          []byte
+	Nonce             []byte
 	ContributorID     string
 	ContributorWallet string
-	Nullifier         []byte
 	ModelID           string
 	TurnCount         uint32
 	// MatchedKeywords is the intersection of the served memory's keywords and
@@ -133,17 +134,12 @@ type ServeEntryInput struct {
 }
 
 type DenialEntryInput struct {
-	MemoryHash []byte
-	Nullifier  []byte
-	DenyKey    string
-	Reason     string
-	// MatchedKeywords is carried for symmetry with ServeEntryInput and to
-	// support a future chain-side denial matched_keywords proto extension
-	// (see DECISIONS.md D-4.2 Implementation Clarifications, DMO-007). The
-	// current chain proto (x/serve commit 533d18b) does NOT include this
-	// field on DenialEntry, so it is accepted on the input struct but not
-	// propagated into servetypes.DenialEntry until the proto is extended.
-	MatchedKeywords []string
+	MemoryHash       []byte
+	Reason           string
+	ServeKeyPubkey   []byte
+	ServeSig         []byte
+	ServeFingerprint []byte
+	Nonce            []byte
 }
 
 func buildServeEntries(entries []ServeEntryInput) ([]*servetypes.ServeEntry, error) {
@@ -156,8 +152,14 @@ func buildServeEntries(entries []ServeEntryInput) ([]*servetypes.ServeEntry, err
 		if len(e.MemoryContentHash) != 32 {
 			return nil, fmt.Errorf("entry %d: memory_content_hash must be 32 bytes, got %d", i, len(e.MemoryContentHash))
 		}
-		if len(e.Nullifier) != 32 {
-			return nil, fmt.Errorf("entry %d: nullifier must be 32 bytes, got %d", i, len(e.Nullifier))
+		if len(e.ServeKeyPubkey) != 32 {
+			return nil, fmt.Errorf("entry %d: serve_key_pubkey must be 32 bytes, got %d", i, len(e.ServeKeyPubkey))
+		}
+		if len(e.ServeSig) != 64 {
+			return nil, fmt.Errorf("entry %d: serve_sig must be 64 bytes, got %d", i, len(e.ServeSig))
+		}
+		if len(e.Nonce) == 0 {
+			return nil, fmt.Errorf("entry %d: nonce cannot be empty", i)
 		}
 		if len(e.MatchedKeywords) == 0 {
 			return nil, fmt.Errorf("entry %d: matched_keywords cannot be empty", i)
@@ -165,10 +167,11 @@ func buildServeEntries(entries []ServeEntryInput) ([]*servetypes.ServeEntry, err
 
 		serves[i] = &servetypes.ServeEntry{
 			MemoryContentHash: e.MemoryContentHash,
-			ServeKey:          e.ServeKey,
+			ServeKeyPubkey:    e.ServeKeyPubkey,
+			ServeSig:          e.ServeSig,
+			Nonce:             e.Nonce,
 			ContributorId:     e.ContributorID,
 			ContributorWallet: e.ContributorWallet,
-			Nullifier:         e.Nullifier,
 			ModelId:           e.ModelID,
 			TurnCount:         e.TurnCount,
 			MatchedKeywords:   e.MatchedKeywords,
@@ -188,21 +191,29 @@ func buildDenialEntries(entries []DenialEntryInput) ([]*servetypes.DenialEntry, 
 		if len(e.MemoryHash) != 32 {
 			return nil, fmt.Errorf("entry %d: memory_hash must be 32 bytes, got %d", i, len(e.MemoryHash))
 		}
-		if len(e.Nullifier) != 32 {
-			return nil, fmt.Errorf("entry %d: nullifier must be 32 bytes, got %d", i, len(e.Nullifier))
-		}
-		if e.DenyKey == "" {
-			return nil, fmt.Errorf("entry %d: deny_key is required", i)
-		}
 		if e.Reason == "" {
 			return nil, fmt.Errorf("entry %d: reason is required", i)
 		}
+		if len(e.ServeKeyPubkey) != 32 {
+			return nil, fmt.Errorf("entry %d: serve_key_pubkey must be 32 bytes, got %d", i, len(e.ServeKeyPubkey))
+		}
+		if len(e.ServeSig) != 64 {
+			return nil, fmt.Errorf("entry %d: serve_sig must be 64 bytes, got %d", i, len(e.ServeSig))
+		}
+		if len(e.ServeFingerprint) != 32 {
+			return nil, fmt.Errorf("entry %d: serve_fingerprint must be 32 bytes, got %d", i, len(e.ServeFingerprint))
+		}
+		if len(e.Nonce) == 0 {
+			return nil, fmt.Errorf("entry %d: nonce cannot be empty", i)
+		}
 
 		denials[i] = &servetypes.DenialEntry{
-			MemoryHash: e.MemoryHash,
-			Nullifier:  e.Nullifier,
-			DenyKey:    e.DenyKey,
-			Reason:     e.Reason,
+			MemoryHash:       e.MemoryHash,
+			Reason:           e.Reason,
+			ServeKeyPubkey:   e.ServeKeyPubkey,
+			ServeSig:         e.ServeSig,
+			ServeFingerprint: e.ServeFingerprint,
+			Nonce:            e.Nonce,
 		}
 	}
 

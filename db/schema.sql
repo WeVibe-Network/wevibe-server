@@ -383,9 +383,11 @@ CREATE TABLE IF NOT EXISTS serve_events (
     org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     epoch_id            INTEGER     NOT NULL,
     memory_content_hash TEXT        NOT NULL,
-    serve_key           TEXT        NOT NULL,
+    serve_key_pubkey    TEXT        NOT NULL,
+    serve_sig           TEXT        NOT NULL,
+    nonce               TEXT        NOT NULL,
+    serve_fingerprint   TEXT,
     contributor_id      TEXT        NOT NULL,
-    nullifier           TEXT        NOT NULL,
     model_id            TEXT        NOT NULL DEFAULT '',
     turn_count          INTEGER     NOT NULL DEFAULT 0,
     matched_keywords    TEXT[]      NOT NULL,
@@ -398,14 +400,9 @@ CREATE TABLE IF NOT EXISTS serve_events (
     tx_hash             TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     submitted_at        TIMESTAMPTZ,
-    -- A serve and its denial legitimately share a nullifier: the denial
-    -- references the originating serve's nullifier (the chain resolves the
-    -- serve attestation by it). On-chain these live in independent namespaces
-    -- (serve: nullifier/ , denial: denynull/), so the hub must persist them as
-    -- two distinct rows. Uniqueness is therefore per (org, nullifier, type):
-    -- it still rejects duplicate serves and duplicate denials, while allowing
-    -- the serve+denial pair to coexist. (CO-042-rev Task A)
-    UNIQUE (org_id, nullifier, event_type)
+    -- Relay dedup natural key: one row per org/type for a given
+    -- (serve key pubkey, memory hash, epoch) tuple.
+    UNIQUE (org_id, event_type, serve_key_pubkey, memory_content_hash, epoch_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_status ON serve_events(org_id, status);
