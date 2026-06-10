@@ -73,12 +73,12 @@ func GetOrg(ctx context.Context, pool *pgxpool.Pool, orgID string) (*protocol.Or
 	err := pool.QueryRow(ctx, `
         SELECT org_id, org_name, domain, leader_pubkey, current_epoch,
                egress_mode, allowed_providers, status, rotation_status,
-               required_approvals, COALESCE(report_vote_threshold, 1), created_at
+		       required_approvals, COALESCE(report_vote_threshold, 1), COALESCE(moderation_required, FALSE), created_at
         FROM orgs WHERE org_id = $1
     `, orgID).Scan(
 		&org.OrgID, &org.OrgName, &org.Domain, &org.LeaderPubkey,
 		&org.CurrentEpoch, &org.EgressMode, &org.AllowedProviders,
-		&org.Status, &org.RotationStatus, &org.RequiredApprovals, &org.ReportVoteThreshold, &org.CreatedAt,
+		&org.Status, &org.RotationStatus, &org.RequiredApprovals, &org.ReportVoteThreshold, &org.ModerationRequired, &org.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -384,6 +384,21 @@ func UpdateReportVoteThreshold(ctx context.Context, pool *pgxpool.Pool, orgID st
 		SET report_vote_threshold = $1, updated_at = NOW()
 		WHERE org_id = $2
 	`, threshold, orgID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("org not found")
+	}
+	return nil
+}
+
+func UpdateModerationRequired(ctx context.Context, pool *pgxpool.Pool, orgID string, moderationRequired bool) error {
+	tag, err := pool.Exec(ctx, `
+		UPDATE orgs
+		SET moderation_required = $1, updated_at = NOW()
+		WHERE org_id = $2
+	`, moderationRequired, orgID)
 	if err != nil {
 		return err
 	}

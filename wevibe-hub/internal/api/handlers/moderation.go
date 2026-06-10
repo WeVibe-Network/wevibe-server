@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
@@ -384,15 +383,15 @@ func GetModerationHistory(w http.ResponseWriter, r *http.Request) {
 				denial_reason,
 				CASE
 					WHEN status = 'denied' THEN 'denied'
-					WHEN status IN ('approved', 'ready', 'pending_keyword', 'pending_chain', 'committed') THEN 'approved'
+					WHEN status IN ('pending_keyword', 'pending_chain', 'committed') THEN 'approved'
 				END AS decision,
 				CASE
 					WHEN status = 'denied' THEN COALESCE(resolved_at, updated_at)
-					WHEN status IN ('approved', 'ready', 'pending_keyword', 'pending_chain', 'committed') THEN COALESCE(approved_at, resolved_at, updated_at)
+					WHEN status IN ('pending_keyword', 'pending_chain', 'committed') THEN COALESCE(approved_at, resolved_at, updated_at)
 				END AS decided_at
 			FROM pending_submissions
 			WHERE org_id = $1
-				AND status IN ('denied', 'approved', 'ready', 'pending_keyword', 'pending_chain', 'committed')
+				AND status IN ('denied', 'pending_keyword', 'pending_chain', 'committed')
 		)
 		SELECT
 			submission_hash,
@@ -495,18 +494,32 @@ func VoteOnSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	votes, required, ready, err := moderation.CastApprovalVote(r.Context(), pool, orgID, submissionHash, signed.Pubkey)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Vote string `json:"vote"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+
+	approve, flag, err := moderation.CastApprovalVote(r.Context(), pool, orgID, submissionHash, signed.Pubkey, req.Vote)
 	if err != nil {
 		msg := err.Error()
 		switch {
+		case strings.Contains(msg, "invalid vote"):
+			http.Error(w, `{"error":"vote must be 'approve' or 'flag'"}`, http.StatusBadRequest)
+			return
 		case strings.Contains(msg, "not found"):
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, msg), http.StatusNotFound)
 			return
 		case strings.Contains(msg, "inactive"), strings.Contains(msg, "insufficient role"):
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-			return
-		case strings.Contains(msg, "already recorded"):
-			http.Error(w, `{"error":"vote already recorded"}`, http.StatusConflict)
 			return
 		case strings.Contains(msg, "resolved"):
 			http.Error(w, `{"error":"submission already resolved"}`, http.StatusConflict)
@@ -517,25 +530,93 @@ func VoteOnSubmission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var status string
-	err = pool.QueryRow(r.Context(), `
-        SELECT status FROM pending_submissions WHERE org_id = $1 AND submission_hash = $2
-    `, orgID, submissionHash).Scan(&status)
-	if err == pgx.ErrNoRows {
-		http.Error(w, `{"error":"submission not found"}`, http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{
+		"approve": approve,
+		"flag":    flag,
+	})
+}
+
+func VoteOnKeyword(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
 	}
 
+	orgID := chi.URLParam(r, "orgID")
+	submissionHash := chi.URLParam(r, "submissionHash")
+	if orgID == "" || submissionHash == "" {
+		http.Error(w, `{"error":"org_id and submission_hash required"}`, http.StatusBadRequest)
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
+		return
+	}
+
+	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
+	if err != nil {
+		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
+		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Keyword string `json:"keyword"`
+		Vote    string `json:"vote"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+
+	include, exclude, err := moderation.CastKeywordVote(r.Context(), pool, orgID, submissionHash, req.Keyword, signed.Pubkey, req.Vote)
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "keyword is required"):
+			http.Error(w, `{"error":"keyword is required"}`, http.StatusBadRequest)
+			return
+		case strings.Contains(msg, "invalid vote"):
+			http.Error(w, `{"error":"vote must be 'include' or 'exclude'"}`, http.StatusBadRequest)
+			return
+		case strings.Contains(msg, "not found"):
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, msg), http.StatusNotFound)
+			return
+		case strings.Contains(msg, "inactive"), strings.Contains(msg, "insufficient role"):
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		case strings.Contains(msg, "resolved"):
+			http.Error(w, `{"error":"submission already resolved"}`, http.StatusConflict)
+			return
+		default:
+			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, msg), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":             status,
-		"votes":              votes,
-		"required_approvals": required,
-		"ready":              ready,
+	json.NewEncoder(w).Encode(map[string]int{
+		"include": include,
+		"exclude": exclude,
 	})
 }
 
@@ -674,67 +755,6 @@ func DenySubmission(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "denied"})
-}
-
-func UndoApproveSubmission(w http.ResponseWriter, r *http.Request) {
-	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	orgID := chi.URLParam(r, "orgID")
-	submissionHash := chi.URLParam(r, "submissionHash")
-	if orgID == "" || submissionHash == "" {
-		http.Error(w, `{"error":"org_id and submission_hash required"}`, http.StatusBadRequest)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
-		return
-	}
-
-	var req struct {
-		SignedBy  string `json:"signed_by"`
-		Signature string `json:"signature"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.SignedBy == "" {
-		http.Error(w, `{"error":"signed_by required"}`, http.StatusBadRequest)
-		return
-	}
-
-	ts := time.Now().Format(time.RFC3339)
-	if err := verify.RequestSignature(req.SignedBy, req.Signature, []byte(ts)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	if err := moderation.UndoApproveSubmission(r.Context(), pool, orgID, submissionHash, req.SignedBy); err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "forbidden") {
-			http.Error(w, `{"error":"forbidden: not a moderator"}`, http.StatusForbidden)
-			return
-		}
-		if strings.Contains(errMsg, "not found") {
-			http.Error(w, `{"error":"`+errMsg+`"}`, http.StatusNotFound)
-			return
-		}
-		if strings.Contains(errMsg, "not in pending_keyword") {
-			http.Error(w, `{"error":"`+errMsg+`"}`, http.StatusConflict)
-			return
-		}
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
 }
 
 func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {

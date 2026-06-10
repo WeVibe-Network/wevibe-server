@@ -246,7 +246,7 @@ func main() {
 			r.Post("/moderation/{submissionHash}/vote", handlers.VoteOnSubmission)
 			r.Post("/moderation/{submissionHash}/approve", handlers.ApproveSubmission)
 			r.Post("/moderation/{submissionHash}/deny", handlers.DenySubmission)
-			r.Post("/moderation/{submissionHash}/undo-approve", handlers.UndoApproveSubmission)
+			r.Post("/submissions/{submissionHash}/keyword-vote", handlers.VoteOnKeyword)
 			r.Post("/moderation/batch-submit", handlers.BatchSubmitToChain)
 
 			r.Post("/serves", handlers.RecordServeEvent)

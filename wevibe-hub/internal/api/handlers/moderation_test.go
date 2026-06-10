@@ -203,16 +203,12 @@ func TestSubmitMemory_RejectsNonexistentEpoch(t *testing.T) {
 	}
 }
 
-func TestVoteOnSubmission_Quorum(t *testing.T) {
+func TestVoteOnSubmission_AdvisoryTallies(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)
 
 	orgID, contributorPubkey := setupOrgForModeration(t, pool)
 	ctx := context.Background()
-
-	if err := orgs.UpdateRequiredApprovals(ctx, pool, orgID, 2); err != nil {
-		t.Fatalf("update required approvals: %v", err)
-	}
 
 	mod1 := newVoteActor(t)
 	mod2 := newVoteActor(t)
@@ -238,9 +234,9 @@ func TestVoteOnSubmission_Quorum(t *testing.T) {
 
 	_, err = pool.Exec(ctx, `
         INSERT INTO pending_submissions
-			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, stack_hint, memory_type)
-		VALUES ($1, $2, 0, $3, $4, $5, $6, ARRAY[]::TEXT[], $7)
-	`, submissionHash, orgID, contributorPubkey, ciphertext, wrapped, strings.Repeat("f", 128), protocol.MemoryTypeMemory)
+			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, stack_hint, memory_type, status)
+		VALUES ($1, $2, 0, $3, $4, $5, $6, ARRAY[]::TEXT[], $7, $8)
+	`, submissionHash, orgID, contributorPubkey, ciphertext, wrapped, strings.Repeat("f", 128), protocol.MemoryTypeMemory, protocol.SubmissionStatusPendingKeyword)
 	if err != nil {
 		t.Fatalf("insert pending submission: %v", err)
 	}
@@ -249,8 +245,16 @@ func TestVoteOnSubmission_Quorum(t *testing.T) {
 	router.Post("/v1/orgs/{orgID}/moderation/{submissionHash}/vote", handlers.VoteOnSubmission)
 
 	voteURL := fmt.Sprintf("/v1/orgs/%s/moderation/%s/vote", orgID, submissionHash)
+	voteBody := func(v string) *bytes.Reader {
+		payload, marshalErr := json.Marshal(map[string]string{"vote": v})
+		if marshalErr != nil {
+			t.Fatalf("marshal vote payload: %v", marshalErr)
+		}
+		return bytes.NewReader(payload)
+	}
 
-	req1 := httptest.NewRequest(http.MethodPost, voteURL, nil)
+	req1 := httptest.NewRequest(http.MethodPost, voteURL, voteBody("approve"))
+	req1.Header.Set("Content-Type", "application/json")
 	req1.Header.Set("Authorization", mod1.authHeader(time.Now()))
 	resp1 := httptest.NewRecorder()
 	router.ServeHTTP(resp1, req1)
@@ -262,14 +266,15 @@ func TestVoteOnSubmission_Quorum(t *testing.T) {
 	if err := json.NewDecoder(resp1.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode first vote response: %v", err)
 	}
-	if payload["votes"].(float64) != 1 {
-		t.Fatalf("expected 1 vote, got %v", payload["votes"])
+	if payload["approve"].(float64) != 1 {
+		t.Fatalf("expected approve=1, got %v", payload["approve"])
 	}
-	if payload["ready"].(bool) {
-		t.Fatalf("expected ready=false after first vote")
+	if payload["flag"].(float64) != 0 {
+		t.Fatalf("expected flag=0, got %v", payload["flag"])
 	}
 
-	req2 := httptest.NewRequest(http.MethodPost, voteURL, nil)
+	req2 := httptest.NewRequest(http.MethodPost, voteURL, voteBody("flag"))
+	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("Authorization", mod2.authHeader(time.Now()))
 	resp2 := httptest.NewRecorder()
 	router.ServeHTTP(resp2, req2)
@@ -281,29 +286,38 @@ func TestVoteOnSubmission_Quorum(t *testing.T) {
 	if err := json.NewDecoder(resp2.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode second vote response: %v", err)
 	}
-	if payload["votes"].(float64) != 2 {
-		t.Fatalf("expected 2 votes after quorum, got %v", payload["votes"])
+	if payload["approve"].(float64) != 1 {
+		t.Fatalf("expected approve=1 after second vote, got %v", payload["approve"])
 	}
-	if !payload["ready"].(bool) {
-		t.Fatalf("expected ready=true after quorum")
+	if payload["flag"].(float64) != 1 {
+		t.Fatalf("expected flag=1 after second vote, got %v", payload["flag"])
 	}
-	if status := payload["status"].(string); status != "ready" {
-		t.Fatalf("expected status ready, got %s", status)
+
+	reqDup := httptest.NewRequest(http.MethodPost, voteURL, voteBody("flag"))
+	reqDup.Header.Set("Content-Type", "application/json")
+	reqDup.Header.Set("Authorization", mod1.authHeader(time.Now()))
+	respDup := httptest.NewRecorder()
+	router.ServeHTTP(respDup, reqDup)
+	if respDup.Code != http.StatusOK {
+		t.Fatalf("expected 200 on repeated vote update, got %d: %s", respDup.Code, respDup.Body.String())
+	}
+
+	payload = map[string]any{}
+	if err := json.NewDecoder(respDup.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode repeated vote response: %v", err)
+	}
+	if payload["approve"].(float64) != 0 {
+		t.Fatalf("expected approve=0 after update, got %v", payload["approve"])
+	}
+	if payload["flag"].(float64) != 2 {
+		t.Fatalf("expected flag=2 after update, got %v", payload["flag"])
 	}
 
 	var dbStatus string
 	if err := pool.QueryRow(ctx, `SELECT status FROM pending_submissions WHERE org_id = $1 AND submission_hash = $2`, orgID, submissionHash).Scan(&dbStatus); err != nil {
 		t.Fatalf("query submission status: %v", err)
 	}
-	if dbStatus != "ready" {
-		t.Fatalf("expected DB status ready, got %s", dbStatus)
-	}
-
-	reqDup := httptest.NewRequest(http.MethodPost, voteURL, nil)
-	reqDup.Header.Set("Authorization", mod1.authHeader(time.Now()))
-	respDup := httptest.NewRecorder()
-	router.ServeHTTP(respDup, reqDup)
-	if respDup.Code != http.StatusConflict {
-		t.Fatalf("expected 409 on duplicate vote, got %d", respDup.Code)
+	if dbStatus != protocol.SubmissionStatusPendingKeyword {
+		t.Fatalf("expected DB status %s, got %s", protocol.SubmissionStatusPendingKeyword, dbStatus)
 	}
 }

@@ -364,8 +364,9 @@ func UpdateOrgConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		RequiredApprovals   int    `json:"required_approvals"`
-		ReportVoteThreshold int    `json:"report_vote_threshold"`
+		RequiredApprovals   *int   `json:"required_approvals"`
+		ReportVoteThreshold *int   `json:"report_vote_threshold"`
+		ModerationRequired  *bool  `json:"moderation_required"`
 		WalletPubkey        []byte `json:"wallet_pubkey"`
 		WalletSignature     []byte `json:"wallet_signature"`
 	}
@@ -374,8 +375,13 @@ func UpdateOrgConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.RequiredApprovals == nil && req.ReportVoteThreshold == nil && req.ModerationRequired == nil {
+		http.Error(w, `{"error":"at least one config field required"}`, http.StatusBadRequest)
+		return
+	}
+
 	securityFieldsChanged := false
-	if req.RequiredApprovals > 0 || req.ReportVoteThreshold > 0 {
+	if req.RequiredApprovals != nil || req.ReportVoteThreshold != nil {
 		securityFieldsChanged = true
 	}
 
@@ -392,11 +398,11 @@ func UpdateOrgConfig(w http.ResponseWriter, r *http.Request) {
 		}
 
 		updates := map[string]interface{}{}
-		if req.RequiredApprovals > 0 {
-			updates["required_approvals"] = req.RequiredApprovals
+		if req.RequiredApprovals != nil {
+			updates["required_approvals"] = *req.RequiredApprovals
 		}
-		if req.ReportVoteThreshold > 0 {
-			updates["report_vote_threshold"] = req.ReportVoteThreshold
+		if req.ReportVoteThreshold != nil {
+			updates["report_vote_threshold"] = *req.ReportVoteThreshold
 		}
 		canonicalMsg := verify.BuildConfigUpdateCanonicalMessage(orgID, updates)
 		if sigErr := verify.VerifyCosmosArbitrarySignature(leaderWallet, []byte(canonicalMsg), req.WalletPubkey, req.WalletSignature); sigErr != nil {
@@ -405,37 +411,61 @@ func UpdateOrgConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.RequiredApprovals < 1 {
+	if req.RequiredApprovals != nil && *req.RequiredApprovals < 1 {
 		http.Error(w, `{"error":"required_approvals must be >= 1"}`, http.StatusBadRequest)
 		return
 	}
 
-	if req.ReportVoteThreshold < 1 {
+	if req.ReportVoteThreshold != nil && *req.ReportVoteThreshold < 1 {
 		http.Error(w, `{"error":"report_vote_threshold must be >= 1"}`, http.StatusBadRequest)
 		return
 	}
 
-	if err := orgs.UpdateRequiredApprovals(r.Context(), pool, orgID, req.RequiredApprovals); err != nil {
-		if strings.Contains(err.Error(), "org not found") {
-			http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
+	if req.RequiredApprovals != nil {
+		if err := orgs.UpdateRequiredApprovals(r.Context(), pool, orgID, *req.RequiredApprovals); err != nil {
+			if strings.Contains(err.Error(), "org not found") {
+				http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
+				return
+			}
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
 	}
 
-	if req.ReportVoteThreshold > 0 {
-		if err := orgs.UpdateReportVoteThreshold(r.Context(), pool, orgID, req.ReportVoteThreshold); err != nil {
+	if req.ReportVoteThreshold != nil {
+		if err := orgs.UpdateReportVoteThreshold(r.Context(), pool, orgID, *req.ReportVoteThreshold); err != nil {
+			if strings.Contains(err.Error(), "org not found") {
+				http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
+				return
+			}
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if req.ModerationRequired != nil {
+		if err := orgs.UpdateModerationRequired(r.Context(), pool, orgID, *req.ModerationRequired); err != nil {
+			if strings.Contains(err.Error(), "org not found") {
+				http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
+				return
+			}
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{
-		"required_approvals":    req.RequiredApprovals,
-		"report_vote_threshold": req.ReportVoteThreshold,
-	})
+	resp := map[string]interface{}{}
+	if req.RequiredApprovals != nil {
+		resp["required_approvals"] = *req.RequiredApprovals
+	}
+	if req.ReportVoteThreshold != nil {
+		resp["report_vote_threshold"] = *req.ReportVoteThreshold
+	}
+	if req.ModerationRequired != nil {
+		resp["moderation_required"] = *req.ModerationRequired
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func getLeaderWallet(ctx context.Context, pool *pgxpool.Pool, orgID string) (string, error) {

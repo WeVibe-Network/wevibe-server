@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"time"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -116,13 +116,13 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		INSERT INTO pending_submissions
 			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex,
 			 plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash,
-			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings, extraction_result)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb)
+			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings, extraction_result, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)
 	`,
 		req.SubmissionHash, req.OrgID, req.EpochID, req.ContributorPubkey,
 		req.Ciphertext, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash,
 		req.WrappedDekMod, req.ContributorSig, req.StackHint, req.MemoryType,
-		preferenceConfidence, derivation, sanitizationFindings, extractionResult,
+		preferenceConfidence, derivation, sanitizationFindings, extractionResult, protocol.SubmissionStatusPendingKeyword,
 	)
 	return err
 }
@@ -139,7 +139,7 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 	rows, err := pool.Query(ctx, `
         SELECT ps.submission_hash, ps.org_id, ps.epoch_id, ps.contributor_pubkey,
                COALESCE(m.wallet_address, '') AS contributor_wallet,
-               ps.ciphertext_hex, ps.wrapped_dek_mod,
+	               ps.ciphertext_hex, ps.wrapped_dek_mod,
 	               ps.stack_hint, ps.memory_type, ps.preference_confidence, ps.derivation, ps.created_at, ps.status,
                COALESCE(v.vote_count, 0) AS vote_count,
                o.required_approvals,
@@ -150,10 +150,10 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
         LEFT JOIN (
             SELECT org_id, submission_hash, COUNT(*) AS vote_count,
                    ARRAY_AGG(moderator_pubkey ORDER BY moderator_pubkey) AS voter_pubkeys
-            FROM approval_votes
+	            FROM submission_mod_votes
             GROUP BY org_id, submission_hash
         ) v ON v.org_id = ps.org_id AND v.submission_hash = ps.submission_hash
-        WHERE ps.org_id = $1 AND ps.status = 'pending'
+	        WHERE ps.org_id = $1 AND ps.status = 'pending_keyword'
         ORDER BY ps.created_at ASC
     `, orgID)
 	if err != nil {
@@ -177,18 +177,34 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 	return items, rows.Err()
 }
 
-func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey string) (currentVotes int, required int, ready bool, err error) {
+type SubmissionVoteTally struct {
+	ApproveCount int
+	FlagCount    int
+	VoterPubkeys []string
+}
+
+type KeywordVoteTally struct {
+	IncludeCount int
+	ExcludeCount int
+}
+
+func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey, vote string) (approveCount int, flagCount int, err error) {
 	role, err := members.GetMemberRole(ctx, pool, orgID, moderatorPubkey)
 	if err != nil {
-		return 0, 0, false, fmt.Errorf("member not found or inactive")
+		return 0, 0, fmt.Errorf("member not found or inactive")
 	}
 	if role != "moderator" && role != "leader" {
-		return 0, 0, false, fmt.Errorf("insufficient role: %s", role)
+		return 0, 0, fmt.Errorf("insufficient role: %s", role)
+	}
+
+	vote = strings.TrimSpace(vote)
+	if vote != "approve" && vote != "flag" {
+		return 0, 0, fmt.Errorf("invalid vote")
 	}
 
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -199,104 +215,45 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
         FOR UPDATE
     `, orgID, submissionHash).Scan(&status)
 	if err == pgx.ErrNoRows {
-		return 0, 0, false, fmt.Errorf("submission not found")
+		return 0, 0, fmt.Errorf("submission not found")
 	}
 	if err != nil {
-		return 0, 0, false, err
+		return 0, 0, err
 	}
 
 	switch status {
 	case protocol.SubmissionStatusCommitted, protocol.SubmissionStatusDenied:
-		return 0, 0, false, fmt.Errorf("submission already resolved")
+		return 0, 0, fmt.Errorf("submission already resolved")
 	}
 
-	if role == "leader" {
-		_, err = tx.Exec(ctx, `
-            UPDATE pending_submissions
-            SET status = $3, updated_at = NOW()
-            WHERE org_id = $1 AND submission_hash = $2
-        `, orgID, submissionHash, protocol.SubmissionStatusPendingKeyword)
-		if err != nil {
-			return 0, 0, false, err
-		}
-		_, err = tx.Exec(ctx, `
-            DELETE FROM approval_votes WHERE org_id = $1 AND submission_hash = $2
-        `, orgID, submissionHash)
-		if err != nil {
-			return 0, 0, false, err
-		}
-		err = tx.QueryRow(ctx, `
-            SELECT required_approvals FROM orgs WHERE org_id = $1
-        `, orgID).Scan(&required)
-		if err != nil {
-			return 0, 0, false, err
-		}
-		if required < 1 {
-			required = 1
-		}
-		ready = true
-		currentVotes = 0
-	} else {
-		result, err := tx.Exec(ctx, `
-            INSERT INTO approval_votes (org_id, submission_hash, moderator_pubkey)
-            VALUES ($1, $2, $3)
-            ON CONFLICT DO NOTHING
-        `, orgID, submissionHash, moderatorPubkey)
-		if err != nil {
-			return 0, 0, false, err
-		}
-		if result.RowsAffected() == 0 {
-			return 0, 0, false, fmt.Errorf("vote already recorded")
-		}
+	_, err = tx.Exec(ctx, `
+        INSERT INTO submission_mod_votes (org_id, submission_hash, moderator_pubkey, vote)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (org_id, submission_hash, moderator_pubkey)
+        DO UPDATE SET vote = EXCLUDED.vote, created_at = NOW()
+    `, orgID, submissionHash, moderatorPubkey, vote)
+	if err != nil {
+		return 0, 0, err
+	}
 
-		err = tx.QueryRow(ctx, `
-            SELECT COUNT(*) FROM approval_votes
-            WHERE org_id = $1 AND submission_hash = $2
-        `, orgID, submissionHash).Scan(&currentVotes)
-		if err != nil {
-			return 0, 0, false, err
-		}
-
-		err = tx.QueryRow(ctx, `
-            SELECT required_approvals FROM orgs WHERE org_id = $1
-        `, orgID).Scan(&required)
-		if err != nil {
-			return 0, 0, false, err
-		}
-		if required < 1 {
-			required = 1
-		}
-		if currentVotes >= required {
-			_, err = tx.Exec(ctx, `
-                UPDATE pending_submissions
-                SET status = $3, updated_at = NOW()
-                WHERE org_id = $1 AND submission_hash = $2
-            `, orgID, submissionHash, protocol.SubmissionStatusPendingKeyword)
-			if err != nil {
-				return 0, 0, false, err
-			}
-			ready = true
-		}
+	var tally SubmissionVoteTally
+	err = tx.QueryRow(ctx, `
+        SELECT
+            COUNT(*) FILTER (WHERE vote = 'approve')::INT AS approve_count,
+            COUNT(*) FILTER (WHERE vote = 'flag')::INT AS flag_count,
+            COALESCE(ARRAY_AGG(moderator_pubkey ORDER BY moderator_pubkey), ARRAY[]::TEXT[]) AS voter_pubkeys
+        FROM submission_mod_votes
+        WHERE org_id = $1 AND submission_hash = $2
+    `, orgID, submissionHash).Scan(&tally.ApproveCount, &tally.FlagCount, &tally.VoterPubkeys)
+	if err != nil {
+		return 0, 0, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, 0, false, err
+		return 0, 0, err
 	}
 
-	// If status was already pending_keyword when vote cast (e.g., due to prior quorum), return latest counts.
-	if role != "leader" && status == protocol.SubmissionStatusPendingKeyword && !ready {
-		// Fetch counts to report current state.
-		err = pool.QueryRow(ctx, `
-            SELECT COUNT(*) FROM approval_votes
-            WHERE org_id = $1 AND submission_hash = $2
-        `, orgID, submissionHash).Scan(&currentVotes)
-		if err != nil {
-			return currentVotes, required, true, nil
-		}
-		ready = true
-	}
-
-	return currentVotes, required, ready, nil
+	return tally.ApproveCount, tally.FlagCount, nil
 }
 
 func ApproveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey, memoryType string, vector []float32, embeddingModelID string, embeddingSchemaVersion string) error {
@@ -307,72 +264,21 @@ func ApproveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissio
 	if !protocol.IsValidMemoryType(memoryType) {
 		return fmt.Errorf("invalid memory_type: %s", memoryType)
 	}
-
-	var currentStatus string
-	err = pool.QueryRow(ctx, `
-        SELECT status FROM pending_submissions WHERE submission_hash = $1 AND org_id = $2
-    `, submissionHash, orgID).Scan(&currentStatus)
-	if err == pgx.ErrNoRows {
-		return fmt.Errorf("submission not found")
-	}
-	if err != nil {
-		return err
-	}
-
-	if currentStatus != "pending" {
-		return fmt.Errorf("invalid status for approval: %s (expected 'pending')", currentStatus)
-	}
-
-	var embeddingVectorJSON any
-	var persistedEmbeddingModelID any
-	var persistedEmbeddingSchemaVersion any
-	if len(vector) > 0 {
-		marshaledVector, err := json.Marshal(vector)
-		if err != nil {
-			return fmt.Errorf("marshal embedding_vector: %w", err)
-		}
-		embeddingVectorJSON = marshaledVector
-		persistedEmbeddingModelID = embeddingModelID
-		persistedEmbeddingSchemaVersion = embeddingSchemaVersion
-	}
-
-	result, err := pool.Exec(ctx, `
-        UPDATE pending_submissions
-		SET status = 'pending_keyword',
-		    moderator_pubkey = $1,
-		    memory_type = $4,
-		    embedding_vector = $5,
-		    embedding_model_id = $6,
-		    embedding_schema_version = $7,
-		    approved_at = NOW(),
-		    updated_at = NOW()
-		WHERE submission_hash = $2 AND org_id = $3 AND status = 'pending'
-	`, moderatorPubkey, submissionHash, orgID, memoryType, embeddingVectorJSON, persistedEmbeddingModelID, persistedEmbeddingSchemaVersion)
-	if err != nil {
-		return fmt.Errorf("update submission: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("submission not found or status changed")
-	}
-
-	_, _ = pool.Exec(ctx, `
-        DELETE FROM approval_votes WHERE org_id = $1 AND submission_hash = $2
-    `, orgID, submissionHash)
-
-	return nil
+	_, _, err = CastApprovalVote(ctx, pool, orgID, submissionHash, moderatorPubkey, "approve")
+	return err
 }
 
 func DenySubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey, reason string) error {
 	role, err := members.GetMemberRole(ctx, pool, orgID, moderatorPubkey)
-	if err != nil || (role != "moderator" && role != "leader") {
+	if err != nil || role != "leader" {
 		return fmt.Errorf("forbidden")
 	}
 
 	result, err := pool.Exec(ctx, `
 		UPDATE pending_submissions
 		SET status = $1, denial_reason = $2, moderator_pubkey = $3, resolved_at = NOW()
-		WHERE submission_hash = $4 AND org_id = $5 AND status = 'pending'
-	`, protocol.SubmissionStatusDenied, reason, moderatorPubkey, submissionHash, orgID)
+		WHERE submission_hash = $4 AND org_id = $5 AND status IN ($6, $7)
+	`, protocol.SubmissionStatusDenied, reason, moderatorPubkey, submissionHash, orgID, protocol.SubmissionStatusPendingKeyword, protocol.SubmissionStatusPendingChain)
 	if err != nil {
 		return err
 	}
@@ -382,56 +288,150 @@ func DenySubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHa
 	return nil
 }
 
-func UndoApproveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey string) error {
+func CastKeywordVote(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, keyword, moderatorPubkey, vote string) (includeCount int, excludeCount int, err error) {
 	role, err := members.GetMemberRole(ctx, pool, orgID, moderatorPubkey)
-	if err != nil || (role != "moderator" && role != "leader") {
-		return fmt.Errorf("forbidden: not authorized")
+	if err != nil {
+		return 0, 0, fmt.Errorf("member not found or inactive")
+	}
+	if role != "moderator" && role != "leader" {
+		return 0, 0, fmt.Errorf("insufficient role: %s", role)
+	}
+
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return 0, 0, fmt.Errorf("keyword is required")
+	}
+	vote = strings.TrimSpace(vote)
+	if vote != "include" && vote != "exclude" {
+		return 0, 0, fmt.Errorf("invalid vote")
 	}
 
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	defer tx.Rollback(ctx)
 
 	var status string
 	err = tx.QueryRow(ctx, `
-		SELECT status FROM pending_submissions
-		WHERE org_id = $1 AND submission_hash = $2
-		FOR UPDATE
-	`, orgID, submissionHash).Scan(&status)
+        SELECT status FROM pending_submissions
+        WHERE org_id = $1 AND submission_hash = $2
+        FOR UPDATE
+    `, orgID, submissionHash).Scan(&status)
 	if err == pgx.ErrNoRows {
-		return fmt.Errorf("submission not found")
+		return 0, 0, fmt.Errorf("submission not found")
 	}
 	if err != nil {
-		return err
-	}
-	if status != "pending_keyword" {
-		return fmt.Errorf("memory is not in pending_keyword state; undo not available (current status: %s)", status)
+		return 0, 0, err
 	}
 
-	result, err := tx.Exec(ctx, `
-		UPDATE pending_submissions
-		SET status = 'pending',
-		    moderator_pubkey = NULL,
-		    approved_at = NULL,
-		    updated_at = NOW()
-		WHERE org_id = $1 AND submission_hash = $2 AND status = 'pending_keyword'
-	`, orgID, submissionHash)
-	if err != nil {
-		return err
-	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("status changed during undo; retry required")
+	switch status {
+	case protocol.SubmissionStatusCommitted, protocol.SubmissionStatusDenied:
+		return 0, 0, fmt.Errorf("submission already resolved")
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO audit_log (org_id, epoch_id, event_type, actor_pubkey, encrypted_entry)
-		VALUES ($1, 0, 'undo_approve', $2, $3)
-	`, orgID, moderatorPubkey, fmt.Sprintf("undo_approve|%s|%s", submissionHash, time.Now().Format(time.RFC3339)))
+        INSERT INTO keyword_mod_votes (org_id, submission_hash, keyword, moderator_pubkey, vote)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (org_id, submission_hash, keyword, moderator_pubkey)
+        DO UPDATE SET vote = EXCLUDED.vote, created_at = NOW()
+    `, orgID, submissionHash, keyword, moderatorPubkey, vote)
 	if err != nil {
-		return fmt.Errorf("audit log: %w", err)
+		return 0, 0, err
 	}
 
-	return tx.Commit(ctx)
+	err = tx.QueryRow(ctx, `
+        SELECT
+            COUNT(*) FILTER (WHERE vote = 'include')::INT AS include_count,
+            COUNT(*) FILTER (WHERE vote = 'exclude')::INT AS exclude_count
+        FROM keyword_mod_votes
+        WHERE org_id = $1 AND submission_hash = $2 AND keyword = $3
+    `, orgID, submissionHash, keyword).Scan(&includeCount, &excludeCount)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, err
+	}
+
+	return includeCount, excludeCount, nil
+}
+
+func GetSubmissionVoteTallies(ctx context.Context, pool *pgxpool.Pool, orgID string, submissionHashes []string) (map[string]SubmissionVoteTally, error) {
+	tallies := make(map[string]SubmissionVoteTally)
+	if len(submissionHashes) == 0 {
+		return tallies, nil
+	}
+
+	rows, err := pool.Query(ctx, `
+        SELECT
+            submission_hash,
+            COUNT(*) FILTER (WHERE vote = 'approve')::INT AS approve_count,
+            COUNT(*) FILTER (WHERE vote = 'flag')::INT AS flag_count,
+            COALESCE(ARRAY_AGG(moderator_pubkey ORDER BY moderator_pubkey), ARRAY[]::TEXT[]) AS voter_pubkeys
+        FROM submission_mod_votes
+        WHERE org_id = $1 AND submission_hash = ANY($2)
+        GROUP BY submission_hash
+    `, orgID, submissionHashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var submissionHash string
+		var tally SubmissionVoteTally
+		if err := rows.Scan(&submissionHash, &tally.ApproveCount, &tally.FlagCount, &tally.VoterPubkeys); err != nil {
+			return nil, err
+		}
+		tallies[submissionHash] = tally
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tallies, nil
+}
+
+func GetKeywordVoteTallies(ctx context.Context, pool *pgxpool.Pool, orgID string, submissionHashes []string) (map[string]map[string]KeywordVoteTally, error) {
+	tallies := make(map[string]map[string]KeywordVoteTally)
+	if len(submissionHashes) == 0 {
+		return tallies, nil
+	}
+
+	rows, err := pool.Query(ctx, `
+        SELECT
+            submission_hash,
+            keyword,
+            COUNT(*) FILTER (WHERE vote = 'include')::INT AS include_count,
+            COUNT(*) FILTER (WHERE vote = 'exclude')::INT AS exclude_count
+        FROM keyword_mod_votes
+        WHERE org_id = $1 AND submission_hash = ANY($2)
+        GROUP BY submission_hash, keyword
+    `, orgID, submissionHashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var submissionHash string
+		var keyword string
+		var tally KeywordVoteTally
+		if err := rows.Scan(&submissionHash, &keyword, &tally.IncludeCount, &tally.ExcludeCount); err != nil {
+			return nil, err
+		}
+		if _, exists := tallies[submissionHash]; !exists {
+			tallies[submissionHash] = make(map[string]KeywordVoteTally)
+		}
+		tallies[submissionHash][keyword] = tally
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return tallies, nil
 }

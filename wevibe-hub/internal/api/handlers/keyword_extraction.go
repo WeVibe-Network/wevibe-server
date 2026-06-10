@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
@@ -43,25 +44,37 @@ type UpdateKeywordsRequest struct {
 }
 
 type SubmissionRecord struct {
-	SubmissionHash       string           `json:"submission_hash"`
-	OrgID                string           `json:"org_id"`
-	EpochID              int              `json:"epoch_id"`
-	ContributorPubkey    string           `json:"contributor_pubkey"`
-	CiphertextHex        string           `json:"ciphertext_hex"`
-	WrappedDekMod        string           `json:"wrapped_dek_mod"`
-	Status               string           `json:"status"`
-	MemoryType           string           `json:"memory_type"`
-	PreferenceConfidence float64          `json:"preference_confidence"`
-	Derivation           string           `json:"derivation"`
-	MatchedKeywords      []string         `json:"matched_keywords,omitempty"`
-	ExtractionResult     *json.RawMessage `json:"extraction_result,omitempty"`
-	ExtractionFeedback   *string          `json:"extraction_feedback,omitempty"`
-	ModeratorPubkey      *string          `json:"moderator_pubkey,omitempty"`
-	ApprovedAt           *time.Time       `json:"approved_at,omitempty"`
-	VerifiedAt           *time.Time       `json:"verified_at,omitempty"`
-	DenialReason         *string          `json:"denial_reason,omitempty"`
-	UpdatedAt            time.Time        `json:"updated_at"`
-	CreatedAt            time.Time        `json:"created_at"`
+	SubmissionHash       string                            `json:"submission_hash"`
+	OrgID                string                            `json:"org_id"`
+	EpochID              int                               `json:"epoch_id"`
+	ContributorPubkey    string                            `json:"contributor_pubkey"`
+	CiphertextHex        string                            `json:"ciphertext_hex"`
+	WrappedDekMod        string                            `json:"wrapped_dek_mod"`
+	Status               string                            `json:"status"`
+	MemoryType           string                            `json:"memory_type"`
+	PreferenceConfidence float64                           `json:"preference_confidence"`
+	Derivation           string                            `json:"derivation"`
+	MatchedKeywords      []string                          `json:"matched_keywords,omitempty"`
+	ExtractionResult     *json.RawMessage                  `json:"extraction_result,omitempty"`
+	ExtractionFeedback   *string                           `json:"extraction_feedback,omitempty"`
+	ModeratorPubkey      *string                           `json:"moderator_pubkey,omitempty"`
+	ApprovedAt           *time.Time                        `json:"approved_at,omitempty"`
+	VerifiedAt           *time.Time                        `json:"verified_at,omitempty"`
+	DenialReason         *string                           `json:"denial_reason,omitempty"`
+	ModVotes             SubmissionModVotes                `json:"mod_votes"`
+	KeywordVotes         map[string]SubmissionKeywordVotes `json:"keyword_votes"`
+	UpdatedAt            time.Time                         `json:"updated_at"`
+	CreatedAt            time.Time                         `json:"created_at"`
+}
+
+type SubmissionModVotes struct {
+	Approve int `json:"approve"`
+	Flag    int `json:"flag"`
+}
+
+type SubmissionKeywordVotes struct {
+	Include int `json:"include"`
+	Exclude int `json:"exclude"`
 }
 
 var keywordFormatRegex = regexp.MustCompile(protocol.KeywordFormatRegex)
@@ -706,7 +719,6 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 	if statusFilter != "" {
 		validStatuses := map[string]bool{
-			protocol.SubmissionStatusPending:        true,
 			protocol.SubmissionStatusPendingKeyword: true,
 			protocol.SubmissionStatusPendingChain:   true,
 			protocol.SubmissionStatusCommitted:      true,
@@ -784,11 +796,48 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		sub.ModVotes = SubmissionModVotes{}
+		sub.KeywordVotes = make(map[string]SubmissionKeywordVotes)
 		submissions = append(submissions, sub)
 	}
 	if qr.Err() != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
+	}
+
+	submissionHashes := make([]string, 0, len(submissions))
+	for _, sub := range submissions {
+		submissionHashes = append(submissionHashes, sub.SubmissionHash)
+	}
+
+	modTallies, err := moderation.GetSubmissionVoteTallies(r.Context(), pool, orgID, submissionHashes)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	keywordTallies, err := moderation.GetKeywordVoteTallies(r.Context(), pool, orgID, submissionHashes)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	for idx := range submissions {
+		hash := submissions[idx].SubmissionHash
+		if tally, ok := modTallies[hash]; ok {
+			submissions[idx].ModVotes = SubmissionModVotes{
+				Approve: tally.ApproveCount,
+				Flag:    tally.FlagCount,
+			}
+		}
+		if keywordMap, ok := keywordTallies[hash]; ok {
+			for keyword, tally := range keywordMap {
+				submissions[idx].KeywordVotes[keyword] = SubmissionKeywordVotes{
+					Include: tally.IncludeCount,
+					Exclude: tally.ExcludeCount,
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

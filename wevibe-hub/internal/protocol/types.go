@@ -10,7 +10,6 @@ const (
 )
 
 const (
-	SubmissionStatusPending        = "pending"
 	SubmissionStatusPendingKeyword = "pending_keyword"
 	SubmissionStatusPendingChain   = "pending_chain"
 	SubmissionStatusCommitted      = "committed"
@@ -47,6 +46,7 @@ type OrgInfo struct {
 	RotationStatus      string    `json:"rotation_status"`
 	RequiredApprovals   int       `json:"required_approvals"`
 	ReportVoteThreshold int       `json:"report_vote_threshold"`
+	ModerationRequired  bool      `json:"moderation_required"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 

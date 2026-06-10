@@ -8,6 +8,7 @@ import {
   getHubServingAddress,
   getOrg,
   getOrgChainConfig,
+  setModerationRequired as setOrgModerationRequired,
   updateExtractionProfile,
   type ExtractionPreset,
 } from '@/lib/hub-client';
@@ -61,6 +62,8 @@ export default function SettingsPage() {
   const { activeOrg } = useOrgContext();
   const orgLoaded = activeOrg !== null;
   const isLeader = activeOrg?.role === 'leader';
+  const [moderationRequired, setModerationRequired] = useState(false);
+  const [savingModerationRequired, setSavingModerationRequired] = useState(false);
   const [requiredApprovals, setRequiredApprovals] = useState<number>(1);
   const [reportVoteThreshold, setReportVoteThreshold] = useState<number>(1);
   const [configLoading, setConfigLoading] = useState(false);
@@ -120,6 +123,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!activeOrg) {
+      setModerationRequired(false);
       return;
     }
 
@@ -134,6 +138,7 @@ export default function SettingsPage() {
 
         setRequiredApprovals(summary.required_approvals ?? 1);
         setReportVoteThreshold(summary.report_vote_threshold ?? 1);
+        setModerationRequired(summary.moderation_required ?? false);
 
         const summaryServingAddress = summary.hub_serving_address ?? summary.hub_serving_key_address;
         const resolvedServingAddress = [
@@ -285,6 +290,34 @@ export default function SettingsPage() {
       cancelled = true;
     };
   }, [activeOrg]);
+
+  const handleModerationRequiredToggle = useCallback(async () => {
+    if (!activeOrg) {
+      return;
+    }
+
+    const nextValue = !moderationRequired;
+    const toastId = txToast('Moderation mode');
+
+    setSavingModerationRequired(true);
+    setConfigError(null);
+    setConfigSuccess(null);
+
+    try {
+      await setOrgModerationRequired(activeOrg.org_id, nextValue);
+      setModerationRequired(nextValue);
+      txSuccess(
+        toastId,
+        nextValue
+          ? 'Moderators enabled. Recommendations now appear to leaders in chain-submit.'
+          : 'Moderators disabled. Submissions now go straight to chain-submit.',
+      );
+    } catch (err) {
+      txError(toastId, err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingModerationRequired(false);
+    }
+  }, [activeOrg, moderationRequired]);
 
   const handleConfigSave = useCallback(async () => {
     if (!activeOrg) {
@@ -628,6 +661,28 @@ export default function SettingsPage() {
               Control how many moderator votes are required before a memory moves to the approval batch.
               Org leaders can always approve immediately.
             </p>
+
+            <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-wv-text">Use moderators</p>
+                  <p className="mt-1 text-xs text-wv-dim">
+                    When on, appointed moderators can review and vote on submissions as recommendations. The leader always has final say.
+                  </p>
+                </div>
+
+                <label className="inline-flex items-center gap-2 text-sm text-wv-text">
+                  <input
+                    type="checkbox"
+                    checked={moderationRequired}
+                    onChange={() => void handleModerationRequiredToggle()}
+                    disabled={configLoading || savingModerationRequired || !orgLoaded}
+                    className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2"
+                  />
+                  {savingModerationRequired ? 'Saving…' : moderationRequired ? 'On' : 'Off'}
+                </label>
+              </div>
+            </div>
 
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
               <span>🔐</span>

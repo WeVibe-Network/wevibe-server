@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS orgs (
     egress_mode                 TEXT        NOT NULL DEFAULT 'unrestricted'
                                         CHECK (egress_mode IN ('local_only', 'allowlist', 'unrestricted')),
     required_approvals         INTEGER     NOT NULL DEFAULT 1 CHECK (required_approvals >= 1),
+    moderation_required        BOOLEAN     NOT NULL DEFAULT FALSE,
     report_ban_threshold        INTEGER     NOT NULL DEFAULT 3 CHECK (report_ban_threshold >= 1),
     report_vote_threshold       INTEGER     NOT NULL DEFAULT 1 CHECK (report_vote_threshold >= 1),
     allowed_providers           TEXT[]      NOT NULL DEFAULT '{}',
@@ -133,8 +134,8 @@ CREATE TABLE IF NOT EXISTS pending_submissions (
     preference_confidence   REAL        NOT NULL DEFAULT 0,
     derivation              TEXT        NOT NULL DEFAULT 'verbatim'
                                         CHECK (derivation IN ('verbatim', 'edited-after-extraction')),
-    status                  TEXT        NOT NULL DEFAULT 'pending'
-                                     CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied', 'ready', 'approved')),
+    status                  TEXT        NOT NULL DEFAULT 'pending_keyword'
+                                     CHECK (status IN ('pending_keyword', 'pending_chain', 'committed', 'denied')),
     denial_reason           TEXT,
     moderator_pubkey        TEXT,
     approved_at             TIMESTAMPTZ,
@@ -156,15 +157,27 @@ CREATE INDEX IF NOT EXISTS idx_pending_contributor ON pending_submissions(contri
 
 -- ── Approval votes ─────────────────────────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS approval_votes (
+CREATE TABLE IF NOT EXISTS submission_mod_votes (
     org_id           TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     submission_hash  TEXT        NOT NULL REFERENCES pending_submissions(submission_hash) ON DELETE CASCADE,
     moderator_pubkey TEXT        NOT NULL,
+    vote             TEXT        NOT NULL CHECK (vote IN ('approve', 'flag')),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (org_id, submission_hash, moderator_pubkey)
 );
 
-CREATE INDEX IF NOT EXISTS idx_votes_org_submission ON approval_votes(org_id, submission_hash);
+CREATE TABLE IF NOT EXISTS keyword_mod_votes (
+    org_id           TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    submission_hash  TEXT        NOT NULL REFERENCES pending_submissions(submission_hash) ON DELETE CASCADE,
+    keyword          TEXT        NOT NULL,
+    moderator_pubkey TEXT        NOT NULL,
+    vote             TEXT        NOT NULL CHECK (vote IN ('include', 'exclude')),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, submission_hash, keyword, moderator_pubkey)
+);
+
+CREATE INDEX IF NOT EXISTS idx_submission_mod_votes_sub ON submission_mod_votes(org_id, submission_hash);
+CREATE INDEX IF NOT EXISTS idx_keyword_mod_votes_sub ON keyword_mod_votes(org_id, submission_hash);
 
 -- ── Reports ─────────────────────────────────────────────────────────────────
 

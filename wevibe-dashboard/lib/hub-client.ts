@@ -260,6 +260,7 @@ export interface OrgSummary {
   rotation_status: string;
   required_approvals: number;
   report_vote_threshold: number;
+  moderation_required?: boolean;
   created_at: string;
 }
 
@@ -278,6 +279,13 @@ export async function updateOrgConfig(orgId: string, payload: { required_approva
   return hubFetch<{ required_approvals: number; report_vote_threshold?: number }>(`/v1/orgs/${orgId}/config`, {
     method: 'PATCH',
     body: JSON.stringify(body),
+  });
+}
+
+export async function setModerationRequired(orgId: string, value: boolean): Promise<{ moderation_required: boolean }> {
+  return hubFetch<{ moderation_required: boolean }>(`/v1/orgs/${orgId}/config`, {
+    method: 'PATCH',
+    body: JSON.stringify({ moderation_required: value }),
   });
 }
 
@@ -586,6 +594,8 @@ export interface Submission {
   sanitization_findings?: SanitizationFinding[] | null;
   preference_confidence?: number;
   derivation?: 'verbatim' | 'edited-after-extraction' | null;
+  mod_votes?: { approve: number; flag: number };
+  keyword_votes?: Record<string, { include: number; exclude: number }>;
 }
 
 export interface SanitizationFinding {
@@ -619,6 +629,35 @@ export async function getSubmissionsByStatus(orgId: string, status: string): Pro
     return response;
   }
   return response.submissions ?? [];
+}
+
+export async function voteSubmission(
+  orgId: string,
+  submissionHash: string,
+  vote: 'approve' | 'flag',
+): Promise<{ approve: number; flag: number }> {
+  return hubFetch<{ approve: number; flag: number }>(
+    `/v1/orgs/${orgId}/moderation/${encodeURIComponent(submissionHash)}/vote`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ vote }),
+    },
+  );
+}
+
+export async function voteKeyword(
+  orgId: string,
+  submissionHash: string,
+  keyword: string,
+  vote: 'include' | 'exclude',
+): Promise<{ include: number; exclude: number }> {
+  return hubFetch<{ include: number; exclude: number }>(
+    `/v1/orgs/${orgId}/submissions/${encodeURIComponent(submissionHash)}/keyword-vote`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ keyword, vote }),
+    },
+  );
 }
 
 export async function submitKeywordResults(orgId: string, memories: MemoryKeywordResult[]): Promise<{ status: string; processed_count: number }> {
@@ -666,6 +705,12 @@ export async function removeSubmission(orgId: string, hash: string): Promise<{ s
   return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/remove-submission`, {
     method: 'DELETE',
     body: JSON.stringify({ hash }),
+  });
+}
+
+export async function denySubmission(orgId: string, submissionHash: string): Promise<{ status: string }> {
+  return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/moderation/${encodeURIComponent(submissionHash)}/deny`, {
+    method: 'POST',
   });
 }
 

@@ -4,10 +4,26 @@ import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ConnectionState, WeVibeMcpClient, getMcpClient } from '@/lib/mcp-client';
-import { SanitizationFinding } from '@/lib/hub-client';
+import {
+  getOrg,
+  voteKeyword,
+  voteSubmission,
+  type SanitizationFinding,
+} from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
+import { useOrgContext } from '@/lib/org-context';
 
 type MemoryType = 'memory';
+
+type KeywordWeight = {
+  keyword: string;
+  weight: number;
+};
+
+type KeywordVoteTally = {
+  include: number;
+  exclude: number;
+};
 
 type QueueItem = {
   submission_hash: string;
@@ -24,35 +40,119 @@ type QueueItem = {
   steg_findings?: Array<Record<string, unknown>> | null;
   sanitization_findings?: SanitizationFinding[] | null;
   preference_confidence?: number;
-  votes?: number;
-  required_approvals?: number;
-  voter_pubkeys?: string[];
+  extraction_result?: {
+    classified?: KeywordWeight[] | null;
+    suggestions?: KeywordWeight[] | null;
+  } | KeywordWeight[] | null;
+  suggested_keywords?: KeywordWeight[] | null;
+  keyword_suggestions?: KeywordWeight[] | null;
+  mod_votes?: {
+    approve: number;
+    flag: number;
+  } | null;
+  keyword_votes?: Record<string, KeywordVoteTally> | null;
 };
 
-type ApproveResponse = {
-  status: 'approved' | 'error';
-  submission_hash: string;
-  memory_type?: MemoryType;
-  similar_memories?: Array<{ cid: string; score?: number }>;
-  error?: string;
-};
+function toCount(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Math.trunc(parsed);
+}
 
-type DenyResponse = {
-  status: 'denied' | 'error';
-  error?: string;
-  reason?: string;
-};
+function normalizeKeywordWeights(input: unknown): KeywordWeight[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
 
-type VoteResponse = {
-  status: string;
-  submission_hash: string;
-  votes: number;
-  required_approvals: number;
-  ready: boolean;
-  error?: string;
-};
+  return input
+    .map((entry) => {
+      const candidate = entry as { keyword?: unknown; weight?: unknown };
+      const keyword = typeof candidate.keyword === 'string' ? candidate.keyword.trim() : '';
+      const rawWeight = typeof candidate.weight === 'number' ? candidate.weight : Number(candidate.weight);
+
+      if (!keyword || !Number.isFinite(rawWeight) || rawWeight < 0) {
+        return null;
+      }
+
+      return {
+        keyword,
+        weight: rawWeight,
+      };
+    })
+    .filter((entry): entry is KeywordWeight => entry !== null);
+}
+
+function parseSuggestedKeywords(item: QueueItem): KeywordWeight[] {
+  const directSuggestions = normalizeKeywordWeights(item.keyword_suggestions);
+  if (directSuggestions.length > 0) {
+    return directSuggestions;
+  }
+
+  const suggestedKeywords = normalizeKeywordWeights(item.suggested_keywords);
+  if (suggestedKeywords.length > 0) {
+    return suggestedKeywords;
+  }
+
+  const extractionResult = item.extraction_result as unknown;
+  if (!extractionResult || typeof extractionResult !== 'object' || Array.isArray(extractionResult)) {
+    return [];
+  }
+
+  const withSuggestions = extractionResult as { suggestions?: unknown };
+  return normalizeKeywordWeights(withSuggestions.suggestions);
+}
+
+function parseModerationRecommendation(item: QueueItem): {
+  approve: number;
+  flag: number;
+  flagHeavy: boolean;
+} | null {
+  if (!item.mod_votes) {
+    return null;
+  }
+
+  const approve = toCount(item.mod_votes.approve);
+  const flag = toCount(item.mod_votes.flag);
+  if (approve + flag === 0) {
+    return null;
+  }
+
+  return {
+    approve,
+    flag,
+    flagHeavy: flag > approve,
+  };
+}
+
+function parseKeywordVoteTally(item: QueueItem, keyword: string): KeywordVoteTally | null {
+  const votes = item.keyword_votes;
+  if (!votes) {
+    return null;
+  }
+
+  const direct = votes[keyword];
+  const fallback = direct ?? Object.entries(votes).find(
+    ([candidate]) => candidate.toLowerCase() === keyword.toLowerCase(),
+  )?.[1];
+
+  if (!fallback) {
+    return null;
+  }
+
+  return {
+    include: toCount(fallback.include),
+    exclude: toCount(fallback.exclude),
+  };
+}
 
 export default function ModerationPage() {
+  const { activeOrg } = useOrgContext();
+  const orgId = activeOrg?.org_id ?? '';
+
+  const [moderationRequired, setModerationRequired] = useState<boolean | null>(null);
+  const [moderationGateLoading, setModerationGateLoading] = useState(false);
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
   const [items, setItems] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -77,16 +177,51 @@ export default function ModerationPage() {
     };
   }, [attachClient]);
 
+  useEffect(() => {
+    if (!orgId) {
+      setModerationRequired(null);
+      setModerationGateLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setModerationGateLoading(true);
+
+    void getOrg(orgId)
+      .then((summary) => {
+        if (cancelled) {
+          return;
+        }
+        setModerationRequired(summary.moderation_required ?? false);
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        setModerationRequired(false);
+        toast.error(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setModerationGateLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId]);
+
   const loadQueue = useCallback(async () => {
     const client = clientRef.current;
-    if (!client || client.state !== 'connected') {
+    if (!orgId || moderationRequired !== true || !client || client.state !== 'connected') {
       return;
     }
 
     setLoading(true);
 
     try {
-      const queue = await client.callTool<QueueItem[]>('wevibe_mod_queue');
+      const queue = await client.callTool<QueueItem[]>('wevibe_mod_queue', { org_id: orgId });
       const loadedQueue = queue ?? [];
       setItems(loadedQueue);
     } catch (err) {
@@ -94,22 +229,27 @@ export default function ModerationPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [moderationRequired, orgId]);
 
   const hasLoadedRef = useRef(false);
 
   useEffect(() => {
-    if (clientState === 'connected' && !hasLoadedRef.current) {
+    if (clientState === 'connected' && moderationRequired === true && !hasLoadedRef.current) {
       hasLoadedRef.current = true;
       void loadQueue();
     }
-    if (clientState !== 'connected') {
+    if (clientState !== 'connected' || moderationRequired !== true) {
       hasLoadedRef.current = false;
+      setItems([]);
     }
-  }, [clientState, loadQueue]);
+  }, [clientState, loadQueue, moderationRequired, orgId]);
 
-  const approve = useCallback(async (hash: string) => {
-    const id = toast.loading('Approving…');
+  const voteOnSubmission = useCallback(async (hash: string, vote: 'approve' | 'flag') => {
+    if (!orgId) {
+      return;
+    }
+
+    const id = toast.loading(vote === 'approve' ? 'Recording approve vote…' : 'Recording flag vote…');
     const client = clientRef.current;
     if (!client || client.state !== 'connected') {
       toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
@@ -119,26 +259,29 @@ export default function ModerationPage() {
     setBusy(hash);
 
     try {
-      const result = await client.callTool<ApproveResponse>('wevibe_mod_approve', { submission_hash: hash });
-      if (result.status !== 'approved') {
-        throw new Error(result.error ?? 'Approval failed');
-      }
-
-      const similarCount = result.similar_memories?.length ?? 0;
-      const message = similarCount > 0
-        ? `Approved ${hash}. ${similarCount} similar memory${similarCount === 1 ? '' : 'ies'} found.`
-        : `Approved ${hash}.`;
-      toast.success(message, { id });
+      const result = await voteSubmission(orgId, hash, vote);
+      toast.success(
+        `Recommendation recorded — ${result.approve} approve · ${result.flag} flag.`,
+        { id },
+      );
       await loadQueue();
     } catch (err) {
       toast.error((err as Error).message, { id });
     } finally {
       setBusy(null);
     }
-  }, [loadQueue]);
+  }, [loadQueue, orgId]);
 
-  const vote = useCallback(async (hash: string) => {
-    const id = toast.loading('Recording vote…');
+  const voteOnKeyword = useCallback(async (
+    hash: string,
+    keyword: string,
+    vote: 'include' | 'exclude',
+  ) => {
+    if (!orgId) {
+      return;
+    }
+
+    const id = toast.loading(vote === 'include' ? 'Recording include vote…' : 'Recording exclude vote…');
     const client = clientRef.current;
     if (!client || client.state !== 'connected') {
       toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
@@ -148,57 +291,68 @@ export default function ModerationPage() {
     setBusy(hash);
 
     try {
-      const result = await client.callTool<VoteResponse>('wevibe_mod_vote', { submission_hash: hash });
-      if (result.status === 'error') {
-        throw new Error(result.error ?? 'Vote failed');
-      }
-
-      if (result.ready) {
-        toast.success(`Quorum reached for ${hash} — ${result.votes} of ${result.required_approvals} approvals recorded.`, { id });
-      } else {
-        toast.success(`Voted: ${result.votes} of ${result.required_approvals} approvals for ${hash}.`, { id });
-      }
+      const result = await voteKeyword(orgId, hash, keyword, vote);
+      toast.success(
+        `“${keyword}” votes — include ${result.include} / exclude ${result.exclude}.`,
+        { id },
+      );
       await loadQueue();
     } catch (err) {
       toast.error((err as Error).message, { id });
     } finally {
       setBusy(null);
     }
-  }, [loadQueue]);
+  }, [loadQueue, orgId]);
 
-  const deny = useCallback(async (hash: string) => {
-    const reason = window.prompt('Provide a denial reason:');
-    if (!reason) {
-      return;
-    }
+  if (!activeOrg) {
+    return (
+      <div className="mx-auto flex max-w-5xl flex-col gap-6">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
+          <p className="text-sm text-wv-dim">
+            Select an organization to review moderator recommendations.
+          </p>
+        </header>
+        <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
+          No organization selected. Choose an org first.
+        </div>
+      </div>
+    );
+  }
 
-    const id = toast.loading('Denying…');
-    const client = clientRef.current;
-    if (!client || client.state !== 'connected') {
-      toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
-      return;
-    }
+  if (moderationGateLoading && moderationRequired === null) {
+    return (
+      <div className="mx-auto flex max-w-5xl flex-col gap-6">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
+          <p className="text-sm text-wv-dim">
+            Loading moderation configuration for {activeOrg.org_name}…
+          </p>
+        </header>
+      </div>
+    );
+  }
 
-    setBusy(hash);
-
-    try {
-      const result = await client.callTool<DenyResponse>('wevibe_mod_deny', {
-        submission_hash: hash,
-        reason,
-      });
-
-      if (result.status !== 'denied') {
-        throw new Error(result.error ?? 'Denial failed');
-      }
-
-      toast.success(`Denied ${hash} — ${reason}`, { id });
-      await loadQueue();
-    } catch (err) {
-      toast.error((err as Error).message, { id });
-    } finally {
-      setBusy(null);
-    }
-  }, [loadQueue]);
+  if (moderationRequired === false) {
+    return (
+      <div className="mx-auto flex max-w-5xl flex-col gap-6">
+        <header className="flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
+          <p className="text-sm text-wv-dim">
+            Moderation is optional and advisory for this org.
+          </p>
+        </header>
+        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center">
+          <p className="text-sm text-wv-text">
+            Moderation is off for this org — submissions go straight to the leader&apos;s chain-submit queue. Enable moderators in Settings.
+          </p>
+          <p className="mt-3 text-sm text-wv-dim">
+            Open <Link href="/settings" className="font-medium text-wv-violet underline-offset-2 hover:underline">Settings</Link> to turn on moderator recommendations.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (clientState !== 'connected') {
     return (
@@ -225,7 +379,7 @@ export default function ModerationPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
           <p className="mt-1 text-sm text-wv-dim">
-            Decisions run through the MCP server — approvals re-encrypt, extract keywords, embed, and index instantly.
+            Moderators provide advisory recommendations only. The leader finalizes outcomes in chain-submit.
           </p>
         </div>
         <button
@@ -251,120 +405,148 @@ export default function ModerationPage() {
       <div className="space-y-4">
         {items.map(item => (
           <article key={item.submission_hash} className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0 space-y-2">
-                <div className="flex flex-wrap items-center gap-3 text-xs text-wv-dim">
-                  <span className="font-mono">{item.submission_hash}</span>
-                  <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs font-mono text-wv-dim">Epoch {item.epoch_id}</span>
-				  <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
-					Memory
-				  </span>
-                  {item.stack_hint?.map(tag => (
-                    <span key={tag} className="rounded-full bg-[rgba(124,92,255,0.10)] px-2 py-0.5 text-xs text-wv-violet">
-                      {tag}
-                    </span>
-                  ))}
-                  {item.sanitization_findings && item.sanitization_findings.length > 0 && (
-                    <span className="rounded-full bg-[rgba(255,107,107,0.12)] px-2 py-0.5 text-xs font-medium text-wv-red">
-                      Content scan detected {item.sanitization_findings.length} issue(s)
-                    </span>
-                  )}
-                  {item.preference_confidence !== undefined && item.preference_confidence > 0.8 && (
-                    <span className="rounded-full bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-xs font-medium text-wv-red">
-                      Likely preference ({(item.preference_confidence * 100).toFixed(0)}%)
-                    </span>
-                  )}
-                  {item.preference_confidence !== undefined && item.preference_confidence > 0.5 && item.preference_confidence <= 0.8 && (
-                    <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
-                      Possible preference ({(item.preference_confidence * 100).toFixed(0)}%)
-                    </span>
-                  )}
-                  {item.created_at && (
-                    <ClientTime value={item.created_at} mode="datetime" className="font-mono" />
-                  )}
-                </div>
-                <p className="text-xs text-wv-dim">
-                  Contributor:{' '}
-                  <span className="font-medium text-wv-text" title={item.contributor_wallet || item.contributor_pubkey}>
-                    {item.contributor_display_name?.trim() || item.contributor_wallet || (item.contributor_pubkey ? `${item.contributor_pubkey.slice(0, 18)}…` : 'unknown')}
-                  </span>
-                </p>
-              </div>
+            {(() => {
+              const recommendation = parseModerationRecommendation(item);
+              const suggestions = parseSuggestedKeywords(item);
 
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {(item.required_approvals ?? 1) > 1 ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-mono text-wv-dim">
-                        {(item.votes ?? 0)} of {item.required_approvals} approvals
-                      </span>
-                      <div className="h-2 w-20 rounded-full bg-wv-line-2">
-                        <div
-                          className="h-2 rounded-full bg-wv-green transition-all"
-                          style={{ width: `${Math.min(100, ((item.votes ?? 0) / (item.required_approvals ?? 1)) * 100)}%` }}
-                        />
+              return (
+                <>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0 space-y-2">
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-wv-dim">
+                        <span className="font-mono">{item.submission_hash}</span>
+                        <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs font-mono text-wv-dim">Epoch {item.epoch_id}</span>
+                        <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
+                          Memory
+                        </span>
+                        {recommendation && (
+                          <span
+                            className={recommendation.flagHeavy
+                              ? 'rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber'
+                              : 'rounded-full border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.12)] px-2 py-0.5 text-xs font-medium text-wv-violet'}
+                          >
+                            Recommendations: {recommendation.approve} approve · {recommendation.flag} flag
+                          </span>
+                        )}
+                        {item.stack_hint?.map(tag => (
+                          <span key={tag} className="rounded-full bg-[rgba(124,92,255,0.10)] px-2 py-0.5 text-xs text-wv-violet">
+                            {tag}
+                          </span>
+                        ))}
+                        {item.sanitization_findings && item.sanitization_findings.length > 0 && (
+                          <span className="rounded-full bg-[rgba(255,107,107,0.12)] px-2 py-0.5 text-xs font-medium text-wv-red">
+                            Content scan detected {item.sanitization_findings.length} issue(s)
+                          </span>
+                        )}
+                        {item.preference_confidence !== undefined && item.preference_confidence > 0.8 && (
+                          <span className="rounded-full bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-xs font-medium text-wv-red">
+                            Likely preference ({(item.preference_confidence * 100).toFixed(0)}%)
+                          </span>
+                        )}
+                        {item.preference_confidence !== undefined && item.preference_confidence > 0.5 && item.preference_confidence <= 0.8 && (
+                          <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
+                            Possible preference ({(item.preference_confidence * 100).toFixed(0)}%)
+                          </span>
+                        )}
+                        {item.created_at && (
+                          <ClientTime value={item.created_at} mode="datetime" className="font-mono" />
+                        )}
+                      </div>
+                      <p className="text-xs text-wv-dim">
+                        Contributor:{' '}
+                        <span className="font-medium text-wv-text" title={item.contributor_wallet || item.contributor_pubkey}>
+                          {item.contributor_display_name?.trim() || item.contributor_wallet || (item.contributor_pubkey ? `${item.contributor_pubkey.slice(0, 18)}…` : 'unknown')}
+                        </span>
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => voteOnSubmission(item.submission_hash, 'approve')}
+                        disabled={busy === item.submission_hash || loading}
+                        className="inline-flex items-center rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-1.5 text-sm font-medium text-wv-green transition hover:bg-[rgba(54,211,153,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Vote: Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => voteOnSubmission(item.submission_hash, 'flag')}
+                        disabled={busy === item.submission_hash || loading}
+                        className="inline-flex items-center rounded-lg border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.14)] px-3 py-1.5 text-sm font-medium text-wv-amber transition hover:bg-[rgba(255,178,85,0.2)] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Vote: Flag against
+                      </button>
+                    </div>
+                  </div>
+
+                  {item.decrypt_error ? (
+                    <div className="mt-4 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+                      Decryption failed: {item.decrypt_error}
+                    </div>
+                  ) : (
+                    <pre className="mt-4 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3 text-sm text-wv-text">
+                      {item.plaintext ?? 'No plaintext available.'}
+                    </pre>
+                  )}
+
+                  {suggestions.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.25)] bg-[rgba(255,107,107,0.08)] px-4 py-3">
+                      <p className="text-xs font-medium text-wv-dim">Suggested keywords (advisory)</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {suggestions.map((suggestion, idx) => {
+                          const tally = parseKeywordVoteTally(item, suggestion.keyword);
+
+                          return (
+                            <span
+                              key={`${suggestion.keyword}-${idx}`}
+                              className="inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red"
+                            >
+                              {suggestion.keyword}
+                              <span className="ml-1 text-wv-dim">{(suggestion.weight * 100).toFixed(0)}%</span>
+                              {tally && (
+                                <span className="ml-2 text-[10px] font-normal text-wv-dim">
+                                  include {tally.include} / exclude {tally.exclude}
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => voteOnKeyword(item.submission_hash, suggestion.keyword, 'include')}
+                                disabled={busy === item.submission_hash || loading}
+                                className="ml-2 rounded bg-[rgba(255,255,255,0.2)] px-1.5 py-0.5 text-[10px] font-semibold text-wv-text transition hover:bg-[rgba(255,255,255,0.3)] disabled:cursor-not-allowed disabled:text-wv-dim"
+                              >
+                                include
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => voteOnKeyword(item.submission_hash, suggestion.keyword, 'exclude')}
+                                disabled={busy === item.submission_hash || loading}
+                                className="ml-1 rounded bg-[rgba(255,255,255,0.2)] px-1.5 py-0.5 text-[10px] font-semibold text-wv-text transition hover:bg-[rgba(255,255,255,0.3)] disabled:cursor-not-allowed disabled:text-wv-dim"
+                              >
+                                exclude
+                              </button>
+                            </span>
+                          );
+                        })}
                       </div>
                     </div>
-                    {(item.voter_pubkeys?.length ?? 0) > 0 && (
-                      <p className="max-w-xs text-right text-xs font-mono text-wv-dim">
-                        Voted by:{' '}
-                        {item.voter_pubkeys!
-                          .map((pubkey) => `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`)
-                          .join(', ')}
-                      </p>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => vote(item.submission_hash)}
-                      disabled={busy === item.submission_hash || loading}
-                      className="inline-flex items-center rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-1.5 text-sm font-medium text-wv-green transition hover:bg-[rgba(54,211,153,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Vote to Approve
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => approve(item.submission_hash)}
-                    disabled={busy === item.submission_hash || loading}
-                    className="inline-flex items-center rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-1.5 text-sm font-medium text-wv-green transition hover:bg-[rgba(54,211,153,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Approve
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => deny(item.submission_hash)}
-                  disabled={busy === item.submission_hash || loading}
-                  className="inline-flex items-center rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-1.5 text-sm font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Deny
-                </button>
-              </div>
-            </div>
+                  )}
 
-            {item.decrypt_error ? (
-              <div className="mt-4 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
-                Decryption failed: {item.decrypt_error}
-              </div>
-            ) : (
-              <pre className="mt-4 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-lg border border-wv-line bg-wv-panel-2 px-4 py-3 text-sm text-wv-text">
-                {item.plaintext ?? 'No plaintext available.'}
-              </pre>
-            )}
-
-            {item.steg_clean === false && (item.steg_findings?.length ?? 0) > 0 && (
-              <div className="mt-4 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-4 py-3 text-sm text-wv-amber">
-                <p className="font-semibold">Steganography warning</p>
-                <ul className="mt-2 space-y-1">
-                  {item.steg_findings!.map((finding, idx) => (
-                    <li key={idx} className="font-mono text-xs text-wv-amber">
-                      {JSON.stringify(finding)}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+                  {item.steg_clean === false && (item.steg_findings?.length ?? 0) > 0 && (
+                    <div className="mt-4 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-4 py-3 text-sm text-wv-amber">
+                      <p className="font-semibold">Steganography warning</p>
+                      <ul className="mt-2 space-y-1">
+                        {item.steg_findings!.map((finding, idx) => (
+                          <li key={idx} className="font-mono text-xs text-wv-amber">
+                            {JSON.stringify(finding)}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </article>
         ))}
       </div>

@@ -263,7 +263,7 @@ func TestGetPendingQueue_RequiresModerator(t *testing.T) {
 	}
 }
 
-func TestApproveSubmission_UpdatesStatus(t *testing.T) {
+func TestApproveSubmission_RecordsAdvisoryVote(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	orgID, _ := setupTestOrg(t, pool)
@@ -276,24 +276,39 @@ func TestApproveSubmission_UpdatesStatus(t *testing.T) {
 		t.Fatalf("approval should succeed: %v", err)
 	}
 
-	var status string
-	pool.QueryRow(ctx, "SELECT status FROM pending_submissions WHERE submission_hash=$1", hash).Scan(&status)
-	if status != "pending_keyword" {
-		t.Fatalf("expected status=pending_keyword, got %q", status)
+	var status, vote string
+	if err := pool.QueryRow(ctx, `
+		SELECT ps.status, smv.vote
+		FROM pending_submissions ps
+		LEFT JOIN submission_mod_votes smv
+		  ON smv.org_id = ps.org_id AND smv.submission_hash = ps.submission_hash AND smv.moderator_pubkey = $2
+		WHERE ps.submission_hash = $1
+	`, hash, modPubkey).Scan(&status, &vote); err != nil {
+		t.Fatalf("query advisory vote: %v", err)
+	}
+	if status != protocol.SubmissionStatusPendingKeyword {
+		t.Fatalf("expected status=%s, got %q", protocol.SubmissionStatusPendingKeyword, status)
+	}
+	if vote != "approve" {
+		t.Fatalf("expected advisory vote=approve, got %q", vote)
 	}
 }
 
 func TestDenySubmission_RecordsReason(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	orgID, _ := setupTestOrg(t, pool)
+	orgID, leaderPubkey := setupTestOrg(t, pool)
 	modPubkey := addModerator(t, pool, orgID)
 
 	req, _ := buildReq(t, orgID)
 	hash := submitValid(t, ctx, pool, req)
 
 	reason := "contains credentials"
-	if err := moderation.DenySubmission(ctx, pool, orgID, hash, modPubkey, reason); err != nil {
+	if err := moderation.DenySubmission(ctx, pool, orgID, hash, modPubkey, reason); err == nil {
+		t.Fatalf("moderator denial should fail; leader-only endpoint")
+	}
+
+	if err := moderation.DenySubmission(ctx, pool, orgID, hash, leaderPubkey, reason); err != nil {
 		t.Fatalf("denial should succeed: %v", err)
 	}
 
