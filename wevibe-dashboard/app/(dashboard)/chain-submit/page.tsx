@@ -15,6 +15,7 @@ import {
   type KeywordWeight,
   type OrgHealth,
   type VerificationResult,
+  type VerifyEntry,
 } from '@/lib/hub-client';
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
 import {
@@ -349,8 +350,61 @@ export default function ChainSubmitPage() {
     setVerifyResults(null);
 
     try {
-      const hashes = reviewKeywords.map(s => s.submission_hash);
-      const results = await verifyKeywords(orgId, hashes);
+      const client = getMcpClient();
+      if (client.state !== 'connected') {
+        setError('Connect to the MCP server to verify keywords.');
+        return;
+      }
+
+      const missingPayload = reviewKeywords.find((submission) => (
+        typeof submission.ciphertext_hex !== 'string'
+        || submission.ciphertext_hex.length === 0
+        || typeof submission.wrapped_dek_mod !== 'string'
+        || submission.wrapped_dek_mod.length === 0
+      ));
+      if (missingPayload) {
+        setError(`Missing encrypted payload for ${missingPayload.submission_hash.slice(0, 12)}…; cannot verify.`);
+        return;
+      }
+
+      const items = reviewKeywords.map((s) => ({
+        id: s.submission_hash,
+        ciphertext_hex: s.ciphertext_hex as string,
+        wrapped_dek_mod: s.wrapped_dek_mod as string,
+        stack_hint: s.stack_hint ?? [],
+      }));
+
+      const embedResults = await client.callTool<Array<{
+        id: string;
+        vector: number[] | null;
+        embedding_model_id: string;
+        embedding_schema_version: string;
+        error?: string;
+      }>>('wevibe_embed_retrieval_card', { org_id: orgId, items });
+
+      const embedById = new Map(embedResults.map((result) => [result.id, result] as const));
+      const missingHashes = reviewKeywords.filter(
+        (submission) => !embedById.has(submission.submission_hash),
+      );
+      if (embedResults.length !== reviewKeywords.length || missingHashes.length > 0) {
+        setError(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`);
+        return;
+      }
+
+      const failed = embedResults.filter((r) => !r.vector || r.error);
+      if (failed.length > 0) {
+        setError(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`);
+        return;
+      }
+
+      const entries: VerifyEntry[] = embedResults.map((r) => ({
+        submission_hash: r.id,
+        vector: r.vector as number[],
+        embedding_model_id: r.embedding_model_id,
+        embedding_schema_version: r.embedding_schema_version,
+      }));
+
+      const results = await verifyKeywords(orgId, entries);
       setVerifyResults(results);
       const allPassed = results.every(r => r.passed);
       if (allPassed) {

@@ -612,6 +612,13 @@ export interface VerificationResult {
   error?: string;
 }
 
+export interface VerifyEntry {
+  submission_hash: string;
+  vector: number[];
+  embedding_model_id: string;
+  embedding_schema_version: string;
+}
+
 export interface OrgHealth {
   org_id: string;
   pending_keyword_count: number;
@@ -667,11 +674,12 @@ export async function submitKeywordResults(orgId: string, memories: MemoryKeywor
   });
 }
 
-export async function verifyKeywords(orgId: string, hashes: string[]): Promise<VerificationResult[]> {
-  return hubFetch<VerificationResult[]>(`/v1/orgs/${orgId}/verify-keywords`, {
+export async function verifyKeywords(orgId: string, entries: VerifyEntry[]): Promise<VerificationResult[]> {
+  const resp = await hubFetch<{ verified: number; results: VerificationResult[] }>(`/v1/orgs/${orgId}/verify-keywords`, {
     method: 'POST',
-    body: JSON.stringify({ hashes }),
+    body: JSON.stringify({ entries }),
   });
+  return resp.results ?? [];
 }
 
 export async function rerunKeywords(orgId: string, hash: string, feedback: string): Promise<{ status: string }> {
