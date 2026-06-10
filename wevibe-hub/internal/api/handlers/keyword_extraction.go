@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
@@ -25,6 +26,17 @@ type MemoryKeywordResult struct {
 	SubmissionHash string              `json:"submission_hash"`
 	Classified     []KeywordWeight     `json:"classified"`
 	Suggestions    []KeywordSuggestion `json:"suggestions"`
+}
+
+type VerifyEntry struct {
+	SubmissionHash         string    `json:"submission_hash"`
+	Vector                 []float32 `json:"vector"`
+	EmbeddingModelID       string    `json:"embedding_model_id"`
+	EmbeddingSchemaVersion string    `json:"embedding_schema_version"`
+}
+
+type VerifyKeywordsRequest struct {
+	Entries []VerifyEntry `json:"entries"`
 }
 
 type KeywordWeight struct {
@@ -225,26 +237,33 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req KeywordResultSubmission
+	var req VerifyKeywordsRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
 
-	if len(req.Memories) == 0 {
-		http.Error(w, `{"error":"memories required"}`, http.StatusBadRequest)
+	if len(req.Entries) == 0 {
+		http.Error(w, `{"error":"entries required"}`, http.StatusBadRequest)
 		return
 	}
 
 	type result struct {
-		Hash  string `json:"submission_hash"`
-		Error string `json:"error,omitempty"`
+		Hash   string `json:"submission_hash"`
+		Passed bool   `json:"passed"`
+		Error  string `json:"error,omitempty"`
 	}
 	var results []result
+	verifiedCount := 0
 
-	for _, mem := range req.Memories {
-		if mem.SubmissionHash == "" {
-			results = append(results, result{Error: "submission_hash required"})
+	type storedExtractionResult struct {
+		Classified  []KeywordWeight     `json:"classified"`
+		Suggestions []KeywordSuggestion `json:"suggestions"`
+	}
+
+	for _, entry := range req.Entries {
+		if entry.SubmissionHash == "" {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "submission_hash required"})
 			continue
 		}
 
@@ -254,53 +273,54 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			SELECT status, memory_type, ciphertext_hex, extraction_result
 			FROM pending_submissions
 			WHERE org_id = $1 AND submission_hash = $2
-		`, orgID, mem.SubmissionHash).Scan(&status, &memoryType, &ciphertextHex, &extractionResult)
+		`, orgID, entry.SubmissionHash).Scan(&status, &memoryType, &ciphertextHex, &extractionResult)
 		if err != nil {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: "submission not found"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "submission not found"})
 			continue
 		}
 
 		if status != "pending_keyword" {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("invalid status: %s (expected pending_keyword)", status)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("invalid status: %s (expected pending_keyword)", status)})
 			continue
 		}
 		if !protocol.IsValidMemoryType(memoryType) {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("invalid memory_type: %s", memoryType)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("invalid memory_type: %s", memoryType)})
 			continue
 		}
 
-		if len(mem.Classified) == 0 {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: "no classified keywords provided"})
+		var storedExtraction storedExtractionResult
+		if err := json.Unmarshal(extractionResult, &storedExtraction); err != nil || len(storedExtraction.Classified) == 0 {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "no stored classified keywords"})
 			continue
 		}
 
-		if len(mem.Classified) > protocol.MaxKeywordsPerMemory {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("too many keywords: %d (max %d)", len(mem.Classified), protocol.MaxKeywordsPerMemory)})
+		if len(storedExtraction.Classified) > protocol.MaxKeywordsPerMemory {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("too many keywords: %d (max %d)", len(storedExtraction.Classified), protocol.MaxKeywordsPerMemory)})
 			continue
 		}
 
 		var weightSum float64
-		for _, kw := range mem.Classified {
+		invalidKeyword := ""
+		for _, kw := range storedExtraction.Classified {
 			if !keywordFormatRegex.MatchString(kw.Keyword) {
-				results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("invalid keyword format: %s", kw.Keyword)})
-				continue
+				invalidKeyword = kw.Keyword
+				break
 			}
 			weightSum += kw.Weight
 		}
-
-		if abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("keyword weights sum to %.4f, must be 1.0 (±%.2f)", weightSum, protocol.KeywordWeightTolerance)})
+		if invalidKeyword != "" {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("invalid keyword format: %s", invalidKeyword)})
 			continue
 		}
 
-		keywordSet := make(map[string]bool)
-		for _, kw := range mem.Classified {
-			keywordSet[kw.Keyword] = true
+		if abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("keyword weights sum to %.4f, must be 1.0 (±%.2f)", weightSum, protocol.KeywordWeightTolerance)})
+			continue
 		}
 
-		placeholders := make([]string, len(mem.Classified))
-		args := make([]interface{}, len(mem.Classified))
-		for i, kw := range mem.Classified {
+		placeholders := make([]string, len(storedExtraction.Classified))
+		args := make([]interface{}, len(storedExtraction.Classified))
+		for i, kw := range storedExtraction.Classified {
 			placeholders[i] = fmt.Sprintf("$%d", i+1)
 			args[i] = kw.Keyword
 		}
@@ -312,60 +332,65 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			WHERE org_id = $%d AND keyword IN (%s) AND deprecated = false
 		`, len(args)+1, strings.Join(placeholders, ",")), queryArgs...).Scan(&validKeywords)
 		if err != nil {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: "internal error checking keywords"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "internal error checking keywords"})
 			continue
 		}
-		if validKeywords != len(mem.Classified) {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: "one or more keywords not found in org_keywords or are deprecated"})
+		if validKeywords != len(storedExtraction.Classified) {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "one or more keywords not found in org_keywords or are deprecated"})
 			continue
 		}
 
-		if len(mem.Suggestions) > 0 {
+		if len(storedExtraction.Suggestions) > 0 {
 			hasPendingSuggestions := false
-			for _, s := range mem.Suggestions {
+			for _, s := range storedExtraction.Suggestions {
 				if s.Rationale == "" {
 					hasPendingSuggestions = true
 					break
 				}
 			}
 			if hasPendingSuggestions {
-				results = append(results, result{Hash: mem.SubmissionHash, Error: "suggestions must be approved/rejected (all must have rationale)"})
+				results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "suggestions must be approved/rejected (all must have rationale)"})
 				continue
 			}
 		}
 
 		if len(ciphertextHex) > protocol.MaxMemoryChars*2 {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: fmt.Sprintf("memory plaintext too long: %d chars (max %d)", len(ciphertextHex)/2, protocol.MaxMemoryChars)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("memory plaintext too long: %d chars (max %d)", len(ciphertextHex)/2, protocol.MaxMemoryChars)})
 			continue
 		}
 
-		newExtractionData, err := json.Marshal(map[string]interface{}{
-			"classified":  mem.Classified,
-			"suggestions": mem.Suggestions,
-		})
+		if len(entry.Vector) != embed.EMBED_DIM {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("missing or wrong-dimension embedding vector (got %d, expected %d)", len(entry.Vector), embed.EMBED_DIM)})
+			continue
+		}
+
+		embeddingVector, err := json.Marshal(entry.Vector)
 		if err != nil {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: "failed to marshal extraction result"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "failed to marshal embedding vector"})
 			continue
 		}
 
 		res, err := pool.Exec(r.Context(), `
 			UPDATE pending_submissions
 			SET status = 'pending_chain',
-			    extraction_result = $1,
+			    embedding_vector = $1,
+			    embedding_model_id = $2,
+			    embedding_schema_version = $3,
 			    verified_at = NOW(),
 			    updated_at = NOW()
-			WHERE org_id = $2 AND submission_hash = $3 AND status = 'pending_keyword'
-		`, newExtractionData, orgID, mem.SubmissionHash)
+			WHERE org_id = $4 AND submission_hash = $5 AND status = 'pending_keyword'
+		`, embeddingVector, entry.EmbeddingModelID, entry.EmbeddingSchemaVersion, orgID, entry.SubmissionHash)
 		if err != nil {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: "internal error"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "internal error"})
 			continue
 		}
 		if res.RowsAffected() == 0 {
-			results = append(results, result{Hash: mem.SubmissionHash, Error: "submission not found or status changed"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "submission not found or status changed"})
 			continue
 		}
 
-		results = append(results, result{Hash: mem.SubmissionHash})
+		verifiedCount++
+		results = append(results, result{Hash: entry.SubmissionHash, Passed: true})
 	}
 
 	if len(results) > 0 {
@@ -377,7 +402,7 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"verified": len(results),
+		"verified": verifiedCount,
 		"results":  results,
 	})
 }
