@@ -310,12 +310,14 @@ export function buildAddMemberMsg(
   orgId: string,
   pubkey: string,
   role: string,
+  x25519Pubkey: string,
 ): EncodeObject {
   const fields: number[] = [
     ...encodeStringField(0x0a, signer),
     ...encodeStringField(0x12, orgId),
     ...encodeStringField(0x1a, pubkey),
     ...encodeStringField(0x22, role),
+    ...encodeStringField(0x2a, x25519Pubkey),
   ];
 
   return {

@@ -1,4 +1,4 @@
-import { buildAuthHeaders, getIdentity, signWithIdentity } from './wevibe-auth';
+import { buildAuthHeaders, bytesToHex, deriveIdentityX25519Keypair, getIdentity, signWithIdentity } from './wevibe-auth';
 import { linkWalletCanonical } from './wevibe-signing';
 import type { OrgRole } from './org-role';
 import type { MemberOrgEntry } from './org-context';
@@ -907,6 +907,7 @@ export async function discoverOrgs(params?: {
 export interface JoinRequest {
   request_id: string;
   requester_pubkey: string;
+  x25519_pubkey: string;
   status: 'pending' | 'confirming' | 'approved' | 'denied';
   requested_at: string;
   reviewed_by: string | null;
@@ -926,11 +927,14 @@ export async function submitJoinRequest(orgId: string, prePubkey?: string): Prom
   if (!identity) {
     throw new Error('No identity');
   }
+  const x25519 = await deriveIdentityX25519Keypair();
+  const x25519Hex = bytesToHex(x25519.pub);
   return hubFetch<SubmitJoinRequestResponse>(`/v1/orgs/${orgId}/join`, {
     method: 'POST',
     body: JSON.stringify({
       requester_pubkey: identity.pubkeyHex,
       pre_pubkey: prePubkey,
+      x25519_pubkey: x25519Hex,
     }),
   });
 }

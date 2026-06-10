@@ -121,7 +121,7 @@ export default function MembersPage() {
     try {
       const walletConn = await connectWallet()
       txConfirming(id, 'Invite')
-      const msgAddMember = buildAddMemberMsg(walletConn.address, orgId, invitePubkey, inviteRole)
+      const msgAddMember = buildAddMemberMsg(walletConn.address, orgId, invitePubkey, inviteRole, inviteX25519Pubkey)
       const orgAccount = await resolveOrgAccountForGas()
       await directBroadcast(walletConn.address, [msgAddMember], orgAccount)
       const successMessage = `Invited ${invitePubkey.slice(0, 12)}… as ${inviteRole}`

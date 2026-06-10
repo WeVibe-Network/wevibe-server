@@ -70,6 +70,7 @@ export default function JoinRequestsPage() {
         orgId,
         request.requester_pubkey,
         'member',
+        request.x25519_pubkey,
       );
       const orgAccount = await getOrgAccountAddress(orgId);
       await directBroadcast(walletConn.address, [msgAddMember], orgAccount);
