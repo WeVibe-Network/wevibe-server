@@ -180,13 +180,19 @@ func main() {
 	r.Get("/health", handlers.Health)
 
 	r.Get("/v1/members/{pubkey}/orgs", handlers.GetMemberOrgs)
-	r.Get("/v1/profile/notifications", handlers.GetNotificationPreferences)
-	r.Patch("/v1/profile/notifications", handlers.UpdateNotificationPreferences)
 	r.Get("/v1/profile/{wallet}", handlers.GetProfile)
 
-	r.Get("/v1/notifications", handlers.ListNotifications)
-	r.Get("/v1/notifications/unread-count", handlers.GetUnreadCount)
-	r.Post("/v1/notifications/mark-read", handlers.MarkRead)
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireVerifiedIdentity())
+
+		r.Get("/v1/profile/notifications", handlers.GetNotificationPreferences)
+		r.Patch("/v1/profile/notifications", handlers.UpdateNotificationPreferences)
+
+		r.Get("/v1/notifications", handlers.ListNotifications)
+		r.Get("/v1/notifications/unread-count", handlers.GetUnreadCount)
+		r.Post("/v1/notifications/mark-read", handlers.MarkRead)
+	})
+
 	r.Get("/v1/notifications/ws", handlers.NotificationWebSocket)
 
 	r.Post("/v1/orgs", handlers.CreateOrg)
@@ -210,7 +216,7 @@ func main() {
 
 		// Membership-required routes
 		r.Group(func(r chi.Router) {
-			r.Use(auth.RequireOrgMembership(handlers.GetPool()))
+			r.Use(auth.RequireVerifiedMembership(handlers.GetPool()))
 
 			r.Patch("/config", handlers.UpdateOrgConfig)
 			r.Post("/epoch/rotate", handlers.RotateEpoch)

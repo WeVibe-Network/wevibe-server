@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
 func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +35,23 @@ func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
@@ -49,10 +67,12 @@ func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requesterPubkey := req.RequesterPubkey
-	if requesterPubkey == "" {
-		requesterPubkey = signed.Pubkey
+	if req.RequesterPubkey != signed.Pubkey {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
 	}
+
+	requesterPubkey := signed.Pubkey
 
 	ctx := r.Context()
 
