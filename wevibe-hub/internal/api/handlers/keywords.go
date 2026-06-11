@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
-	"github.com/go-chi/chi/v5"
 )
+
+const EARNED_MIN_CONTRIBUTORS = 2
 
 type KeywordInfo struct {
 	Keyword    string `json:"keyword"`
@@ -77,6 +80,70 @@ func ListKeywords(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(keywords)
+}
+
+func ListKeywordCandidates(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	if orgID == "" {
+		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	_, err = members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
+	if err != nil {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+
+	rows, err := pool.Query(r.Context(), `
+		SELECT kc.keyword, COUNT(DISTINCT kc.contributor_pubkey) AS distinct_contributors
+		FROM keyword_candidates kc
+		WHERE kc.org_id = $1
+		  AND NOT EXISTS (
+			SELECT 1 FROM org_keywords ok
+			WHERE ok.org_id = kc.org_id
+			  AND ok.keyword = kc.keyword
+			  AND ok.deprecated = false
+		  )
+		GROUP BY kc.keyword
+		ORDER BY distinct_contributors DESC, kc.keyword ASC
+	`, orgID)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	candidates := []protocol.KeywordCandidate{}
+	for rows.Next() {
+		var candidate protocol.KeywordCandidate
+		var distinctContributors int64
+		if err := rows.Scan(&candidate.Keyword, &distinctContributors); err != nil {
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		candidate.DistinctContributors = int(distinctContributors)
+		candidate.Earned = candidate.DistinctContributors >= EARNED_MIN_CONTRIBUTORS
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(candidates)
 }
 
 type AddKeywordRequest struct {

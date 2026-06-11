@@ -265,6 +265,7 @@ func main() {
 			r.Get("/memories/{cid}", handlers.GetMemory)
 
 			r.Get("/keywords", handlers.ListKeywords)
+			r.Get("/keywords/candidates", handlers.ListKeywordCandidates)
 			r.Post("/keywords", handlers.AddKeyword)
 			r.Put("/keywords/merge", handlers.MergeKeywords)
 			r.Put("/keywords/{keyword}/rename", handlers.RenameKeyword)

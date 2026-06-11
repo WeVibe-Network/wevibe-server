@@ -436,6 +436,20 @@ CREATE TABLE IF NOT EXISTS org_keywords (
 
 CREATE INDEX IF NOT EXISTS idx_org_keywords_org ON org_keywords(org_id) WHERE NOT deprecated;
 
+-- ── Keyword candidates ─────────────────────────────────────────────────────
+-- Suggested non-vocabulary keywords proposed by contributors.
+
+CREATE TABLE IF NOT EXISTS keyword_candidates (
+    org_id             TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    keyword            TEXT        NOT NULL,
+    contributor_pubkey TEXT        NOT NULL,
+    submission_hash    TEXT        NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, keyword, contributor_pubkey)
+);
+
+CREATE INDEX IF NOT EXISTS idx_keyword_candidates_org_kw ON keyword_candidates(org_id, keyword);
+
 -- ── Memory keywords ─────────────────────────────────────────────────────────
 -- Keywords assigned to specific memories (joined from org_keywords).
 

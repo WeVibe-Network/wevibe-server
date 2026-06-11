@@ -463,8 +463,19 @@ export interface KeywordRecord {
   usage_count: number;
 }
 
+export interface KeywordCandidate {
+  keyword: string;
+  distinct_contributors: number;
+  earned: boolean;
+}
+
 export async function listKeywords(orgId: string): Promise<KeywordRecord[]> {
   const result = await hubFetch<KeywordRecord[]>(`/v1/orgs/${orgId}/keywords`);
+  return result ?? [];
+}
+
+export async function getKeywordCandidates(orgId: string): Promise<KeywordCandidate[]> {
+  const result = await hubFetch<KeywordCandidate[]>(`/v1/orgs/${orgId}/keywords/candidates`);
   return result ?? [];
 }
 
@@ -568,6 +579,17 @@ export interface MemoryKeywordResult {
   extraction_feedback?: string;
 }
 
+export interface ModeratorKeywordVote {
+  keyword: string;
+  vote: 'include' | 'exclude';
+}
+
+export interface ModeratorRecommendation {
+  moderator_pubkey: string;
+  submission_vote: 'approve' | 'flag' | null;
+  keyword_votes: ModeratorKeywordVote[];
+}
+
 export interface Submission {
   submission_hash: string;
   org_id: string;
@@ -596,6 +618,7 @@ export interface Submission {
   derivation?: 'verbatim' | 'edited-after-extraction' | null;
   mod_votes?: { approve: number; flag: number };
   keyword_votes?: Record<string, { include: number; exclude: number }>;
+  moderator_recommendations?: ModeratorRecommendation[];
 }
 
 export interface SanitizationFinding {
@@ -706,13 +729,6 @@ export async function updateKeywords(
   return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/update-keywords`, {
     method: 'PUT',
     body: JSON.stringify(payload),
-  });
-}
-
-export async function removeSubmission(orgId: string, hash: string): Promise<{ status: string }> {
-  return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/remove-submission`, {
-    method: 'DELETE',
-    body: JSON.stringify({ hash }),
   });
 }
 

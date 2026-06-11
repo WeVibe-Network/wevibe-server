@@ -203,6 +203,12 @@ type KeywordWithWeight struct {
 	Weight  float64 `json:"weight"`
 }
 
+type KeywordCandidate struct {
+	Keyword              string `json:"keyword"`
+	DistinctContributors int    `json:"distinct_contributors"`
+	Earned               bool   `json:"earned"`
+}
+
 type KeywordMatchDetail struct {
 	Keyword      string  `json:"keyword"`
 	QueryWeight  float64 `json:"query_weight"`

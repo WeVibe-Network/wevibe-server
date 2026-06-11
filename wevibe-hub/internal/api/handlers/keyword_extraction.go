@@ -56,27 +56,28 @@ type UpdateKeywordsRequest struct {
 }
 
 type SubmissionRecord struct {
-	SubmissionHash       string                            `json:"submission_hash"`
-	OrgID                string                            `json:"org_id"`
-	EpochID              int                               `json:"epoch_id"`
-	ContributorPubkey    string                            `json:"contributor_pubkey"`
-	CiphertextHex        string                            `json:"ciphertext_hex"`
-	WrappedDekMod        string                            `json:"wrapped_dek_mod"`
-	Status               string                            `json:"status"`
-	MemoryType           string                            `json:"memory_type"`
-	PreferenceConfidence float64                           `json:"preference_confidence"`
-	Derivation           string                            `json:"derivation"`
-	MatchedKeywords      []string                          `json:"matched_keywords"`
-	ExtractionResult     *json.RawMessage                  `json:"extraction_result,omitempty"`
-	ExtractionFeedback   *string                           `json:"extraction_feedback,omitempty"`
-	ModeratorPubkey      *string                           `json:"moderator_pubkey,omitempty"`
-	ApprovedAt           *time.Time                        `json:"approved_at,omitempty"`
-	VerifiedAt           *time.Time                        `json:"verified_at,omitempty"`
-	DenialReason         *string                           `json:"denial_reason,omitempty"`
-	ModVotes             SubmissionModVotes                `json:"mod_votes"`
-	KeywordVotes         map[string]SubmissionKeywordVotes `json:"keyword_votes"`
-	UpdatedAt            time.Time                         `json:"updated_at"`
-	CreatedAt            time.Time                         `json:"created_at"`
+	SubmissionHash           string                               `json:"submission_hash"`
+	OrgID                    string                               `json:"org_id"`
+	EpochID                  int                                  `json:"epoch_id"`
+	ContributorPubkey        string                               `json:"contributor_pubkey"`
+	CiphertextHex            string                               `json:"ciphertext_hex"`
+	WrappedDekMod            string                               `json:"wrapped_dek_mod"`
+	Status                   string                               `json:"status"`
+	MemoryType               string                               `json:"memory_type"`
+	PreferenceConfidence     float64                              `json:"preference_confidence"`
+	Derivation               string                               `json:"derivation"`
+	MatchedKeywords          []string                             `json:"matched_keywords"`
+	ExtractionResult         *json.RawMessage                     `json:"extraction_result,omitempty"`
+	ExtractionFeedback       *string                              `json:"extraction_feedback,omitempty"`
+	ModeratorPubkey          *string                              `json:"moderator_pubkey,omitempty"`
+	ApprovedAt               *time.Time                           `json:"approved_at,omitempty"`
+	VerifiedAt               *time.Time                           `json:"verified_at,omitempty"`
+	DenialReason             *string                              `json:"denial_reason,omitempty"`
+	ModVotes                 SubmissionModVotes                   `json:"mod_votes"`
+	KeywordVotes             map[string]SubmissionKeywordVotes    `json:"keyword_votes"`
+	ModeratorRecommendations []moderation.ModeratorRecommendation `json:"moderator_recommendations"`
+	UpdatedAt                time.Time                            `json:"updated_at"`
+	CreatedAt                time.Time                            `json:"created_at"`
 }
 
 type SubmissionModVotes struct {
@@ -803,6 +804,7 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 		sub.MatchedKeywords = []string{}
 		sub.ModVotes = SubmissionModVotes{}
 		sub.KeywordVotes = make(map[string]SubmissionKeywordVotes)
+		sub.ModeratorRecommendations = []moderation.ModeratorRecommendation{}
 		submissions = append(submissions, sub)
 	}
 	if qr.Err() != nil {
@@ -827,6 +829,12 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	moderatorRecommendations, err := moderation.GetModeratorRecommendations(r.Context(), pool, orgID, submissionHashes)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
 	for idx := range submissions {
 		hash := submissions[idx].SubmissionHash
 		if tally, ok := modTallies[hash]; ok {
@@ -842,6 +850,9 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 					Exclude: tally.ExcludeCount,
 				}
 			}
+		}
+		if recommendations, ok := moderatorRecommendations[hash]; ok {
+			submissions[idx].ModeratorRecommendations = recommendations
 		}
 	}
 

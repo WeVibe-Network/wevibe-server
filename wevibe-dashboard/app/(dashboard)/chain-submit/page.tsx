@@ -3,16 +3,16 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   getSubmissionsByStatus,
   listKeywords,
-  submitKeywordResults,
+  getKeywordCandidates,
   verifyKeywords,
   updateKeywords,
-  removeSubmission,
   denySubmission,
   getOrgHealth,
   prepareBatchSubmit,
   addKeyword,
   type Submission,
   type KeywordWeight,
+  type KeywordCandidate,
   type OrgHealth,
   type VerificationResult,
   type VerifyEntry,
@@ -25,12 +25,8 @@ import {
   getOrgAccountAddress,
 } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
+import Modal from '@/components/ui/modal';
 import { useOrgContext } from '@/lib/org-context';
-
-type MemoryKeywordResult = {
-  submission_hash: string;
-  classified: KeywordWeight[];
-};
 
 type DecryptBatchItem = {
   id: string;
@@ -38,17 +34,36 @@ type DecryptBatchItem = {
   error?: string;
 };
 
-type KeywordSuggestion = {
-  keyword: string;
-  weight: number;
-  rationale?: string;
-};
+type KeywordPillVariant = 'classified' | 'suggestion' | 'earned';
 
-type ExtractKeywordsBatchItem = {
-  id: string;
-  classified: KeywordWeight[];
-  suggestions: KeywordSuggestion[];
-};
+const SUGGESTION_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.14)] px-2.5 py-0.5 text-xs font-medium text-wv-amber transition-colors transition-opacity duration-200';
+const BLUE_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(96,165,250,0.45)] bg-[rgba(96,165,250,0.14)] px-2.5 py-0.5 text-xs font-medium text-[rgba(147,197,253,0.95)] transition-colors transition-opacity duration-200';
+const CLASSIFIED_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green transition-colors transition-opacity duration-200';
+const REMOVED_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(148,163,184,0.4)] bg-[rgba(148,163,184,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-dim opacity-65 transition-colors transition-opacity duration-200';
+
+function buildRemovedKeywordPillKey(variant: KeywordPillVariant, keyword: string, index: number): string {
+  return `${variant}:${keyword.toLowerCase()}:${index}`;
+}
+
+function getKeywordPillClass(variant: KeywordPillVariant, removed: boolean): string {
+  if (removed) {
+    return REMOVED_PILL_CLASS;
+  }
+  if (variant === 'classified') {
+    return CLASSIFIED_PILL_CLASS;
+  }
+  if (variant === 'earned') {
+    return BLUE_PILL_CLASS;
+  }
+  return SUGGESTION_PILL_CLASS;
+}
+
+function shortenPubkey(pubkey: string, visibleChars = 12): string {
+  if (pubkey.length <= visibleChars) {
+    return pubkey;
+  }
+  return `${pubkey.slice(0, visibleChars)}…`;
+}
 
 type LoadSource = 'orgHealth' | 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch';
 
@@ -157,16 +172,15 @@ function parseExtractionResult(extractionResult: Submission['extraction_result']
 
 function parseModerationRecommendation(
   votes: Submission['mod_votes'],
-): { approve: number; flag: number; flagHeavy: boolean } | null {
-  if (!votes) {
-    return null;
-  }
-
-  const approve = Number.isFinite(votes.approve) ? Math.max(0, Math.trunc(votes.approve)) : 0;
-  const flag = Number.isFinite(votes.flag) ? Math.max(0, Math.trunc(votes.flag)) : 0;
-  if (approve + flag === 0) {
-    return null;
-  }
+): { approve: number; flag: number; flagHeavy: boolean } {
+  const approveValue = votes?.approve;
+  const flagValue = votes?.flag;
+  const approve = typeof approveValue === 'number' && Number.isFinite(approveValue)
+    ? Math.max(0, Math.trunc(approveValue))
+    : 0;
+  const flag = typeof flagValue === 'number' && Number.isFinite(flagValue)
+    ? Math.max(0, Math.trunc(flagValue))
+    : 0;
 
   return {
     approve,
@@ -253,6 +267,10 @@ export default function ChainSubmitPage() {
   const [verifyResults, setVerifyResults] = useState<VerificationResult[] | null>(null);
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
   const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
+  const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
+  const [removedKeywordPills, setRemovedKeywordPills] = useState<Record<string, Record<string, true>>>({});
+  const [expandedModeratorVotes, setExpandedModeratorVotes] = useState<Record<string, boolean>>({});
+  const [denyModalSubmissionHash, setDenyModalSubmissionHash] = useState<string | null>(null);
 
   const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
     if (!orgId) {
@@ -270,6 +288,45 @@ export default function ChainSubmitPage() {
     }
   }, [orgId]);
 
+  const markKeywordPillRemoved = useCallback((submissionHash: string, pillKey: string) => {
+    setRemovedKeywordPills((prev) => ({
+      ...prev,
+      [submissionHash]: {
+        ...(prev[submissionHash] ?? {}),
+        [pillKey]: true,
+      },
+    }));
+  }, []);
+
+  const unmarkKeywordPillRemoved = useCallback((submissionHash: string, pillKey: string) => {
+    setRemovedKeywordPills((prev) => {
+      const current = prev[submissionHash];
+      if (!current || !current[pillKey]) {
+        return prev;
+      }
+
+      const restKeywords = { ...current };
+      delete restKeywords[pillKey];
+      if (Object.keys(restKeywords).length === 0) {
+        const restSubmissions = { ...prev };
+        delete restSubmissions[submissionHash];
+        return restSubmissions;
+      }
+
+      return {
+        ...prev,
+        [submissionHash]: restKeywords,
+      };
+    });
+  }, []);
+
+  const toggleModeratorVotes = useCallback((submissionHash: string) => {
+    setExpandedModeratorVotes((prev) => ({
+      ...prev,
+      [submissionHash]: !(prev[submissionHash] ?? false),
+    }));
+  }, []);
+
   const loadAll = useCallback(async () => {
     if (!orgId) return;
 
@@ -279,11 +336,12 @@ export default function ChainSubmitPage() {
 
     try {
       const diagnostics: LoadDiagnostic[] = [];
-      const [healthResult, pendingKeywordResult, pendingChainResult, keywordsResult] = await Promise.allSettled([
+      const [healthResult, pendingKeywordResult, pendingChainResult, keywordsResult, keywordCandidatesResult] = await Promise.allSettled([
         getOrgHealth(orgId),
         getSubmissionsByStatus(orgId, 'pending_keyword'),
         getSubmissionsByStatus(orgId, 'pending_chain'),
         listKeywords(orgId),
+        getKeywordCandidates(orgId),
       ]);
 
       const health = healthResult.status === 'fulfilled'
@@ -312,6 +370,18 @@ export default function ChainSubmitPage() {
         : [];
       if (keywordsResult.status !== 'fulfilled') {
         diagnostics.push(createLoadDiagnostic('keywords', keywordsResult.reason));
+      }
+
+      const candidates = keywordCandidatesResult.status === 'fulfilled'
+        ? keywordCandidatesResult.value
+        : [];
+
+      const candidateMap = new Map<string, KeywordCandidate>();
+      for (const candidate of candidates) {
+        const normalizedKeyword = candidate.keyword.trim().toLowerCase();
+        if (normalizedKeyword.length > 0) {
+          candidateMap.set(normalizedKeyword, candidate);
+        }
       }
 
       const vocabulary = new Set(
@@ -361,8 +431,10 @@ export default function ChainSubmitPage() {
 
       setOrgHealth(health);
       setOrgVocabulary(vocabulary);
+      setKeywordCandidates(candidateMap);
       setReviewKeywords(keywordQueue);
       setPendingChain(chainQueue);
+      setRemovedKeywordPills({});
       setLoadDiagnostics(diagnostics);
     } catch (err) {
       setError((err as Error).message);
@@ -382,61 +454,6 @@ export default function ChainSubmitPage() {
       void loadAll();
     }
   }, [clientState, loadAll, orgId]);
-
-  const runKeywordExtractionForSubmission = useCallback(async (submission: Submission) => {
-    if (!orgId) return;
-
-    const client = getMcpClient();
-    if (client.state !== 'connected') {
-      setError('Connect to the MCP server to run keyword extraction.');
-      return;
-    }
-
-    const plaintext = (submission.plaintext ?? '').trim();
-    if (plaintext.length === 0) {
-      setError(`No decrypted plaintext available for ${submission.submission_hash.slice(0, 12)}…`);
-      return;
-    }
-
-    setBusy(submission.submission_hash);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const result = await client.callTool<ExtractKeywordsBatchItem[]>('wevibe_extract_keywords_batch', {
-        memories: [{
-          id: submission.submission_hash,
-          plaintext,
-          stack_hint: submission.stack_hint ?? [],
-          memory_type: submission.memory_type ?? 'memory',
-        }],
-      });
-
-      const extracted = result.find((entry) => entry.id === submission.submission_hash);
-      if (!extracted) {
-        throw new Error('Keyword extraction returned no result for submission.');
-      }
-
-      const mapped: MemoryKeywordResult[] = [{
-        submission_hash: submission.submission_hash,
-        classified: [
-          ...normalizeKeywordWeights(extracted.classified),
-          ...normalizeKeywordWeights((extracted.suggestions ?? []).map((keyword) => ({
-            keyword: keyword.keyword,
-            weight: keyword.weight,
-          }))),
-        ],
-      }];
-
-      await submitKeywordResults(orgId, mapped);
-      setNotice(`Keyword extraction updated for ${submission.submission_hash.slice(0, 12)}…`);
-      await loadAll();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [loadAll, orgId]);
 
   const handleVerifyAll = useCallback(async () => {
     if (!orgId) return;
@@ -518,15 +535,12 @@ export default function ChainSubmitPage() {
     }
   }, [reviewKeywords, loadAll, orgId]);
 
-  const handleRerun = useCallback(async (submission: Submission) => {
-    await runKeywordExtractionForSubmission(submission);
-  }, [runKeywordExtractionForSubmission]);
-
   const handleDeleteClassifiedKeyword = useCallback(async (
     hash: string,
     classified: KeywordWeight[],
     suggestions: KeywordWeight[],
     removeIndex: number,
+    removedPillKey: string,
   ) => {
     if (!orgId) return;
 
@@ -538,6 +552,7 @@ export default function ChainSubmitPage() {
       return;
     }
 
+    markKeywordPillRemoved(hash, removedPillKey);
     setBusy(hash);
     setError(null);
     setNotice(null);
@@ -547,11 +562,12 @@ export default function ChainSubmitPage() {
       setNotice(`Removed keyword for ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
+      unmarkKeywordPillRemoved(hash, removedPillKey);
       setError((err as Error).message);
     } finally {
       setBusy(null);
     }
-  }, [loadAll, orgId]);
+  }, [loadAll, markKeywordPillRemoved, orgId, unmarkKeywordPillRemoved]);
 
   const handleApproveSuggestion = useCallback(async (
     hash: string,
@@ -595,6 +611,7 @@ export default function ChainSubmitPage() {
     classified: KeywordWeight[],
     suggestions: KeywordWeight[],
     dismissIndex: number,
+    removedPillKey: string,
   ) => {
     if (!orgId) return;
 
@@ -606,6 +623,7 @@ export default function ChainSubmitPage() {
 
     const nextSuggestions = suggestions.filter((_, idx) => idx !== dismissIndex);
 
+    markKeywordPillRemoved(hash, removedPillKey);
     setBusy(hash);
     setError(null);
     setNotice(null);
@@ -615,66 +633,15 @@ export default function ChainSubmitPage() {
       setNotice(`Dismissed suggestion for ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
+      unmarkKeywordPillRemoved(hash, removedPillKey);
       setError((err as Error).message);
     } finally {
       setBusy(null);
     }
-  }, [loadAll, orgId]);
-
-  const handleUpdateKeywords = useCallback(async (
-    hash: string,
-    currentClassified: KeywordWeight[],
-    currentSuggestions: KeywordWeight[],
-  ) => {
-    if (!orgId) return;
-
-    const input = window.prompt(
-      'Enter keywords as JSON array [{"keyword":"term","weight":0.9}]:',
-      JSON.stringify(currentClassified),
-    );
-    if (!input) return;
-
-    setBusy(hash);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const parsed = JSON.parse(input) as KeywordWeight[];
-      const normalized = renormalizeClassifiedWeights(parsed);
-      if (normalized.length === 0) {
-        throw new Error('Classified keywords cannot be empty.');
-      }
-      await updateKeywords(orgId, hash, normalized, currentSuggestions);
-      setNotice(`Keywords updated for ${hash.slice(0, 12)}…`);
-      await loadAll();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [loadAll, orgId]);
-
-  const handleRemove = useCallback(async (hash: string) => {
-    if (!orgId) return;
-    if (!window.confirm(`Remove submission ${hash.slice(0, 12)}…? This cannot be undone.`)) return;
-
-    setBusy(hash);
-    setError(null);
-
-    try {
-      await removeSubmission(orgId, hash);
-      setNotice(`Removed ${hash.slice(0, 12)}…`);
-      await loadAll();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [loadAll, orgId]);
+  }, [loadAll, markKeywordPillRemoved, orgId, unmarkKeywordPillRemoved]);
 
   const handleDenyFinal = useCallback(async (hash: string) => {
     if (!orgId) return;
-    if (!window.confirm(`Deny submission ${hash.slice(0, 12)}…? This is final and cannot be undone.`)) return;
 
     setBusy(hash);
     setError(null);
@@ -913,7 +880,7 @@ export default function ChainSubmitPage() {
               {reviewKeywords.length} memories awaiting curation
             </p>
             <p className="mt-1 text-xs text-wv-amber">
-              <span className="text-wv-green">Green</span> = classified vocabulary terms · <span className="text-wv-red">Red</span> = new suggestions. Approve or dismiss red suggestions before Verify All.
+              <span className="text-wv-green">Green</span> = in vocabulary · <span className="text-wv-amber">Yellow</span> = proposed (not yet earned) · <span className="text-[rgba(147,197,253,0.95)]">Blue</span> = earned (proposed by 2+ contributors — promote to add to vocabulary).
             </p>
           </div>
           <button
@@ -934,6 +901,8 @@ export default function ChainSubmitPage() {
               const extraction = parseExtractionResult(item.extraction_result);
               const itemBusy = busy === item.submission_hash;
               const recommendation = parseModerationRecommendation(item.mod_votes);
+              const moderatorRecommendations = item.moderator_recommendations ?? [];
+              const moderatorVotesExpanded = expandedModeratorVotes[item.submission_hash] ?? false;
 
               return (
                 <div key={item.submission_hash} className="rounded-lg border border-[rgba(124,92,255,0.4)] bg-wv-panel p-4">
@@ -945,16 +914,74 @@ export default function ChainSubmitPage() {
                     <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
                       Memory
                     </span>
-                    {recommendation && (
-                      <span
-                        className={recommendation.flagHeavy
-                          ? 'rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber'
-                          : 'rounded-full border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.12)] px-2 py-0.5 text-xs font-medium text-wv-violet'}
-                      >
+                    <button
+                      type="button"
+                      onClick={() => toggleModeratorVotes(item.submission_hash)}
+                      aria-expanded={moderatorVotesExpanded}
+                      className={recommendation.flagHeavy
+                        ? 'inline-flex items-center gap-1 rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber transition hover:bg-[rgba(255,178,85,0.22)]'
+                        : 'inline-flex items-center gap-1 rounded-full border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.12)] px-2 py-0.5 text-xs font-medium text-wv-violet transition hover:bg-[rgba(124,92,255,0.2)]'}
+                    >
+                      <span>
                         Moderators: {recommendation.approve} approve · {recommendation.flag} flag
                       </span>
-                    )}
+                      <span aria-hidden="true" className="text-[10px]">
+                        {moderatorVotesExpanded ? '▾' : '▸'}
+                      </span>
+                    </button>
                   </div>
+
+                  {moderatorVotesExpanded && (
+                    <div className="mt-2 rounded-lg border border-wv-line bg-wv-panel-2 p-3">
+                      {moderatorRecommendations.length === 0 ? (
+                        <p className="text-xs text-wv-dim">No moderator votes yet.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {moderatorRecommendations.map((moderatorVote, moderatorIndex) => {
+                            const keywordVotes = moderatorVote.keyword_votes ?? [];
+                            return (
+                              <div
+                                key={`${moderatorVote.moderator_pubkey}-${moderatorIndex}`}
+                                className="rounded-lg border border-wv-line bg-wv-panel px-3 py-2"
+                              >
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-mono text-xs text-wv-text" title={moderatorVote.moderator_pubkey}>
+                                    {shortenPubkey(moderatorVote.moderator_pubkey)}
+                                  </span>
+                                  <span className="text-[10px] uppercase tracking-[0.08em] text-wv-dim">submission</span>
+                                  <span
+                                    className={moderatorVote.submission_vote === 'approve'
+                                      ? 'rounded-full border border-[rgba(54,211,153,0.35)] bg-[rgba(54,211,153,0.14)] px-2 py-0.5 text-[10px] font-medium text-wv-green'
+                                      : moderatorVote.submission_vote === 'flag'
+                                        ? 'rounded-full border border-[rgba(255,107,107,0.35)] bg-[rgba(255,107,107,0.14)] px-2 py-0.5 text-[10px] font-medium text-wv-red'
+                                        : 'rounded-full border border-wv-line bg-wv-panel-2 px-2 py-0.5 text-[10px] font-medium text-wv-dim'}
+                                  >
+                                    {moderatorVote.submission_vote ?? '—'}
+                                  </span>
+                                </div>
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  {keywordVotes.length === 0 ? (
+                                    <span className="text-xs text-wv-dim">No keyword votes.</span>
+                                  ) : (
+                                    keywordVotes.map((voteEntry, voteIndex) => (
+                                      <span
+                                        key={`${voteEntry.keyword}-${voteEntry.vote}-${voteIndex}`}
+                                        className={voteEntry.vote === 'include'
+                                          ? 'rounded-full border border-[rgba(54,211,153,0.35)] bg-[rgba(54,211,153,0.14)] px-2 py-0.5 text-[10px] font-medium text-wv-green'
+                                          : 'rounded-full border border-[rgba(255,107,107,0.35)] bg-[rgba(255,107,107,0.14)] px-2 py-0.5 text-[10px] font-medium text-wv-red'}
+                                      >
+                                        {voteEntry.keyword} · {voteEntry.vote}
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <p className="mt-2 text-sm text-wv-text line-clamp-2">
                     {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
@@ -967,25 +994,32 @@ export default function ChainSubmitPage() {
                         <p className="mt-1 text-xs text-wv-dim">No classified keywords yet.</p>
                       ) : (
                         <div className="mt-1 flex flex-wrap gap-2">
-                          {extraction.classified.map((kw, idx) => (
-                            <span
-                              key={`${kw.keyword}-${idx}`}
-                              className="inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green"
-                              title={`In org vocabulary · Weight: ${(kw.weight * 100).toFixed(0)}%`}
-                            >
-                              {kw.keyword}
-                              <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteClassifiedKeyword(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
-                                disabled={itemBusy || loading}
-                                className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-green transition hover:bg-[rgba(54,211,153,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim"
-                                title="Remove keyword"
+                          {extraction.classified.map((kw, idx) => {
+                            const removedPillKey = buildRemovedKeywordPillKey('classified', kw.keyword, idx);
+                            const removed = Boolean(removedKeywordPills[item.submission_hash]?.[removedPillKey]);
+
+                            return (
+                              <span
+                                key={`${kw.keyword}-${idx}`}
+                                className={getKeywordPillClass('classified', removed)}
+                                title={`In org vocabulary · Weight: ${(kw.weight * 100).toFixed(0)}%`}
                               >
-                                ×
-                              </button>
-                            </span>
-                          ))}
+                                {kw.keyword}
+                                <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteClassifiedKeyword(item.submission_hash, extraction.classified, extraction.suggestions, idx, removedPillKey)}
+                                  disabled={itemBusy || loading || removed}
+                                  className={removed
+                                    ? 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-dim'
+                                    : 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-green transition hover:bg-[rgba(54,211,153,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim'}
+                                  title="Remove keyword"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -998,15 +1032,27 @@ export default function ChainSubmitPage() {
                         <div className="mt-1 flex flex-wrap gap-2">
                           {extraction.suggestions.map((kw, idx) => {
                             const tally = parseKeywordVoteTally(item.keyword_votes, kw.keyword);
+                            const keywordCandidate = keywordCandidates.get(kw.keyword.trim().toLowerCase());
+                            const earned = keywordCandidate?.earned === true;
+                            const suggestionVariant: KeywordPillVariant = earned ? 'earned' : 'suggestion';
+                            const removedPillKey = buildRemovedKeywordPillKey(suggestionVariant, kw.keyword, idx);
+                            const removed = Boolean(removedKeywordPills[item.submission_hash]?.[removedPillKey]);
 
                             return (
                               <span
                                 key={`${kw.keyword}-${idx}`}
-                                className="inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red"
-                                title={`New keyword suggestion · Weight: ${(kw.weight * 100).toFixed(0)}%`}
+                                className={getKeywordPillClass(suggestionVariant, removed)}
+                                title={earned
+                                  ? `Earned suggestion (${keywordCandidate?.distinct_contributors ?? 0} contributors) · Weight: ${(kw.weight * 100).toFixed(0)}%`
+                                  : `New keyword suggestion · Weight: ${(kw.weight * 100).toFixed(0)}%`}
                               >
                                 {kw.keyword}
                                 <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
+                                {earned && keywordCandidate && (
+                                  <span className="ml-2 text-[10px] font-semibold text-[rgba(147,197,253,0.95)]">
+                                    earned · {keywordCandidate.distinct_contributors} contributors
+                                  </span>
+                                )}
                                 {tally && (
                                   <span className="ml-2 text-[10px] font-normal text-wv-dim">
                                     include {tally.include} / exclude {tally.exclude}
@@ -1015,16 +1061,20 @@ export default function ChainSubmitPage() {
                                 <button
                                   type="button"
                                   onClick={() => handleApproveSuggestion(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
-                                  disabled={itemBusy || loading}
+                                  disabled={itemBusy || loading || removed}
                                   className="ml-2 rounded bg-[rgba(255,255,255,0.2)] px-1.5 py-0.5 text-[10px] font-semibold text-wv-text transition hover:bg-[rgba(255,255,255,0.3)] disabled:cursor-not-allowed disabled:text-wv-dim"
                                 >
-                                  +vocab
+                                  {earned ? 'Promote' : '+vocab'}
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => handleDismissSuggestion(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
-                                  disabled={itemBusy || loading}
-                                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-red transition hover:bg-[rgba(255,107,107,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim"
+                                  onClick={() => handleDismissSuggestion(item.submission_hash, extraction.classified, extraction.suggestions, idx, removedPillKey)}
+                                  disabled={itemBusy || loading || removed}
+                                  className={removed
+                                    ? 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-dim'
+                                    : earned
+                                      ? 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-[rgba(147,197,253,0.95)] transition hover:bg-[rgba(96,165,250,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim'
+                                      : 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-amber transition hover:bg-[rgba(255,178,85,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim'}
                                   title="Dismiss suggestion"
                                 >
                                   ×
@@ -1043,36 +1093,12 @@ export default function ChainSubmitPage() {
                     </p>
                   )}
 
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex justify-end">
                     <button
                       type="button"
-                      onClick={() => handleRerun(item)}
+                      onClick={() => setDenyModalSubmissionHash(item.submission_hash)}
                       disabled={itemBusy || loading}
-                      className="rounded px-2 py-1 text-xs text-wv-amber hover:bg-[rgba(255,178,85,0.12)] disabled:cursor-not-allowed"
-                    >
-                      Re-run Extraction
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleUpdateKeywords(item.submission_hash, extraction.classified, extraction.suggestions)}
-                      disabled={itemBusy || loading}
-                      className="rounded px-2 py-1 text-xs text-wv-violet hover:bg-[rgba(124,92,255,0.12)] disabled:cursor-not-allowed"
-                    >
-                      Edit Keywords
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleRemove(item.submission_hash)}
-                      disabled={itemBusy || loading}
-                      className="rounded px-2 py-1 text-xs text-wv-red hover:bg-[rgba(255,107,107,0.12)] disabled:cursor-not-allowed"
-                    >
-                      Remove
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDenyFinal(item.submission_hash)}
-                      disabled={itemBusy || loading}
-                      className="rounded px-2 py-1 text-xs text-wv-red hover:bg-[rgba(255,107,107,0.12)] disabled:cursor-not-allowed"
+                      className="rounded border border-[rgba(255,107,107,0.5)] bg-[rgba(255,107,107,0.1)] px-2 py-1 text-xs font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.2)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
                     >
                       Deny (final)
                     </button>
@@ -1156,6 +1182,39 @@ export default function ChainSubmitPage() {
           </div>
         )}
       </section>
+
+      <Modal
+        open={denyModalSubmissionHash !== null}
+        title="Deny submission?"
+        onClose={() => setDenyModalSubmissionHash(null)}
+        footer={(
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setDenyModalSubmissionHash(null)}
+              className="rounded-lg border border-wv-line px-3 py-1.5 text-sm font-medium text-wv-dim transition hover:text-wv-text"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!denyModalSubmissionHash) {
+                  return;
+                }
+                const hashToDeny = denyModalSubmissionHash;
+                setDenyModalSubmissionHash(null);
+                void handleDenyFinal(hashToDeny);
+              }}
+              className="rounded-lg border border-[rgba(255,107,107,0.5)] bg-[rgba(255,107,107,0.1)] px-3 py-1.5 text-sm font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.2)]"
+            >
+              Deny
+            </button>
+          </div>
+        )}
+      >
+        Are you sure? This action cannot be undone.
+      </Modal>
     </div>
   );
 }

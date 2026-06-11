@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -124,7 +125,38 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		req.WrappedDekMod, req.ContributorSig, req.StackHint, req.MemoryType,
 		preferenceConfidence, derivation, sanitizationFindings, extractionResult, protocol.SubmissionStatusPendingKeyword,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if keywords := bytes.TrimSpace(rawKeywords); len(keywords) > 0 {
+		var keywordPayload struct {
+			Suggestions []struct {
+				Keyword string `json:"keyword"`
+			} `json:"suggestions"`
+		}
+		if err := json.Unmarshal(keywords, &keywordPayload); err != nil {
+			log.Printf("warn: skipping keyword candidate capture for submission %s: %v", req.SubmissionHash, err)
+			return nil
+		}
+
+		for _, suggestion := range keywordPayload.Suggestions {
+			keyword := strings.ToLower(strings.TrimSpace(suggestion.Keyword))
+			if keyword == "" {
+				continue
+			}
+
+			if _, err := pool.Exec(ctx, `
+				INSERT INTO keyword_candidates (org_id, keyword, contributor_pubkey, submission_hash)
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (org_id, keyword, contributor_pubkey) DO NOTHING
+			`, req.OrgID, keyword, req.ContributorPubkey, req.SubmissionHash); err != nil {
+				log.Printf("warn: failed recording keyword candidate org=%s keyword=%s contributor=%s submission=%s: %v", req.OrgID, keyword, req.ContributorPubkey, req.SubmissionHash, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPubkey string) ([]protocol.PendingQueueItem, error) {
@@ -186,6 +218,17 @@ type SubmissionVoteTally struct {
 type KeywordVoteTally struct {
 	IncludeCount int
 	ExcludeCount int
+}
+
+type KeywordVoteEntry struct {
+	Keyword string `json:"keyword"`
+	Vote    string `json:"vote"`
+}
+
+type ModeratorRecommendation struct {
+	ModeratorPubkey string             `json:"moderator_pubkey"`
+	SubmissionVote  *string            `json:"submission_vote"`
+	KeywordVotes    []KeywordVoteEntry `json:"keyword_votes"`
 }
 
 func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey, vote string) (approveCount int, flagCount int, err error) {
@@ -434,4 +477,123 @@ func GetKeywordVoteTallies(ctx context.Context, pool *pgxpool.Pool, orgID string
 	}
 
 	return tallies, nil
+}
+
+func GetModeratorRecommendations(ctx context.Context, pool *pgxpool.Pool, orgID string, submissionHashes []string) (map[string][]ModeratorRecommendation, error) {
+	recommendations := make(map[string][]ModeratorRecommendation)
+	if len(submissionHashes) == 0 {
+		return recommendations, nil
+	}
+
+	bySubmission := make(map[string]map[string]*ModeratorRecommendation)
+	getOrCreateRecommendation := func(submissionHash, moderatorPubkey string) *ModeratorRecommendation {
+		moderatorMap, ok := bySubmission[submissionHash]
+		if !ok {
+			moderatorMap = make(map[string]*ModeratorRecommendation)
+			bySubmission[submissionHash] = moderatorMap
+		}
+
+		recommendation, ok := moderatorMap[moderatorPubkey]
+		if !ok {
+			recommendation = &ModeratorRecommendation{
+				ModeratorPubkey: moderatorPubkey,
+				KeywordVotes:    []KeywordVoteEntry{},
+			}
+			moderatorMap[moderatorPubkey] = recommendation
+		}
+
+		return recommendation
+	}
+
+	submissionVoteRows, err := pool.Query(ctx, `
+        SELECT submission_hash, moderator_pubkey, vote
+        FROM submission_mod_votes
+        WHERE org_id = $1 AND submission_hash = ANY($2)
+    `, orgID, submissionHashes)
+	if err != nil {
+		return nil, err
+	}
+	defer submissionVoteRows.Close()
+
+	for submissionVoteRows.Next() {
+		var submissionHash string
+		var moderatorPubkey string
+		var vote string
+		if err := submissionVoteRows.Scan(&submissionHash, &moderatorPubkey, &vote); err != nil {
+			return nil, err
+		}
+
+		recommendation := getOrCreateRecommendation(submissionHash, moderatorPubkey)
+		voteCopy := vote
+		recommendation.SubmissionVote = &voteCopy
+	}
+
+	if err := submissionVoteRows.Err(); err != nil {
+		return nil, err
+	}
+
+	keywordVoteRows, err := pool.Query(ctx, `
+        SELECT submission_hash, moderator_pubkey, keyword, vote
+        FROM keyword_mod_votes
+        WHERE org_id = $1 AND submission_hash = ANY($2)
+    `, orgID, submissionHashes)
+	if err != nil {
+		return nil, err
+	}
+	defer keywordVoteRows.Close()
+
+	for keywordVoteRows.Next() {
+		var submissionHash string
+		var moderatorPubkey string
+		var keyword string
+		var vote string
+		if err := keywordVoteRows.Scan(&submissionHash, &moderatorPubkey, &keyword, &vote); err != nil {
+			return nil, err
+		}
+
+		recommendation := getOrCreateRecommendation(submissionHash, moderatorPubkey)
+		recommendation.KeywordVotes = append(recommendation.KeywordVotes, KeywordVoteEntry{
+			Keyword: keyword,
+			Vote:    vote,
+		})
+	}
+
+	if err := keywordVoteRows.Err(); err != nil {
+		return nil, err
+	}
+
+	for submissionHash, moderatorMap := range bySubmission {
+		moderatorPubkeys := make([]string, 0, len(moderatorMap))
+		for moderatorPubkey := range moderatorMap {
+			moderatorPubkeys = append(moderatorPubkeys, moderatorPubkey)
+		}
+		sort.Strings(moderatorPubkeys)
+
+		submissionRecommendations := make([]ModeratorRecommendation, 0, len(moderatorPubkeys))
+		for _, moderatorPubkey := range moderatorPubkeys {
+			recommendation := moderatorMap[moderatorPubkey]
+			sort.Slice(recommendation.KeywordVotes, func(i, j int) bool {
+				if recommendation.KeywordVotes[i].Keyword == recommendation.KeywordVotes[j].Keyword {
+					return recommendation.KeywordVotes[i].Vote < recommendation.KeywordVotes[j].Vote
+				}
+				return recommendation.KeywordVotes[i].Keyword < recommendation.KeywordVotes[j].Keyword
+			})
+
+			var submissionVote *string
+			if recommendation.SubmissionVote != nil {
+				voteCopy := *recommendation.SubmissionVote
+				submissionVote = &voteCopy
+			}
+
+			submissionRecommendations = append(submissionRecommendations, ModeratorRecommendation{
+				ModeratorPubkey: recommendation.ModeratorPubkey,
+				SubmissionVote:  submissionVote,
+				KeywordVotes:    recommendation.KeywordVotes,
+			})
+		}
+
+		recommendations[submissionHash] = submissionRecommendations
+	}
+
+	return recommendations, nil
 }
