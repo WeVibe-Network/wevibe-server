@@ -66,7 +66,7 @@ type SubmissionRecord struct {
 	MemoryType           string                            `json:"memory_type"`
 	PreferenceConfidence float64                           `json:"preference_confidence"`
 	Derivation           string                            `json:"derivation"`
-	MatchedKeywords      []string                          `json:"matched_keywords,omitempty"`
+	MatchedKeywords      []string                          `json:"matched_keywords"`
 	ExtractionResult     *json.RawMessage                  `json:"extraction_result,omitempty"`
 	ExtractionFeedback   *string                           `json:"extraction_feedback,omitempty"`
 	ModeratorPubkey      *string                           `json:"moderator_pubkey,omitempty"`
@@ -762,36 +762,16 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	if statusFilter != "" {
 		rows, err = pool.Query(r.Context(), `
 			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, status, memory_type,
-			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
-			       COALESCE(se.matched_keywords, ARRAY[]::TEXT[])
+			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at
 			FROM pending_submissions ps
-			LEFT JOIN LATERAL (
-				SELECT matched_keywords
-				FROM serve_events
-				WHERE org_id = ps.org_id
-				  AND serve_key = ps.submission_hash
-				  AND event_type = 'serve'
-				ORDER BY created_at DESC
-				LIMIT 1
-			) se ON true
 			WHERE ps.org_id = $1 AND ps.status = $2
 			ORDER BY ps.created_at DESC
 		`, orgID, statusFilter)
 	} else {
 		rows, err = pool.Query(r.Context(), `
 			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, status, memory_type,
-			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at,
-			       COALESCE(se.matched_keywords, ARRAY[]::TEXT[])
+			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at
 			FROM pending_submissions ps
-			LEFT JOIN LATERAL (
-				SELECT matched_keywords
-				FROM serve_events
-				WHERE org_id = ps.org_id
-				  AND serve_key = ps.submission_hash
-				  AND event_type = 'serve'
-				ORDER BY created_at DESC
-				LIMIT 1
-			) se ON true
 			WHERE ps.org_id = $1
 			ORDER BY ps.created_at DESC
 		`, orgID)
@@ -816,11 +796,11 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 		var sub SubmissionRecord
 		err := qr.Scan(&sub.SubmissionHash, &sub.OrgID, &sub.EpochID, &sub.ContributorPubkey,
 			&sub.CiphertextHex, &sub.WrappedDekMod, &sub.Status, &sub.MemoryType, &sub.PreferenceConfidence, &sub.Derivation, &sub.ExtractionResult, &sub.ExtractionFeedback,
-			&sub.ModeratorPubkey, &sub.ApprovedAt, &sub.VerifiedAt, &sub.UpdatedAt, &sub.CreatedAt,
-			&sub.MatchedKeywords)
+			&sub.ModeratorPubkey, &sub.ApprovedAt, &sub.VerifiedAt, &sub.UpdatedAt, &sub.CreatedAt)
 		if err != nil {
 			continue
 		}
+		sub.MatchedKeywords = []string{}
 		sub.ModVotes = SubmissionModVotes{}
 		sub.KeywordVotes = make(map[string]SubmissionKeywordVotes)
 		submissions = append(submissions, sub)
@@ -935,6 +915,7 @@ func ListMySubmissions(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		sub.MatchedKeywords = []string{}
 		submissions = append(submissions, sub)
 	}
 	if rows.Err() != nil {
