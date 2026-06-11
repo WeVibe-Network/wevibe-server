@@ -50,10 +50,77 @@ type ExtractKeywordsBatchItem = {
   suggestions: KeywordSuggestion[];
 };
 
+type LoadSource = 'orgHealth' | 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch';
+
+type LoadDiagnostic = {
+  source: LoadSource;
+  label: string;
+  message: string;
+  likelyCause: 'hub unreachable' | 'decrypt backend unavailable' | 'Ollama down' | 'endpoint returned an error';
+};
+
 type ExtractionResultPayload = {
   classified: KeywordWeight[];
   suggestions: KeywordWeight[];
 };
+
+const LOAD_SOURCE_LABELS: Record<LoadSource, string> = {
+  orgHealth: 'Org health',
+  pendingKeyword: 'Pending keyword queue',
+  pendingChain: 'Pending chain queue',
+  keywords: 'Org vocabulary',
+  decryptBatch: 'Decrypt batch',
+};
+
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error;
+  }
+  return 'Unknown error';
+}
+
+function inferLikelyCause(
+  source: LoadSource,
+  message: string,
+): LoadDiagnostic['likelyCause'] {
+  const lower = message.toLowerCase();
+  const networkIssue = lower.includes('failed to fetch')
+    || lower.includes('network')
+    || lower.includes('econnrefused')
+    || lower.includes('sse connection failed')
+    || lower.includes('timed out')
+    || lower.includes('not connected');
+
+  if (lower.includes('ollama')) {
+    return 'Ollama down';
+  }
+
+  if (source === 'decryptBatch') {
+    if (networkIssue) {
+      return 'decrypt backend unavailable';
+    }
+    return 'endpoint returned an error';
+  }
+
+  if (networkIssue) {
+    return 'hub unreachable';
+  }
+
+  return 'endpoint returned an error';
+}
+
+function createLoadDiagnostic(source: LoadSource, error: unknown): LoadDiagnostic {
+  const message = normalizeErrorMessage(error);
+  return {
+    source,
+    label: LOAD_SOURCE_LABELS[source],
+    message,
+    likelyCause: inferLikelyCause(source, message),
+  };
+}
 
 function normalizeKeywordWeights(input: unknown): KeywordWeight[] {
   if (!Array.isArray(input)) {
@@ -86,11 +153,6 @@ function parseExtractionResult(extractionResult: Submission['extraction_result']
     classified: normalizeKeywordWeights(payload.classified),
     suggestions: normalizeKeywordWeights(payload.suggestions),
   };
-}
-
-function hasExtractionResult(extractionResult: Submission['extraction_result']): boolean {
-  const parsed = parseExtractionResult(extractionResult);
-  return parsed.classified.length > 0 || parsed.suggestions.length > 0;
 }
 
 function parseModerationRecommendation(
@@ -180,10 +242,10 @@ export default function ChainSubmitPage() {
   const orgId = activeOrg?.org_id ?? '';
 
   const [orgHealth, setOrgHealth] = useState<OrgHealth | null>(null);
-  const [pendingKeyword, setPendingKeyword] = useState<Submission[]>([]);
   const [reviewKeywords, setReviewKeywords] = useState<Submission[]>([]);
   const [pendingChain, setPendingChain] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadDiagnostics, setLoadDiagnostics] = useState<LoadDiagnostic[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -210,15 +272,47 @@ export default function ChainSubmitPage() {
 
   const loadAll = useCallback(async () => {
     if (!orgId) return;
+
     setLoading(true);
     setError(null);
+    setLoadDiagnostics([]);
+
     try {
-      const [health, pendingKeywordRaw, pendingChainRaw, keywords] = await Promise.all([
+      const diagnostics: LoadDiagnostic[] = [];
+      const [healthResult, pendingKeywordResult, pendingChainResult, keywordsResult] = await Promise.allSettled([
         getOrgHealth(orgId),
         getSubmissionsByStatus(orgId, 'pending_keyword'),
         getSubmissionsByStatus(orgId, 'pending_chain'),
         listKeywords(orgId),
       ]);
+
+      const health = healthResult.status === 'fulfilled'
+        ? healthResult.value
+        : null;
+      if (healthResult.status !== 'fulfilled') {
+        diagnostics.push(createLoadDiagnostic('orgHealth', healthResult.reason));
+      }
+
+      const pendingKeywordRaw = pendingKeywordResult.status === 'fulfilled'
+        ? pendingKeywordResult.value
+        : [];
+      if (pendingKeywordResult.status !== 'fulfilled') {
+        diagnostics.push(createLoadDiagnostic('pendingKeyword', pendingKeywordResult.reason));
+      }
+
+      const pendingChainRaw = pendingChainResult.status === 'fulfilled'
+        ? pendingChainResult.value
+        : [];
+      if (pendingChainResult.status !== 'fulfilled') {
+        diagnostics.push(createLoadDiagnostic('pendingChain', pendingChainResult.reason));
+      }
+
+      const keywords = keywordsResult.status === 'fulfilled'
+        ? keywordsResult.value
+        : [];
+      if (keywordsResult.status !== 'fulfilled') {
+        diagnostics.push(createLoadDiagnostic('keywords', keywordsResult.reason));
+      }
 
       const vocabulary = new Set(
         keywords
@@ -241,11 +335,15 @@ export default function ChainSubmitPage() {
 
       const plaintextByHash = new Map<string, string | null>();
       if (decryptItems.length > 0) {
-        const decrypted = await getMcpClient().callTool<DecryptBatchItem[]>('wevibe_decrypt_batch', {
-          items: decryptItems,
-        });
-        for (const item of decrypted) {
-          plaintextByHash.set(item.id, item.plaintext ?? null);
+        try {
+          const decrypted = await getMcpClient().callTool<DecryptBatchItem[]>('wevibe_decrypt_batch', {
+            items: decryptItems,
+          });
+          for (const item of decrypted) {
+            plaintextByHash.set(item.id, item.plaintext ?? null);
+          }
+        } catch (decryptError) {
+          diagnostics.push(createLoadDiagnostic('decryptBatch', decryptError));
         }
       }
 
@@ -263,10 +361,9 @@ export default function ChainSubmitPage() {
 
       setOrgHealth(health);
       setOrgVocabulary(vocabulary);
-      const reviewable = keywordQueue.filter((submission) => hasExtractionResult(submission.extraction_result));
-      setPendingKeyword(keywordQueue.filter((submission) => !hasExtractionResult(submission.extraction_result)));
-      setReviewKeywords(reviewable);
+      setReviewKeywords(keywordQueue);
       setPendingChain(chainQueue);
+      setLoadDiagnostics(diagnostics);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -746,6 +843,31 @@ export default function ChainSubmitPage() {
         </div>
       )}
 
+      {loadDiagnostics.length > 0 && (
+        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <p className="font-medium">Some pipeline data could not load.</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {loadDiagnostics.map((diag) => (
+                  <li key={diag.source}>
+                    <span className="font-medium">{diag.label}</span>: {diag.message}. Likely cause: {diag.likelyCause}.
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <button
+              type="button"
+              onClick={() => loadAll()}
+              disabled={loading}
+              className="inline-flex items-center rounded-lg border border-[rgba(255,107,107,0.45)] px-3 py-1.5 text-xs font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
+            >
+              {loading ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
           {error}
@@ -783,117 +905,12 @@ export default function ChainSubmitPage() {
         </div>
       )}
 
-      <section className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6">
-        <div>
-          <h2 className="text-lg font-semibold text-wv-text">Ready for Keywords</h2>
-          <p className="mt-1 text-sm text-wv-dim">
-            {pendingKeyword.length} memories need keyword (re-)extraction
-          </p>
-        </div>
-
-        {pendingKeyword.length === 0 ? (
-          <p className="mt-4 text-sm text-wv-dim">No memories currently need keyword extraction.</p>
-        ) : (
-          <div className="mt-4 space-y-3">
-            {pendingKeyword.map((item) => {
-              const itemBusy = busy === item.submission_hash;
-              const recommendation = parseModerationRecommendation(item.mod_votes);
-
-              return (
-                <div key={item.submission_hash} className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-wv-panel p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
-                        <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
-                        <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
-                          Epoch {item.epoch_id}
-                        </span>
-                        <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
-                          Memory
-                        </span>
-                        {recommendation && (
-                          <span
-                            className={recommendation.flagHeavy
-                              ? 'rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber'
-                              : 'rounded-full border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.12)] px-2 py-0.5 text-xs font-medium text-wv-violet'}
-                          >
-                            Moderators: {recommendation.approve} approve · {recommendation.flag} flag
-                          </span>
-                        )}
-                        {item.sanitization_findings && item.sanitization_findings.length > 0 && (
-                          <span className="rounded-full bg-[rgba(255,107,107,0.12)] px-2 py-0.5 text-xs font-medium text-wv-red">
-                            {item.sanitization_findings.length} content issue(s)
-                          </span>
-                        )}
-                        {item.preference_confidence !== undefined && item.preference_confidence > 0.8 && (
-                          <span className="rounded-full bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-xs font-medium text-wv-red">
-                            Likely preference ({(item.preference_confidence * 100).toFixed(0)}%)
-                          </span>
-                        )}
-                        {item.preference_confidence !== undefined && item.preference_confidence > 0.5 && item.preference_confidence <= 0.8 && (
-                          <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
-                            Possible preference ({(item.preference_confidence * 100).toFixed(0)}%)
-                          </span>
-                        )}
-                        {item.derivation === 'edited-after-extraction' && (
-                          <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
-                            edited after extraction
-                          </span>
-                        )}
-                        {item.derivation === 'verbatim' && (
-                          <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
-                            verbatim extraction
-                          </span>
-                        )}
-                        {item.moderation_approved_by && (
-                          <span className="font-mono text-wv-dim">Approved by {item.moderation_approved_by.slice(0, 8)}…</span>
-                        )}
-                        {item.moderation_approved_at && (
-                          <ClientTime value={item.moderation_approved_at} mode="datetime" />
-                        )}
-                      </div>
-                      <p className="mt-2 text-sm text-wv-text line-clamp-2">
-                        {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
-                      </p>
-                      {item.extraction_feedback && (
-                        <p className="mt-2 text-xs text-wv-amber">
-                          Feedback: {item.extraction_feedback}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
-                      <button
-                        type="button"
-                        onClick={() => handleRerun(item)}
-                        disabled={itemBusy || loading}
-                        className="rounded-lg border border-wv-amber px-3 py-1.5 text-xs font-medium text-wv-amber transition hover:bg-[rgba(255,178,85,0.12)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
-                      >
-                        {itemBusy ? 'Extracting…' : 'Re-run Extraction'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDenyFinal(item.submission_hash)}
-                        disabled={itemBusy || loading}
-                        className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-1.5 text-xs font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
-                      >
-                        Deny (final)
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
       <section className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.12)] p-6">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold text-wv-text">Curate Keywords</h2>
             <p className="mt-1 text-sm text-wv-dim">
-              {reviewKeywords.length} memories with attached keywords awaiting curation
+              {reviewKeywords.length} memories awaiting curation
             </p>
             <p className="mt-1 text-xs text-wv-amber">
               <span className="text-wv-green">Green</span> = classified vocabulary terms · <span className="text-wv-red">Red</span> = new suggestions. Approve or dismiss red suggestions before Verify All.
