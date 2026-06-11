@@ -28,6 +28,11 @@ interface LlmSettingsSnapshot {
   openrouter_model: string;
 }
 
+type SettingsResponse = Partial<LlmSettingsSnapshot> & {
+  provider_ready?: boolean;
+  provider_ready_reason?: string | null;
+};
+
 const DEFAULT_LLM_SETTINGS: LlmSettingsSnapshot = {
   llm_provider: 'ollama',
   ollama_model: 'qwen2.5:14b',
@@ -49,6 +54,8 @@ export default function SessionsPage() {
   const [extractedDraftCount, setExtractedDraftCount] = useState(0);
 
   const [llmSettings, setLlmSettings] = useState<LlmSettingsSnapshot>(DEFAULT_LLM_SETTINGS);
+  const [providerReady, setProviderReady] = useState(true);
+  const [providerReadyReason, setProviderReadyReason] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortKey, setSortKey] = useState<SessionSortKey>('updated');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -64,6 +71,10 @@ export default function SessionsPage() {
     : `Ollama (local) · ${ollamaModel}`;
   const etaText = useOpenRouter ? '~5–20s' : '~30–90s';
   const queueCtaLabel = queueSnapshot.activeCount > 0 ? 'Add to queue' : 'Extract';
+  const canEnqueueExtraction = Boolean(pubkeyHex) && providerReady;
+  const providerNotReadyMessage = providerReadyReason?.trim().length
+    ? providerReadyReason.trim()
+    : 'LLM provider not configured.';
 
   useEffect(() => {
     let cancelled = false;
@@ -112,7 +123,7 @@ export default function SessionsPage() {
           return;
         }
 
-        const data = (await response.json()) as Partial<LlmSettingsSnapshot>;
+        const data = (await response.json()) as SettingsResponse;
         if (cancelled) {
           return;
         }
@@ -126,6 +137,14 @@ export default function SessionsPage() {
             ? data.openrouter_model
             : DEFAULT_LLM_SETTINGS.openrouter_model,
         });
+        setProviderReady(typeof data.provider_ready === 'boolean' ? data.provider_ready : true);
+        setProviderReadyReason(
+          data.provider_ready_reason === null
+            ? null
+            : typeof data.provider_ready_reason === 'string'
+              ? data.provider_ready_reason
+              : null,
+        );
       } catch {
         // keep defaults
       }
@@ -483,7 +502,7 @@ export default function SessionsPage() {
                     <div className="space-y-2">
                       <button
                         onClick={enqueueActiveSession}
-                        disabled={!pubkeyHex}
+                        disabled={!canEnqueueExtraction}
                         className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {queueCtaLabel}
@@ -494,6 +513,15 @@ export default function SessionsPage() {
                       {!pubkeyHex && (
                         <p className="text-xs text-wv-amber">
                           Create an identity first to queue extraction.
+                        </p>
+                      )}
+                      {!providerReady && (
+                        <p className="text-xs text-wv-amber">
+                          {providerNotReadyMessage}{' '}
+                          <Link href="/profile" className="underline hover:text-wv-text">
+                            Open Profile settings
+                          </Link>
+                          .
                         </p>
                       )}
                     </div>

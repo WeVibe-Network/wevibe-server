@@ -345,14 +345,21 @@ export default function MemoryReview({
         )}
       </div>
 
-      <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
-        <span className="font-semibold">
-          Your session produced {reviewMemories.length} memor{reviewMemories.length !== 1 ? 'ies' : 'y'}!
-        </span>
-        <span className="ml-2 text-wv-green">
-          Select which to submit for review.
-        </span>
-      </div>
+      {reviewMemories.length === 0 ? (
+        <div className="rounded-lg border border-wv-line bg-wv-panel px-4 py-3 text-sm text-wv-dim">
+          No durable memories were found in this session. WeVibe keeps only reusable learnings
+          (failures+fixes, conventions, gotchas); a routine session can legitimately yield none.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
+          <span className="font-semibold">
+            Your session produced {reviewMemories.length} memor{reviewMemories.length !== 1 ? 'ies' : 'y'}!
+          </span>
+          <span className="ml-2 text-wv-green">
+            Select which to submit for review.
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-3 text-xs">
         <button

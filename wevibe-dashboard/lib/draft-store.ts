@@ -13,6 +13,7 @@ export interface ExtractionDraft {
     source?: string;
     preset_id?: string | null;
     prompt_fingerprint?: string;
+    empty_reason?: string;
   };
   createdAt: number;
 }

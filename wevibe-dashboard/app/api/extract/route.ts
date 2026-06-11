@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
-import { loadSettings } from '@/lib/settings';
+import { getProviderReadiness, loadSettings } from '@/lib/settings';
 import type {
   ClassifiedKeyword,
   MemoryCandidate,
@@ -299,6 +299,14 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = loadSettings();
+  const providerReadiness = getProviderReadiness(settings);
+  if (!providerReadiness.ready) {
+    return NextResponse.json(
+      { error: providerReadiness.reason!, code: 'provider_not_configured' },
+      { status: 422 },
+    );
+  }
+
   const activeOrgId = settings.org_id.trim();
   const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId);
   const modelFromSettings = settings.ollama_model.trim();
@@ -415,6 +423,7 @@ export async function POST(request: NextRequest) {
       is_local: !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
       prompt_fingerprint: computePromptFingerprint(mcpExtractRequestBody.prompt),
+      ...(normalizedMemories.length === 0 ? { empty_reason: 'no_durable_memories' } : {}),
     },
   });
 }

@@ -49,10 +49,13 @@ export default function ProfilePage() {
 
   const [mcpUrl, setMcpUrl] = useState(() => getConfig().mcpUrl);
   const [settings, setSettings] = useState<DashboardSettings | null>(null);
+  const [persistedSettings, setPersistedSettings] = useState<DashboardSettings | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [localSaveMessage, setLocalSaveMessage] = useState<string | null>(null);
+  const [settingsTesting, setSettingsTesting] = useState(false);
+  const [settingsTestResult, setSettingsTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaModelsError, setOllamaModelsError] = useState(false);
   const [openRouterModels, setOpenRouterModels] = useState<SearchableModelOption[]>([]);
@@ -100,7 +103,10 @@ export default function ProfilePage() {
         if (cancelled) {
           return;
         }
-        setSettings(normalizeDashboardSettings(data));
+
+        const normalized = normalizeDashboardSettings(data);
+        setSettings(normalized);
+        setPersistedSettings(normalized);
       })
       .catch((err: unknown) => {
         if (cancelled) {
@@ -209,6 +215,16 @@ export default function ProfilePage() {
     };
   }, [settings?.llm_provider]);
 
+  useEffect(() => {
+    setSettingsTestResult(null);
+  }, [
+    settings?.llm_provider,
+    settings?.ollama_url,
+    settings?.ollama_model,
+    settings?.openrouter_model,
+    settings?.openrouter_api_key,
+  ]);
+
   const handleWalletConnect = useCallback(async () => {
     setWalletActionError(null);
     setConnectingWallet(true);
@@ -272,7 +288,9 @@ export default function ProfilePage() {
       }
 
       const data = await response.json() as Partial<DashboardSettings>;
-      setSettings(normalizeDashboardSettings(data));
+      const normalized = normalizeDashboardSettings(data);
+      setSettings(normalized);
+      setPersistedSettings(normalized);
       txSuccess(toastId, 'Settings saved.');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings.';
@@ -282,6 +300,34 @@ export default function ProfilePage() {
       setSettingsSaving(false);
     }
   }, [mcpUrl, settings]);
+
+  const handleTestProviderSettings = useCallback(async () => {
+    setSettingsTesting(true);
+    setSettingsTestResult(null);
+
+    try {
+      const response = await fetch('/api/settings/test', {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to test settings (${response.status}).`);
+      }
+
+      const data = await response.json() as { ok?: unknown; detail?: unknown };
+      const ok = data.ok === true;
+      const detail = typeof data.detail === 'string' && data.detail.length > 0
+        ? data.detail
+        : (ok ? 'Provider test succeeded.' : 'Provider test failed.');
+
+      setSettingsTestResult({ ok, detail });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to test settings.';
+      setSettingsTestResult({ ok: false, detail: message });
+    } finally {
+      setSettingsTesting(false);
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -337,6 +383,22 @@ export default function ProfilePage() {
         return 'border border-wv-line bg-wv-panel-2 text-wv-dim';
     }
   };
+
+  const openRouterApiKeyChanged = Boolean(
+    settings?.openrouter_api_key && !settings.openrouter_api_key.startsWith('••••'),
+  );
+
+  const isSettingsDirty = Boolean(
+    settings
+    && persistedSettings
+    && (
+      settings.llm_provider !== persistedSettings.llm_provider
+      || settings.ollama_url !== persistedSettings.ollama_url
+      || settings.ollama_model !== persistedSettings.ollama_model
+      || settings.openrouter_model !== persistedSettings.openrouter_model
+      || openRouterApiKeyChanged
+    ),
+  );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -727,14 +789,45 @@ export default function ProfilePage() {
               <p className="text-xs text-wv-green">{localSaveMessage}</p>
             ) : null}
 
-            <button
-              type="button"
-              onClick={handleSaveAppAndModelSettings}
-              disabled={settingsSaving || settingsLoading}
-              className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-            >
-              {settingsSaving ? 'Saving…' : 'Save Settings'}
-            </button>
+            {isSettingsDirty ? (
+              <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+                Unsaved changes — extraction uses your SAVED settings. Click Save Settings to apply.
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleSaveAppAndModelSettings}
+                disabled={settingsSaving || settingsLoading}
+                className={`inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim ${isSettingsDirty ? 'ring-2 ring-[rgba(255,178,85,0.4)] ring-offset-2 ring-offset-wv-panel' : ''}`}
+              >
+                {settingsSaving ? 'Saving…' : 'Save Settings'}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTestProviderSettings}
+                disabled={settingsTesting || settingsLoading}
+                className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {settingsTesting ? 'Testing…' : 'Test provider'}
+              </button>
+            </div>
+
+            {isSettingsDirty ? (
+              <p className="text-xs text-wv-amber">Test checks your SAVED settings — Save first to test your latest changes.</p>
+            ) : null}
+
+            {settingsTestResult ? (
+              <div
+                className={`rounded-lg px-3 py-2 text-sm ${settingsTestResult.ok
+                  ? 'border border-[rgba(51,214,166,0.4)] bg-[rgba(51,214,166,0.12)] text-wv-green'
+                  : 'border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] text-wv-amber'}`}
+              >
+                {settingsTestResult.detail}
+              </div>
+            ) : null}
           </div>
         </div>
       </section>

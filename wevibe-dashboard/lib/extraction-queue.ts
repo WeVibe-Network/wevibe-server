@@ -31,6 +31,11 @@ interface ExtractResponseBody {
   extraction_meta?: ExtractionDraft['extractionMeta'];
 }
 
+interface ExtractErrorBody {
+  error?: string;
+  code?: string;
+}
+
 const EMPTY_SERVER_JOBS: QueueSnapshot['jobs'] = [];
 Object.freeze(EMPTY_SERVER_JOBS);
 
@@ -103,6 +108,26 @@ async function runJob(job: ExtractionJob): Promise<void> {
     });
 
     if (!response.ok) {
+      let providerNotConfiguredMessage: string | null = null;
+
+      try {
+        const payload = (await response.json()) as ExtractErrorBody;
+        if (payload.code === 'provider_not_configured') {
+          providerNotConfiguredMessage = typeof payload.error === 'string' && payload.error.trim().length > 0
+            ? payload.error
+            : 'LLM provider not configured';
+        }
+      } catch {
+        // fall back to generic extraction failure toast
+      }
+
+      if (providerNotConfiguredMessage) {
+        toast.error(providerNotConfiguredMessage, {
+          duration: 8000,
+        });
+        return;
+      }
+
       throw new Error(`Extraction request failed with status ${response.status}`);
     }
 

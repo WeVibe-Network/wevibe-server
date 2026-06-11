@@ -22,6 +22,37 @@ const DEFAULTS: DashboardSettings = {
   mod_pubkey: '',
 };
 
+export function getProviderReadiness(
+  s: DashboardSettings,
+): { ready: boolean; reason: string | null } {
+  if (s.llm_provider === 'openrouter') {
+    if (s.openrouter_api_key.trim().length === 0) {
+      return {
+        ready: false,
+        reason: 'OpenRouter API key is not set — add it in Profile → App & Model settings and click Save.',
+      };
+    }
+
+    if (s.openrouter_model.trim().length === 0) {
+      return {
+        ready: false,
+        reason: 'OpenRouter model is not set — choose a model in Profile → App & Model settings and click Save.',
+      };
+    }
+
+    return { ready: true, reason: null };
+  }
+
+  if (s.ollama_model.trim().length === 0) {
+    return {
+      ready: false,
+      reason: 'Ollama model is not set — set it in Profile → App & Model settings and click Save.',
+    };
+  }
+
+  return { ready: true, reason: null };
+}
+
 function settingsPath(): string {
   return join(homedir(), '.config', 'wevibe', 'dashboard.json');
 }

@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { loadSettings, saveSettings, type DashboardSettings } from '@/lib/settings';
+import {
+  getProviderReadiness,
+  loadSettings,
+  saveSettings,
+  type DashboardSettings,
+} from '@/lib/settings';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const settings = loadSettings();
+  const providerReadiness = getProviderReadiness(settings);
   return NextResponse.json({
     ...settings,
     openrouter_api_key: settings.openrouter_api_key
       ? '••••' + settings.openrouter_api_key.slice(-4)
       : '',
+    provider_ready: providerReadiness.ready,
+    provider_ready_reason: providerReadiness.reason,
   });
 }
 
