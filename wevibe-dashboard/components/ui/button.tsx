@@ -4,7 +4,8 @@ type ButtonVariant =
   | 'primary'
   | 'success'
   | 'secondary'
-  | 'ghost';
+  | 'ghost'
+  | 'danger';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -20,6 +21,8 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       success: 'bg-wv-green text-[#07140e] hover:brightness-105',
       secondary: 'border border-wv-line-2 bg-transparent text-wv-text hover:bg-wv-line',
       ghost: 'bg-transparent text-wv-dim hover:text-wv-text',
+      danger:
+        'border border-[rgba(255,107,107,0.4)] bg-transparent text-wv-red hover:bg-[rgba(255,107,107,0.12)]',
     } as const;
     return (
       <button
