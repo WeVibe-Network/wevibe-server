@@ -52,6 +52,17 @@ function bytesToHex(bytes: Uint8Array): string {
     .join('');
 }
 
+// Pack an epoch key as [epoch:u32 little-endian][key:32] = 36 bytes, matching
+// the canonical format the MCP produces (packEpochKeyPair in org-client.ts) and
+// parses in loadMemberships (36-byte chunks). Sealing a bare 32-byte key here
+// would make the MCP's enc/search envelope parser yield zero epoch keys.
+function packEpochKey(epoch: number, key: Uint8Array): Uint8Array {
+  const buf = new Uint8Array(36);
+  new DataView(buf.buffer).setUint32(0, epoch, true);
+  buf.set(key, 4);
+  return buf;
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (const byte of bytes) {
@@ -169,8 +180,8 @@ export async function buildOrgSetup(args: BuildOrgSetupArgs): Promise<BuildOrgSe
     epoch0 = await deriveEpochKeys(masterKey, 0);
     moderatorIdentity = await generateIdentity();
 
-    const encEnvelope = bytesToBase64(await sealToPubkey(epoch0.encKey, x25519Keys.pub));
-    const searchEnvelope = bytesToBase64(await sealToPubkey(epoch0.searchKey, x25519Keys.pub));
+    const encEnvelope = bytesToBase64(await sealToPubkey(packEpochKey(0, epoch0.encKey), x25519Keys.pub));
+    const searchEnvelope = bytesToBase64(await sealToPubkey(packEpochKey(0, epoch0.searchKey), x25519Keys.pub));
     const modEnvelope = bytesToBase64(await sealToPubkey(moderatorIdentity.xPriv, x25519Keys.pub));
     const pkMod = bytesToHex(moderatorIdentity.xPub);
 
