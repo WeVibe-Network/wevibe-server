@@ -263,6 +263,7 @@ export default function ChainSubmitPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
   const [verifyResults, setVerifyResults] = useState<VerificationResult[] | null>(null);
+  const [verifyProgress, setVerifyProgress] = useState<{ phase: 'embedding' | 'verifying'; current: number; total: number } | null>(null);
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
   const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
   const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
@@ -424,6 +425,8 @@ export default function ChainSubmitPage() {
 
     setBusy('verify');
     setVerifyResults(null);
+    setNotice(null);
+    setVerifyProgress(null);
 
     try {
       const client = getMcpClient();
@@ -443,20 +446,38 @@ export default function ChainSubmitPage() {
         return;
       }
 
-      const items = reviewKeywords.map((s) => ({
-        id: s.submission_hash,
-        ciphertext_hex: s.ciphertext_hex as string,
-        wrapped_dek_mod: s.wrapped_dek_mod as string,
-        stack_hint: s.stack_hint ?? [],
-      }));
+      const total = reviewKeywords.length;
 
-      const embedResults = await client.callTool<Array<{
+      type EmbedResult = {
         id: string;
         vector: number[] | null;
         embedding_model_id: string;
         embedding_schema_version: string;
         error?: string;
-      }>>('wevibe_embed_retrieval_card', { org_id: orgId, items });
+      };
+
+      // Stage 1 — embed retrieval cards ONE memory at a time. Decrypting + embedding
+      // each card through the local LLM provider is the slow step; driving the loop
+      // here (instead of one opaque batched call) lets us report real "X of N"
+      // progress so the leader stays connected to what is happening.
+      const embedResults: EmbedResult[] = [];
+      for (let index = 0; index < reviewKeywords.length; index += 1) {
+        const submission = reviewKeywords[index];
+        setVerifyProgress({ phase: 'embedding', current: index, total });
+
+        const batch = await client.callTool<EmbedResult[]>('wevibe_embed_retrieval_card', {
+          org_id: orgId,
+          items: [{
+            id: submission.submission_hash,
+            ciphertext_hex: submission.ciphertext_hex as string,
+            wrapped_dek_mod: submission.wrapped_dek_mod as string,
+            stack_hint: submission.stack_hint ?? [],
+          }],
+        });
+
+        embedResults.push(...batch);
+        setVerifyProgress({ phase: 'embedding', current: index + 1, total });
+      }
 
       const embedById = new Map(embedResults.map((result) => [result.id, result] as const));
       const missingHashes = reviewKeywords.filter(
@@ -480,6 +501,9 @@ export default function ChainSubmitPage() {
         embedding_schema_version: r.embedding_schema_version,
       }));
 
+      // Stage 2 — the hub verifies canonical messages + signatures for all entries
+      // in a single call.
+      setVerifyProgress({ phase: 'verifying', current: total, total });
       const results = await verifyKeywords(orgId, entries);
       setVerifyResults(results);
       const allPassed = results.every(r => r.passed);
@@ -493,6 +517,7 @@ export default function ChainSubmitPage() {
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
+      setVerifyProgress(null);
       setBusy(null);
     }
   }, [reviewKeywords, loadAll, orgId]);
@@ -810,6 +835,40 @@ export default function ChainSubmitPage() {
         </div>
       )}
 
+      {verifyProgress && (
+        <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.12)] p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-wv-text">
+                {verifyProgress.phase === 'embedding'
+                  ? 'Step 1 of 2 — Embedding retrieval cards…'
+                  : 'Step 2 of 2 — Verifying on the hub…'}
+              </p>
+              <p className="mt-1 text-xs text-wv-dim">
+                {verifyProgress.phase === 'embedding'
+                  ? `Decrypting and embedding each memory through your local LLM provider, one at a time — this is the slow part and can take a while. ${verifyProgress.current} of ${verifyProgress.total} embedded.`
+                  : `Hub is checking canonical messages and signatures for ${verifyProgress.total} ${verifyProgress.total === 1 ? 'memory' : 'memories'}.`}
+              </p>
+            </div>
+            <span className="shrink-0 font-mono text-sm text-wv-violet">
+              {verifyProgress.phase === 'embedding'
+                ? `${Math.round((verifyProgress.current / Math.max(verifyProgress.total, 1)) * 100)}%`
+                : '…'}
+            </span>
+          </div>
+          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-wv-panel-2">
+            <div
+              className={`h-full rounded-full bg-wv-grad-btn transition-all duration-300 ${verifyProgress.phase === 'verifying' ? 'animate-pulse' : ''}`}
+              style={{
+                width: verifyProgress.phase === 'verifying'
+                  ? '100%'
+                  : `${Math.round((verifyProgress.current / Math.max(verifyProgress.total, 1)) * 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {verifyResults && (
         <div className="rounded-xl border border-wv-line bg-wv-panel p-4">
           <h3 className="font-semibold text-wv-text">Verification Results</h3>
@@ -852,7 +911,11 @@ export default function ChainSubmitPage() {
             disabled={busy === 'verify' || loading || reviewKeywords.length === 0}
             className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
-            {busy === 'verify' ? 'Verifying…' : 'Verify All'}
+            {busy === 'verify'
+              ? (verifyProgress?.phase === 'embedding'
+                  ? `Embedding ${verifyProgress.current}/${verifyProgress.total}…`
+                  : 'Verifying…')
+              : 'Verify All'}
           </button>
         </div>
 
