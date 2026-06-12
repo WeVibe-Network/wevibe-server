@@ -166,6 +166,8 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
+	devEndpointsEnabled := os.Getenv("WEVIBE_DEV_ENDPOINTS") == "true"
+
 	allowedOrigins := corsOrigins()
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,
@@ -203,7 +205,9 @@ func main() {
 	r.Get("/v1/hub/serving-address", handlers.GetServingAddress)
 	r.Get("/v1/extraction-presets", handlers.GetExtractionPresets)
 	r.Get("/v1/balance/{address}", handlers.GetBalance)
-	r.Post("/v1/faucet/fund", handlers.FundFromFaucet)
+	if devEndpointsEnabled {
+		r.Post("/v1/faucet/fund", handlers.FundFromFaucet)
+	}
 	r.Get("/v1/orgs/discover", handlers.DiscoverOrgs)
 
 	r.Route("/v1/orgs/{orgID}", func(r chi.Router) {
@@ -292,7 +296,9 @@ func main() {
 		})
 	})
 
-	r.Post("/v1/billing/topup", handlers.TopUpCredits)
+	if devEndpointsEnabled {
+		r.Post("/v1/billing/topup", handlers.TopUpCredits)
+	}
 
 	if os.Getenv("WEVIBE_TEST_MODE") == "true" {
 		log.Printf("TEST MODE ENABLED — test endpoints registered at /v1/test/*")
