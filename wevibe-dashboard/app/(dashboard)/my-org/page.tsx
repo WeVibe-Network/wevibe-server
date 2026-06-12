@@ -226,6 +226,9 @@ export default function MyOrgPage() {
   const hubCredits = orgFinances?.hub_credits ?? 0;
   const chainTreasury = orgFinances?.chain_treasury ?? 0;
   const orgDomain = orgSummary?.domain ?? '—';
+  const orgDescription = orgSummary?.description?.trim() ?? '';
+  const orgTechStack = orgSummary?.tech_stack?.trim() ?? '';
+  const orgFocusAreas = orgSummary?.focus_areas?.trim() ?? '';
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 pb-6">
@@ -258,7 +261,27 @@ export default function MyOrgPage() {
             {orgSummaryLoading ? (
               <div className="mt-2 h-6 w-40 animate-pulse rounded bg-wv-panel" />
             ) : (
-              <p className="mt-2 text-sm text-wv-text">{orgDomain}</p>
+              <>
+                <p className="mt-2 text-sm text-wv-text">{orgDomain}</p>
+                {orgDescription && (
+                  <div className="mt-3">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-wv-dim">Description</p>
+                    <p className="mt-1 text-sm text-wv-text">{orgDescription}</p>
+                  </div>
+                )}
+                {orgTechStack && (
+                  <div className="mt-3">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-wv-dim">Tech Stack</p>
+                    <p className="mt-1 text-sm text-wv-text">{orgTechStack}</p>
+                  </div>
+                )}
+                {orgFocusAreas && (
+                  <div className="mt-3">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-wv-dim">Focus Areas</p>
+                    <p className="mt-1 text-sm text-wv-text">{orgFocusAreas}</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

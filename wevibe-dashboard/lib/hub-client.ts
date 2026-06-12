@@ -247,6 +247,9 @@ export interface OrgSummary {
   org_id: string;
   org_name: string;
   domain: string;
+  description?: string;
+  tech_stack?: string;
+  focus_areas?: string;
   leader_pubkey: string;
   leader_wallet_address?: string;
   hub_serving_address?: string;
@@ -405,6 +408,9 @@ export interface CreateOrgRequest {
   leader_wallet: string;
   org_name: string;
   domain: string;
+  description: string;
+  tech_stack: string;
+  focus_areas: string;
   fee_model?: Record<string, unknown> | null;
   enc_envelope: string;
   search_envelope: string;

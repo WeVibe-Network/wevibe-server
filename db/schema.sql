@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS orgs (
     leader_wallet_address       TEXT        NOT NULL,
     org_name                    TEXT        NOT NULL,
     domain                      TEXT        NOT NULL,
+    description                 TEXT        NOT NULL DEFAULT '',
+    tech_stack                  TEXT        NOT NULL DEFAULT '',
+    focus_areas                 TEXT        NOT NULL DEFAULT '',
     current_epoch               INTEGER     NOT NULL DEFAULT 0,
     fee_model                   JSONB       NOT NULL DEFAULT '{}',
     egress_mode                 TEXT        NOT NULL DEFAULT 'unrestricted'

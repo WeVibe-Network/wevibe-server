@@ -280,23 +280,33 @@ export function buildReportMemoryMsg(args: {
   };
 }
 
-export function buildRegisterOrgMsg(
-  signer: string,
-  leader: string,
-  storageQuota: number,
-  retrievalBudget: number,
-  domain: string,
-  hubServingKey: string,
-  leaderWallet: string,
-): EncodeObject {
+export interface RegisterOrgMsgValue {
+  signer: string;
+  leader: string;
+  storageQuota: number;
+  retrievalBudget: number;
+  domain: string;
+  hubServingKey: string;
+  leaderWallet: string;
+  name: string;
+  description: string;
+  tech_stack: string;
+  focus_areas: string;
+}
+
+export function buildRegisterOrgMsg(value: RegisterOrgMsgValue): EncodeObject {
   const fields: number[] = [
-    ...encodeStringField(0x0a, signer),
-    ...encodeStringField(0x1a, leader),
-    ...encodeVarint(0x20), ...encodeVarint(storageQuota),
-    ...encodeVarint(0x28), ...encodeVarint(retrievalBudget),
-    ...encodeStringField(0x32, domain),
-    ...encodeStringField(0x3a, hubServingKey),
-    ...encodeStringField(0x42, leaderWallet),
+    ...encodeStringField(0x0a, value.signer),
+    ...encodeStringField(0x1a, value.leader),
+    ...encodeVarint(0x20), ...encodeVarint(value.storageQuota),
+    ...encodeVarint(0x28), ...encodeVarint(value.retrievalBudget),
+    ...encodeStringField(0x32, value.domain),
+    ...encodeStringField(0x3a, value.hubServingKey),
+    ...encodeStringField(0x42, value.leaderWallet),
+    ...encodeStringField(0x62, value.name),
+    ...encodeStringField(0x4a, value.description),
+    ...encodeStringField(0x52, value.tech_stack),
+    ...encodeStringField(0x5a, value.focus_areas),
   ];
 
   return {

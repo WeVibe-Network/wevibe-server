@@ -34,9 +34,9 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, orgID string, req protoc
 	}
 
 	_, err = tx.Exec(ctx, `
-		INSERT INTO orgs (org_id, leader_pubkey, leader_wallet_address, org_name, domain, fee_model)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, orgID, req.LeaderPubkey, leaderWallet, req.OrgName, req.Domain, req.FeeModel)
+		INSERT INTO orgs (org_id, leader_pubkey, leader_wallet_address, org_name, domain, description, tech_stack, focus_areas, fee_model)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, orgID, req.LeaderPubkey, leaderWallet, req.OrgName, req.Domain, req.Description, req.TechStack, req.FocusAreas, req.FeeModel)
 	if err != nil {
 		return nil, fmt.Errorf("insert org: %w", err)
 	}
@@ -71,12 +71,12 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, orgID string, req protoc
 func GetOrg(ctx context.Context, pool *pgxpool.Pool, orgID string) (*protocol.OrgInfo, error) {
 	var org protocol.OrgInfo
 	err := pool.QueryRow(ctx, `
-        SELECT org_id, org_name, domain, leader_pubkey, current_epoch,
-               egress_mode, allowed_providers, status, rotation_status,
+		SELECT org_id, org_name, domain, description, tech_stack, focus_areas, leader_pubkey, current_epoch,
+		       egress_mode, allowed_providers, status, rotation_status,
 		       COALESCE(moderation_required, FALSE), created_at
-        FROM orgs WHERE org_id = $1
-    `, orgID).Scan(
-		&org.OrgID, &org.OrgName, &org.Domain, &org.LeaderPubkey,
+		FROM orgs WHERE org_id = $1
+	`, orgID).Scan(
+		&org.OrgID, &org.OrgName, &org.Domain, &org.Description, &org.TechStack, &org.FocusAreas, &org.LeaderPubkey,
 		&org.CurrentEpoch, &org.EgressMode, &org.AllowedProviders,
 		&org.Status, &org.RotationStatus, &org.ModerationRequired, &org.CreatedAt,
 	)

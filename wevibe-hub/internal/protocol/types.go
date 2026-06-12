@@ -38,6 +38,9 @@ type OrgInfo struct {
 	OrgID              string    `json:"org_id"`
 	OrgName            string    `json:"org_name"`
 	Domain             string    `json:"domain"`
+	Description        string    `json:"description"`
+	TechStack          string    `json:"tech_stack"`
+	FocusAreas         string    `json:"focus_areas"`
 	LeaderPubkey       string    `json:"leader_pubkey"`
 	CurrentEpoch       int       `json:"current_epoch"`
 	EgressMode         string    `json:"egress_mode"`
@@ -65,6 +68,9 @@ type CreateOrgRequest struct {
 	LeaderX25519Pubkey string   `json:"leader_x25519_pubkey"`
 	OrgName            string   `json:"org_name"`
 	Domain             string   `json:"domain"`
+	Description        string   `json:"description"`
+	TechStack          string   `json:"tech_stack"`
+	FocusAreas         string   `json:"focus_areas"`
 	OrgID              string   `json:"org_id"`
 	TxHash             string   `json:"tx_hash"`
 	HubServingKey      string   `json:"hub_serving_key"`

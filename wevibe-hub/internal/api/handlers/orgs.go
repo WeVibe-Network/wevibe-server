@@ -25,6 +25,21 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
+const (
+	maxOrgDescriptionChars = 500
+	maxOrgTechStackChars   = 200
+	maxOrgFocusAreasChars  = 200
+)
+
+func containsASCIIControlByte(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 {
+			return true
+		}
+	}
+	return false
+}
+
 func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
@@ -40,6 +55,31 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	var req protocol.CreateOrgRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Description) > maxOrgDescriptionChars {
+		http.Error(w, `{"error":"description too long (max 500 chars)"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.TechStack) > maxOrgTechStackChars {
+		http.Error(w, `{"error":"tech_stack too long (max 200 chars)"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req.FocusAreas) > maxOrgFocusAreasChars {
+		http.Error(w, `{"error":"focus_areas too long (max 200 chars)"}`, http.StatusBadRequest)
+		return
+	}
+	if containsASCIIControlByte(req.Description) {
+		http.Error(w, `{"error":"description contains ASCII control bytes"}`, http.StatusBadRequest)
+		return
+	}
+	if containsASCIIControlByte(req.TechStack) {
+		http.Error(w, `{"error":"tech_stack contains ASCII control bytes"}`, http.StatusBadRequest)
+		return
+	}
+	if containsASCIIControlByte(req.FocusAreas) {
+		http.Error(w, `{"error":"focus_areas contains ASCII control bytes"}`, http.StatusBadRequest)
 		return
 	}
 

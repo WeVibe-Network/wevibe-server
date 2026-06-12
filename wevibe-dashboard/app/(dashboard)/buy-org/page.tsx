@@ -182,6 +182,9 @@ export default function BuyOrgPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [orgName, setOrgName] = useState('');
   const [domain, setDomain] = useState('');
+  const [description, setDescription] = useState('');
+  const [techStack, setTechStack] = useState('');
+  const [focusAreas, setFocusAreas] = useState('');
   const [showFaucetPrompt, setShowFaucetPrompt] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [createdOrg, setCreatedOrg] = useState<CreatedOrgState | null>(null);
@@ -284,6 +287,9 @@ export default function BuyOrgPage() {
 
     const orgNameValue = orgName.trim();
     const domainValue = domain.trim();
+    const descriptionValue = description.trim();
+    const techStackValue = techStack.trim();
+    const focusAreasValue = focusAreas.trim();
 
     if (!orgNameValue) {
       const validationToastId = txToast('Create org');
@@ -323,15 +329,19 @@ export default function BuyOrgPage() {
         leaderWallet: walletAddress,
       });
 
-      const registerOrgMsg = buildRegisterOrgMsg(
-        walletConn.address,
-        setup.payload.leader_pubkey,
-        REGISTER_ORG_STORAGE_QUOTA,
-        REGISTER_ORG_RETRIEVAL_BUDGET,
-        setup.payload.domain,
+      const registerOrgMsg = buildRegisterOrgMsg({
+        signer: walletConn.address,
+        leader: setup.payload.leader_pubkey,
+        storageQuota: REGISTER_ORG_STORAGE_QUOTA,
+        retrievalBudget: REGISTER_ORG_RETRIEVAL_BUDGET,
+        domain: setup.payload.domain,
         hubServingKey,
-        setup.payload.leader_wallet,
-      );
+        leaderWallet: setup.payload.leader_wallet,
+        name: setup.payload.org_name,
+        description: descriptionValue,
+        tech_stack: techStackValue,
+        focus_areas: focusAreasValue,
+      });
 
       const broadcastResult = await directBroadcast(walletConn.address, [registerOrgMsg]);
       if (!broadcastResult.txHash) {
@@ -348,6 +358,9 @@ export default function BuyOrgPage() {
         leader_wallet: setup.payload.leader_wallet,
         org_name: setup.payload.org_name,
         domain: setup.payload.domain,
+        description: descriptionValue,
+        tech_stack: techStackValue,
+        focus_areas: focusAreasValue,
         fee_model: setup.payload.fee_model,
         enc_envelope: setup.payload.enc_envelope,
         search_envelope: setup.payload.search_envelope,
@@ -372,6 +385,9 @@ export default function BuyOrgPage() {
       setConfirmOpen(false);
       setOrgName('');
       setDomain('');
+      setDescription('');
+      setTechStack('');
+      setFocusAreas('');
       void loadCurrentSlot();
 
       txConfirming(toastId, 'Create org');
@@ -412,7 +428,19 @@ export default function BuyOrgPage() {
     } finally {
       setSubmitting(false);
     }
-  }, [capReached, domain, identity, loadCurrentSlot, orgName, refreshOrgs, submitting, walletAddress]);
+  }, [
+    capReached,
+    description,
+    domain,
+    focusAreas,
+    identity,
+    loadCurrentSlot,
+    orgName,
+    refreshOrgs,
+    submitting,
+    techStack,
+    walletAddress,
+  ]);
 
   const handleCopyRecoveryPhrase = useCallback(async () => {
     if (!createdOrg?.recoveryPhrase) {
@@ -799,6 +827,7 @@ export default function BuyOrgPage() {
                     value={orgName}
                     onChange={(event) => setOrgName(event.target.value)}
                     placeholder="My Organization"
+                    maxLength={60}
                     className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
                   />
                 </div>
@@ -813,10 +842,60 @@ export default function BuyOrgPage() {
                     value={domain}
                     onChange={(event) => setDomain(event.target.value)}
                     placeholder="e.g. React, Next.js, TypeScript"
+                    maxLength={128}
                     className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
                   />
                   <p className="mt-1 text-xs text-wv-dim">This is your expertise domain, not a DNS host. Example: &ldquo;React, Next.js, TypeScript&rdquo;.</p>
                 </div>
+
+                <div>
+                  <label htmlFor="buy-org-description" className="block text-sm font-medium text-wv-text">
+                    Description
+                  </label>
+                  <input
+                    id="buy-org-description"
+                    type="text"
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                    placeholder="One or two sentences on what this org builds and cares about."
+                    maxLength={500}
+                    className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="buy-org-tech-stack" className="block text-sm font-medium text-wv-text">
+                    Tech Stack
+                  </label>
+                  <input
+                    id="buy-org-tech-stack"
+                    type="text"
+                    value={techStack}
+                    onChange={(event) => setTechStack(event.target.value)}
+                    placeholder="Go, Cosmos SDK, gRPC, TypeScript, Rust"
+                    maxLength={200}
+                    className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="buy-org-focus-areas" className="block text-sm font-medium text-wv-text">
+                    Focus Areas
+                  </label>
+                  <input
+                    id="buy-org-focus-areas"
+                    type="text"
+                    value={focusAreas}
+                    onChange={(event) => setFocusAreas(event.target.value)}
+                    placeholder="decay economics, PRE cryptography, prompt-injection defense"
+                    maxLength={200}
+                    className="mt-1 w-full rounded-[11px] border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
+                  />
+                </div>
+
+                <p className="sm:col-span-2 text-xs text-wv-dim">
+                  Optional profile fields guide keyword extraction and appear on your public org profile.
+                </p>
               </div>
 
               {showFaucetPrompt && (

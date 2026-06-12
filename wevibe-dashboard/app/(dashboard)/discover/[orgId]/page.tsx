@@ -73,6 +73,10 @@ export default function OrgDetailPage({ params }: PageProps) {
     );
   }
 
+  const orgDescription = org.description?.trim() ?? '';
+  const orgTechStack = org.tech_stack?.trim() ?? '';
+  const orgFocusAreas = org.focus_areas?.trim() ?? '';
+
   return (
     <div className="p-6">
       <Link href="/discover" className="text-wv-violet hover:underline mb-4 inline-block">← Back to Discover</Link>
@@ -90,6 +94,27 @@ export default function OrgDetailPage({ params }: PageProps) {
             <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Domain of Expertise</h3>
             <p className="text-wv-text text-sm">{org.domain}</p>
           </div>
+
+          {orgDescription && (
+            <div className="col-span-2">
+              <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Description</h3>
+              <p className="text-wv-text text-sm">{orgDescription}</p>
+            </div>
+          )}
+
+          {orgTechStack && (
+            <div className="col-span-2">
+              <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Tech Stack</h3>
+              <p className="text-wv-text text-sm">{orgTechStack}</p>
+            </div>
+          )}
+
+          {orgFocusAreas && (
+            <div className="col-span-2">
+              <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Focus Areas</h3>
+              <p className="text-wv-text text-sm">{orgFocusAreas}</p>
+            </div>
+          )}
 
           <div>
             <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Leader</h3>
