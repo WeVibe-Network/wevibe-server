@@ -27,6 +27,7 @@ import {
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
 import { useOrgContext } from '@/lib/org-context';
+import { toast } from 'sonner';
 
 type DecryptBatchItem = {
   id: string;
@@ -260,7 +261,6 @@ export default function ChainSubmitPage() {
   const [pendingChain, setPendingChain] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadDiagnostics, setLoadDiagnostics] = useState<LoadDiagnostic[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
@@ -331,7 +331,6 @@ export default function ChainSubmitPage() {
     if (!orgId) return;
 
     setLoading(true);
-    setError(null);
     setLoadDiagnostics([]);
 
     try {
@@ -437,7 +436,7 @@ export default function ChainSubmitPage() {
       setRemovedKeywordPills({});
       setLoadDiagnostics(diagnostics);
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setLoading(false);
     }
@@ -460,13 +459,12 @@ export default function ChainSubmitPage() {
     if (reviewKeywords.length === 0) return;
 
     setBusy('verify');
-    setError(null);
     setVerifyResults(null);
 
     try {
       const client = getMcpClient();
       if (client.state !== 'connected') {
-        setError('Connect to the MCP server to verify keywords.');
+        toast.error('Connect to the MCP server to verify keywords.');
         return;
       }
 
@@ -477,7 +475,7 @@ export default function ChainSubmitPage() {
         || submission.wrapped_dek_mod.length === 0
       ));
       if (missingPayload) {
-        setError(`Missing encrypted payload for ${missingPayload.submission_hash.slice(0, 12)}…; cannot verify.`);
+        toast.error(`Missing encrypted payload for ${missingPayload.submission_hash.slice(0, 12)}…; cannot verify.`);
         return;
       }
 
@@ -501,13 +499,13 @@ export default function ChainSubmitPage() {
         (submission) => !embedById.has(submission.submission_hash),
       );
       if (embedResults.length !== reviewKeywords.length || missingHashes.length > 0) {
-        setError(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`);
+        toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`);
         return;
       }
 
       const failed = embedResults.filter((r) => !r.vector || r.error);
       if (failed.length > 0) {
-        setError(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`);
+        toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`);
         return;
       }
 
@@ -525,11 +523,11 @@ export default function ChainSubmitPage() {
         setNotice('All keywords verified successfully.');
       } else {
         const firstError = results.find((result) => !result.passed && result.error)?.error;
-        setError(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.');
+        toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.');
       }
       await loadAll();
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -548,13 +546,12 @@ export default function ChainSubmitPage() {
       classified.filter((_, idx) => idx !== removeIndex),
     );
     if (nextClassified.length === 0) {
-      setError('Cannot remove the last classified keyword. Approve a suggestion first.');
+      toast.error('Cannot remove the last classified keyword. Approve a suggestion first.');
       return;
     }
 
     markKeywordPillRemoved(hash, removedPillKey);
     setBusy(hash);
-    setError(null);
     setNotice(null);
 
     try {
@@ -563,7 +560,7 @@ export default function ChainSubmitPage() {
       await loadAll();
     } catch (err) {
       unmarkKeywordPillRemoved(hash, removedPillKey);
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -579,12 +576,11 @@ export default function ChainSubmitPage() {
 
     const approved = suggestions[approveIndex];
     if (!approved) {
-      setError('Suggestion no longer available. Refresh and try again.');
+      toast.error('Suggestion no longer available. Refresh and try again.');
       return;
     }
 
     setBusy(hash);
-    setError(null);
     setNotice(null);
 
     try {
@@ -600,7 +596,7 @@ export default function ChainSubmitPage() {
       setNotice(`Approved “${approved.keyword}” for ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -617,7 +613,7 @@ export default function ChainSubmitPage() {
 
     const nextClassified = renormalizeClassifiedWeights(classified);
     if (nextClassified.length === 0) {
-      setError('Cannot dismiss suggestions while classified keywords are empty. Approve one first.');
+      toast.error('Cannot dismiss suggestions while classified keywords are empty. Approve one first.');
       return;
     }
 
@@ -625,7 +621,6 @@ export default function ChainSubmitPage() {
 
     markKeywordPillRemoved(hash, removedPillKey);
     setBusy(hash);
-    setError(null);
     setNotice(null);
 
     try {
@@ -634,7 +629,7 @@ export default function ChainSubmitPage() {
       await loadAll();
     } catch (err) {
       unmarkKeywordPillRemoved(hash, removedPillKey);
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -644,7 +639,6 @@ export default function ChainSubmitPage() {
     if (!orgId) return;
 
     setBusy(hash);
-    setError(null);
     setNotice(null);
 
     try {
@@ -652,7 +646,7 @@ export default function ChainSubmitPage() {
       setNotice(`Denied ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
-      setError((err as Error).message);
+      toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
@@ -666,12 +660,11 @@ export default function ChainSubmitPage() {
     const walletConnection = await connectWallet().catch(() => null);
     const walletAddress = walletConnection?.address ?? null;
     if (!walletAddress) {
-      setError('No wallet connected');
+      toast.error('No wallet connected');
       return;
     }
 
     setBusy('chain');
-    setError(null);
     setTxResult(null);
     setNotice(null);
 
@@ -718,10 +711,10 @@ export default function ChainSubmitPage() {
         setTxResult({ tx_hash: txHash, committed_count: prepared.batch.length });
         setNotice(null);
       } else {
-        setError('Chain submission failed: missing transaction hash');
+        toast.error('Chain submission failed: missing transaction hash');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      toast.error(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(null);
     }
@@ -832,12 +825,6 @@ export default function ChainSubmitPage() {
               {loading ? 'Retrying…' : 'Retry'}
             </button>
           </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
-          {error}
         </div>
       )}
 

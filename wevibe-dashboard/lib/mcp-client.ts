@@ -324,6 +324,10 @@ export class WeVibeMcpClient {
       ),
     );
 
+    if (result.isError === true) {
+      throw new Error(textBlock?.text || `Tool ${name} failed`);
+    }
+
     if (!textBlock?.text) {
       throw new Error(`Tool ${name} returned no text content`);
     }
