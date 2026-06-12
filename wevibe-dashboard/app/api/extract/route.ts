@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
@@ -18,6 +18,11 @@ const MCP_SESSION_TOKEN_PATH = path.join(
   homedir(),
   '.wevibe',
   'mcp-session-token',
+);
+const LAST_EXTRACTION_ERROR_PATH = path.join(
+  homedir(),
+  '.wevibe',
+  'last-extraction-error.json',
 );
 
 interface ExtractRequestBody {
@@ -44,6 +49,27 @@ async function readMcpSessionToken(): Promise<string | null> {
       return null;
     }
     throw error;
+  }
+}
+
+async function recordExtractionError(stage: string, status: number, message: string): Promise<void> {
+  try {
+    await writeFile(
+      LAST_EXTRACTION_ERROR_PATH,
+      JSON.stringify(
+        {
+          at: new Date().toISOString(),
+          stage,
+          status,
+          message,
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  } catch {
+    // best-effort observability only
   }
 }
 
@@ -390,10 +416,16 @@ export async function POST(request: NextRequest) {
         ? responseBody.error
         : `MCP extraction failed with status ${response.status}`;
 
+    await recordExtractionError('mcp_error', response.status, errorMessage);
     return NextResponse.json({ error: errorMessage }, { status: response.status });
   }
 
   if (!isRecord(responseBody) || !Array.isArray(responseBody.memories)) {
+    await recordExtractionError(
+      'invalid_payload',
+      502,
+      'MCP extraction returned invalid memory payload',
+    );
     return NextResponse.json(
       { error: 'MCP extraction returned invalid memory payload' },
       { status: 502 },
@@ -405,6 +437,11 @@ export async function POST(request: NextRequest) {
   for (const memory of memories) {
     const normalizedMemory = normalizeMemoryCandidate(memory);
     if (!normalizedMemory) {
+      await recordExtractionError(
+        'invalid_payload',
+        502,
+        'MCP extraction returned invalid memory payload',
+      );
       return NextResponse.json(
         { error: 'MCP extraction returned invalid memory payload' },
         { status: 502 },

@@ -109,9 +109,10 @@ async function runJob(job: ExtractionJob): Promise<void> {
 
     if (!response.ok) {
       let providerNotConfiguredMessage: string | null = null;
+      let payload: ExtractErrorBody | null = null;
 
       try {
-        const payload = (await response.json()) as ExtractErrorBody;
+        payload = (await response.json()) as ExtractErrorBody;
         if (payload.code === 'provider_not_configured') {
           providerNotConfiguredMessage = typeof payload.error === 'string' && payload.error.trim().length > 0
             ? payload.error
@@ -128,7 +129,12 @@ async function runJob(job: ExtractionJob): Promise<void> {
         return;
       }
 
-      throw new Error(`Extraction request failed with status ${response.status}`);
+      const errorMessage =
+        payload && typeof payload.error === 'string' && payload.error.trim().length > 0
+          ? payload.error
+          : `Extraction request failed with status ${response.status}`;
+
+      throw new Error(errorMessage);
     }
 
     const payload = (await response.json()) as Partial<ExtractResponseBody>;
@@ -144,9 +150,11 @@ async function runJob(job: ExtractionJob): Promise<void> {
       extractionMeta: payload.extraction_meta,
       createdAt: Date.now(),
     });
-  } catch {
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
     toast.error(`Extraction failed for session ${job.sessionId}`, {
-      duration: 4000,
+      description: reason,
+      duration: 8000,
     });
   } finally {
     jobs = jobs.filter((queuedJob) => queuedJob.sessionId !== job.sessionId);
