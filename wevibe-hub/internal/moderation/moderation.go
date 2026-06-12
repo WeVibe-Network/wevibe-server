@@ -174,10 +174,8 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 	               ps.ciphertext_hex, ps.wrapped_dek_mod,
 	               ps.stack_hint, ps.memory_type, ps.preference_confidence, ps.derivation, ps.created_at, ps.status,
                COALESCE(v.vote_count, 0) AS vote_count,
-               o.required_approvals,
                COALESCE(v.voter_pubkeys, ARRAY[]::TEXT[]) AS voter_pubkeys
         FROM pending_submissions ps
-        JOIN orgs o ON o.org_id = ps.org_id
         LEFT JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
         LEFT JOIN (
             SELECT org_id, submission_hash, COUNT(*) AS vote_count,
@@ -200,7 +198,7 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 			&item.SubmissionHash, &item.OrgID, &item.EpochID,
 			&item.ContributorPubkey, &item.ContributorWallet, &item.CiphertextHex, &item.WrappedDekMod,
 			&item.StackHint, &item.MemoryType, &item.PreferenceConfidence, &item.Derivation, &item.CreatedAt, &item.Status,
-			&item.Votes, &item.RequiredApprovals, &item.VoterPubkeys,
+			&item.Votes, &item.VoterPubkeys,
 		); err != nil {
 			return nil, err
 		}

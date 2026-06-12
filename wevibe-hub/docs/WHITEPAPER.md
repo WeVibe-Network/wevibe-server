@@ -25,7 +25,7 @@ WeVibe Hub is the managed Go API server that bridges wevibe-chain state, Postgre
 
 - Org creation, member invitation/ removal, epoch rotation, key envelope management.
 - Memory submission queue with Ed25519 contributor signature + hash verification.
-- Moderation quorum: configurable `required_approvals`, vote tracking, leader fast-path.
+- Moderation vote tracking: advisory moderator votes with leader-driven resolution.
 - Report intake API for Accept / Deny / Report plugin flow.
 - Vector + keyword memory retrieval with signed usage receipts.
 - Credit ledger with `CHECK (balance >= 0)` solvency enforcement.
@@ -50,8 +50,8 @@ WeVibe Hub is the managed Go API server that bridges wevibe-chain state, Postgre
 
 ## Sprint 24 Updates
 
-- Moderator quorum enforcement lives in hub: `approval_votes` table, `required_approvals` config, vote endpoint.
-- Org configuration surface exposes `required_approvals` via signed PATCH.
+- Moderator vote storage lives in hub: `submission_mod_votes` table + vote endpoint.
+- Org configuration surface exposes moderation toggles via signed PATCH.
 - Report intake API handles Accept / Deny / Report actions from OpenCode plugin.
 - Chain parity validation for `MsgGrantTrialAllowance` and moderator-signed approvals.
 

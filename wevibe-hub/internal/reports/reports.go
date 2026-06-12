@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
 var (
@@ -23,6 +24,8 @@ var (
 	}
 	defaultEscalationQuorum = 2
 )
+
+type ReportRecommendation = protocol.ReportRecommendation
 
 func normalizeReason(reason string) (string, error) {
 	reason = strings.ToLower(strings.TrimSpace(reason))
@@ -74,14 +77,6 @@ func List(ctx context.Context, pool *pgxpool.Pool, orgID string, status *string,
 		return nil, 0, err
 	}
 
-	var reportVoteThreshold int
-	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(report_vote_threshold, 1) FROM orgs WHERE org_id = $1
-	`, orgID).Scan(&reportVoteThreshold)
-	if err != nil {
-		reportVoteThreshold = 1
-	}
-
 	args = append(args, limit, offset)
 	listQuery := fmt.Sprintf(`
 		SELECT r.id, r.org_id, r.memory_cid, r.reporter_pubkey, r.reporter_wallet, r.reporter_role, r.reason, r.note,
@@ -107,7 +102,7 @@ func List(ctx context.Context, pool *pgxpool.Pool, orgID string, status *string,
 
 	var records []protocol.ReportRecord
 	for rows.Next() {
-		rec, err := scanReportWithVotes(rows, reportVoteThreshold)
+		rec, err := scanReportWithVotes(rows)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -121,14 +116,6 @@ func List(ctx context.Context, pool *pgxpool.Pool, orgID string, status *string,
 }
 
 func Get(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string) (*protocol.ReportRecord, error) {
-	var reportVoteThreshold int
-	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(report_vote_threshold, 1) FROM orgs WHERE org_id = $1
-	`, orgID).Scan(&reportVoteThreshold)
-	if err != nil {
-		reportVoteThreshold = 1
-	}
-
 	row := pool.QueryRow(ctx, `
 		SELECT r.id, r.org_id, r.memory_cid, r.reporter_pubkey, r.reporter_wallet, r.reporter_role, r.reason, r.note,
 		       r.status, r.resolution, r.resolved_by, r.resolved_at, r.escalation_votes, r.created_at, r.updated_at,
@@ -142,7 +129,51 @@ func Get(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string) (*prot
 		         r.status, r.resolution, r.resolved_by, r.resolved_at, r.escalation_votes, r.created_at, r.updated_at,
 		         m.dismissed_reports_count
 	`, orgID, reportID)
-	return scanReportWithVotes(row, reportVoteThreshold)
+	return scanReportWithVotes(row)
+}
+
+func GetReportRecommendations(ctx context.Context, pool *pgxpool.Pool, orgID string, reportIDs []string) (map[string][]ReportRecommendation, error) {
+	recommendations := make(map[string][]ReportRecommendation)
+	if len(reportIDs) == 0 {
+		return recommendations, nil
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT report_id, voter_pubkey, vote
+		FROM report_votes
+		WHERE org_id = $1 AND report_id = ANY($2)
+	`, orgID, reportIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var reportID string
+		var moderatorPubkey string
+		var vote string
+		if err := rows.Scan(&reportID, &moderatorPubkey, &vote); err != nil {
+			return nil, err
+		}
+
+		recommendations[reportID] = append(recommendations[reportID], ReportRecommendation{
+			ModeratorPubkey: moderatorPubkey,
+			Vote:            vote,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for reportID, reportRecommendations := range recommendations {
+		sort.Slice(reportRecommendations, func(i, j int) bool {
+			return reportRecommendations[i].ModeratorPubkey < reportRecommendations[j].ModeratorPubkey
+		})
+		recommendations[reportID] = reportRecommendations
+	}
+
+	return recommendations, nil
 }
 
 func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, actorPubkey, actorRole string, req protocol.UpdateReportRequest, quorum int) (*protocol.ReportRecord, error) {
@@ -157,14 +188,6 @@ func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, act
 		quorum = defaultEscalationQuorum
 	}
 
-	var reportVoteThreshold int
-	err := pool.QueryRow(ctx, `
-		SELECT COALESCE(report_vote_threshold, 1) FROM orgs WHERE org_id = $1
-	`, orgID).Scan(&reportVoteThreshold)
-	if err != nil {
-		reportVoteThreshold = 1
-	}
-
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -172,13 +195,13 @@ func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, act
 	defer tx.Rollback(ctx)
 
 	var (
-		currStatus      string
-		currResolution  sql.NullString
-		currResolvedBy  sql.NullString
-		currResolvedAt  sql.NullTime
-		escVotesJSON    []byte
-		currNote        sql.NullString
-		reporterPubkey  string
+		currStatus     string
+		currResolution sql.NullString
+		currResolvedBy sql.NullString
+		currResolvedAt sql.NullTime
+		escVotesJSON   []byte
+		currNote       sql.NullString
+		reporterPubkey string
 	)
 	row := tx.QueryRow(ctx, `
 		SELECT status, resolution, resolved_by, resolved_at, escalation_votes, note, reporter_pubkey
@@ -216,31 +239,14 @@ func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, act
 		if err != nil {
 			return nil, fmt.Errorf("insert vote: %w", err)
 		}
-
-		var upholdCount, dismissCount, dismissMalCount int
-		err = tx.QueryRow(ctx, `
-			SELECT
-				COUNT(*) FILTER (WHERE vote = 'uphold'),
-				COUNT(*) FILTER (WHERE vote = 'dismiss'),
-				COUNT(*) FILTER (WHERE vote = 'dismiss_malicious')
-			FROM report_votes WHERE org_id = $1 AND report_id = $2
-		`, orgID, reportID).Scan(&upholdCount, &dismissCount, &dismissMalCount)
-		if err != nil {
-			return nil, fmt.Errorf("count votes: %w", err)
-		}
-
-		if float64(upholdCount) >= float64(reportVoteThreshold)*0.5 {
-			resolution = "upheld"
-		} else if float64(dismissCount+dismissMalCount) >= float64(reportVoteThreshold)*0.5 {
-			resolution = "dismiss"
-			if vote == "dismiss_malicious" {
-				resolution = "dismissed_malicious"
-			}
-		}
 	}
 
 	if resolution == "" {
-		return getReportRecordTx(ctx, tx, orgID, reportID, reportVoteThreshold)
+		return getReportRecordTx(ctx, tx, orgID, reportID)
+	}
+
+	if actorRole != "leader" {
+		return nil, errors.New("forbidden: report resolution is leader only")
 	}
 
 	if resolution == "upheld" {
@@ -274,10 +280,10 @@ func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, act
 		return nil, err
 	}
 
-	return getReportRecord(ctx, pool, orgID, reportID, reportVoteThreshold)
+	return getReportRecord(ctx, pool, orgID, reportID)
 }
 
-func getReportRecord(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, reportVoteThreshold int) (*protocol.ReportRecord, error) {
+func getReportRecord(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string) (*protocol.ReportRecord, error) {
 	row := pool.QueryRow(ctx, `
 		SELECT r.id, r.org_id, r.memory_cid, r.reporter_pubkey, r.reporter_wallet, r.reporter_role, r.reason, r.note,
 		       r.status, r.resolution, r.resolved_by, r.resolved_at, r.escalation_votes, r.created_at, r.updated_at,
@@ -291,10 +297,10 @@ func getReportRecord(ctx context.Context, pool *pgxpool.Pool, orgID, reportID st
 		         r.status, r.resolution, r.resolved_by, r.resolved_at, r.escalation_votes, r.created_at, r.updated_at,
 		         m.dismissed_reports_count
 	`, orgID, reportID)
-	return scanReportWithVotes(row, reportVoteThreshold)
+	return scanReportWithVotes(row)
 }
 
-func getReportRecordTx(ctx context.Context, tx pgx.Tx, orgID, reportID string, reportVoteThreshold int) (*protocol.ReportRecord, error) {
+func getReportRecordTx(ctx context.Context, tx pgx.Tx, orgID, reportID string) (*protocol.ReportRecord, error) {
 	row := tx.QueryRow(ctx, `
 		SELECT r.id, r.org_id, r.memory_cid, r.reporter_pubkey, r.reporter_wallet, r.reporter_role, r.reason, r.note,
 		       r.status, r.resolution, r.resolved_by, r.resolved_at, r.escalation_votes, r.created_at, r.updated_at,
@@ -308,7 +314,7 @@ func getReportRecordTx(ctx context.Context, tx pgx.Tx, orgID, reportID string, r
 		         r.status, r.resolution, r.resolved_by, r.resolved_at, r.escalation_votes, r.created_at, r.updated_at,
 		         m.dismissed_reports_count
 	`, orgID, reportID)
-	return scanReportWithVotes(row, reportVoteThreshold)
+	return scanReportWithVotes(row)
 }
 
 func scanReport(row pgx.Row) (*protocol.ReportRecord, error) {
@@ -388,46 +394,46 @@ func scanReport(row pgx.Row) (*protocol.ReportRecord, error) {
 	}
 
 	return &protocol.ReportRecord{
-		ID:                   id,
-		OrgID:                orgID,
-		MemoryCID:            memoryCID,
-		ReporterPubkey:       reporterPubkey,
-		ReporterWallet:       wallet,
-		ReporterRole:         reporterRole,
-		Reason:               reason,
-		Note:                 note,
-		Status:               status,
-		Resolution:           resolution,
-		ResolvedBy:           resolvedBy,
-		ResolvedAt:           resolvedAt,
-		EscalationVotes:      votes,
-		VoteCount:            0,
-		ReportVoteThreshold:  1,
-		ReporterDismissedCount: 0,
-		CreatedAt:            createdAt,
-		UpdatedAt:            updatedAt,
+		ID:                       id,
+		OrgID:                    orgID,
+		MemoryCID:                memoryCID,
+		ReporterPubkey:           reporterPubkey,
+		ReporterWallet:           wallet,
+		ReporterRole:             reporterRole,
+		Reason:                   reason,
+		Note:                     note,
+		Status:                   status,
+		Resolution:               resolution,
+		ResolvedBy:               resolvedBy,
+		ResolvedAt:               resolvedAt,
+		EscalationVotes:          votes,
+		VoteCount:                0,
+		ModeratorRecommendations: []protocol.ReportRecommendation{},
+		ReporterDismissedCount:   0,
+		CreatedAt:                createdAt,
+		UpdatedAt:                updatedAt,
 	}, nil
 }
 
-func scanReportWithVotes(row pgx.Row, reportVoteThreshold int) (*protocol.ReportRecord, error) {
+func scanReportWithVotes(row pgx.Row) (*protocol.ReportRecord, error) {
 	var (
-		id                      string
-		orgID                   string
-		memoryCID               string
-		reporterPubkey          string
-		reporterWallet          sql.NullString
-		reporterRole            string
-		reason                  string
-		noteSQL                 sql.NullString
-		status                  string
-		resolutionSQL           sql.NullString
-		resolvedBySQL           sql.NullString
-		resolvedAtSQL           sql.NullTime
-		escVotesJSON            []byte
-		createdAt               time.Time
-		updatedAt               time.Time
-		voteCount               int
-		reporterDismissedCount  int
+		id                     string
+		orgID                  string
+		memoryCID              string
+		reporterPubkey         string
+		reporterWallet         sql.NullString
+		reporterRole           string
+		reason                 string
+		noteSQL                sql.NullString
+		status                 string
+		resolutionSQL          sql.NullString
+		resolvedBySQL          sql.NullString
+		resolvedAtSQL          sql.NullTime
+		escVotesJSON           []byte
+		createdAt              time.Time
+		updatedAt              time.Time
+		voteCount              int
+		reporterDismissedCount int
 	)
 
 	if err := row.Scan(
@@ -490,23 +496,23 @@ func scanReportWithVotes(row pgx.Row, reportVoteThreshold int) (*protocol.Report
 	}
 
 	return &protocol.ReportRecord{
-		ID:                   id,
-		OrgID:                orgID,
-		MemoryCID:            memoryCID,
-		ReporterPubkey:       reporterPubkey,
-		ReporterWallet:       wallet,
-		ReporterRole:         reporterRole,
-		Reason:               reason,
-		Note:                 note,
-		Status:               status,
-		Resolution:           resolution,
-		ResolvedBy:           resolvedBy,
-		ResolvedAt:           resolvedAt,
-		EscalationVotes:      votes,
-		VoteCount:            voteCount,
-		ReportVoteThreshold:  reportVoteThreshold,
-		ReporterDismissedCount: reporterDismissedCount,
-		CreatedAt:            createdAt,
-		UpdatedAt:            updatedAt,
+		ID:                       id,
+		OrgID:                    orgID,
+		MemoryCID:                memoryCID,
+		ReporterPubkey:           reporterPubkey,
+		ReporterWallet:           wallet,
+		ReporterRole:             reporterRole,
+		Reason:                   reason,
+		Note:                     note,
+		Status:                   status,
+		Resolution:               resolution,
+		ResolvedBy:               resolvedBy,
+		ResolvedAt:               resolvedAt,
+		EscalationVotes:          votes,
+		VoteCount:                voteCount,
+		ModeratorRecommendations: []protocol.ReportRecommendation{},
+		ReporterDismissedCount:   reporterDismissedCount,
+		CreatedAt:                createdAt,
+		UpdatedAt:                updatedAt,
 	}, nil
 }

@@ -186,15 +186,12 @@ Behavior:
 
 `POST /v1/orgs/{orgID}/submit` now returns additive `sanitization_findings` in the response body when findings exist, in addition to storing them in `pending_submissions.sanitization_findings`.
 
-### Moderation Quorum Metadata
+### Moderation Queue Metadata
 
-`GET /v1/orgs/{orgID}/moderation/queue` now includes quorum state for each pending item:
+`GET /v1/orgs/{orgID}/moderation/queue` now includes moderation vote metadata for each pending item:
 
 - `votes`
-- `required_approvals`
 - `voter_pubkeys`
-
-This is consumed by dashboard quorum voting UI for orgs with `required_approvals > 1`.
 
 ### Hub Org Creation (CO-023 update)
 
@@ -251,7 +248,7 @@ Only the **read-only** chain config endpoint remains:
 
 **Category A vs Category B (Decision C):**
 
-- **Category A** (off-chain mirror, hub-owned): `required_approvals`, `report_vote_threshold`. Written via `PATCH /v1/orgs/{orgID}/config` (handler: `UpdateOrgConfig`). The dashboard is responsible for any Category A chain-side broadcast directly via Keplr — the hub has no involvement.
+- **Category A** (off-chain mirror, hub-owned): `moderation_required`. Written via `PATCH /v1/orgs/{orgID}/config` (handler: `UpdateOrgConfig`). The dashboard is responsible for any Category A chain-side broadcast directly via Keplr — the hub has no involvement.
 - **Category B** (on-chain canonical): all fields listed above. Hub never writes these; the dashboard relays the appropriate `MsgSetOrgConfig` / `MsgSetRepTiers` through `POST /v1/relay/broadcast`.
 
 ### Moderation Submit with Trial Block (GAP-N9)
@@ -561,9 +558,9 @@ The `last_chain_submission_at` field is now updated by the ChainWatcher when `Ms
 
 **GET /v1/orgs/{orgID}/moderation/queue** now returns only `status = 'pending'` submissions.
 
-**Queue metadata (CO-265):** each queue item includes `votes`, `required_approvals`, and `voter_pubkeys` so clients can render quorum state.
+**Queue metadata (CO-265):** each queue item includes `votes` and `voter_pubkeys` so clients can render advisory voting state.
 
-**Vote endpoint:** `POST /v1/orgs/{orgID}/moderation/{submissionHash}/vote` casts a moderator/leader approval vote and returns `{ status, votes, required_approvals, ready }`.
+**Vote endpoint:** `POST /v1/orgs/{orgID}/moderation/{submissionHash}/vote` casts a moderator/leader approval vote and returns vote tallies `{ approve, flag }`.
 
 **ApproveSubmission handler (CO-238):**
 - Simplified to only change status to `pending_keyword` and record moderator
@@ -1076,8 +1073,6 @@ reporter_wallet TEXT         -- Cosmos bech32 wallet address of reporter
 note TEXT                    -- Free-text note (max 500 chars)
 -- members table addition
 dismissed_reports_count INTEGER DEFAULT 0  -- Incremented when report dismissed/malicious
--- orgs table addition
-report_vote_threshold INTEGER DEFAULT 1    -- Votes needed to resolve report
 -- new table
 CREATE TABLE report_votes (
     org_id          TEXT NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
@@ -1100,12 +1095,10 @@ CREATE TABLE report_votes (
 // Request
 { "vote": "uphold" | "dismiss" | "dismiss_malicious" }
 // Response
-{ "report_id": "uuid", "status": "pending" | "upheld_pending_tx", "votes_for": 1, "threshold": 1 }
+{ "vote_count_uphold": 1, "vote_count_dismiss": 0, "vote_count_dismiss_malicious": 0, "status": "pending" }
 ```
-- Voting threshold: `report_vote_threshold` org config (hub-enforced, NOT on-chain)
-- When uphold votes >= threshold: status → `upheld_pending_tx`, leader sees "Submit to Chain" button
-- When dismiss votes >= threshold: reporter's dismissed_reports_count incremented, status → `dismissed` or `dismissed_malicious`
-- Leader can override and resolve immediately
+- Report votes are advisory tallies stored in `report_votes`; no org-level quorum field is enforced.
+- Final resolution is applied through report resolution actions (`PATCH /v1/orgs/{orgID}/reports/{reportID}` / commit flow).
 
 **CommitReport endpoint (CO-233, CO-011a.4 Update):**
 ```json
@@ -1124,13 +1117,13 @@ CREATE TABLE report_votes (
 4. On TX confirmation, the ChainWatcher's `processReportBookkeeping` handler deletes the memory from Qdrant, marks `pending_submissions.banned = TRUE`, and sets the report status to `'upheld'`.
 5. On TX failure (non-confirmation), the watcher takes no action; status remains `'upheld_pending_tx'` and the memory is NOT deleted (atomic via watcher gating).
 
-**Security config changes (CO-233):** `PATCH /v1/orgs/{orgID}/config` for `required_approvals` and `report_vote_threshold` requires leader wallet `signArbitrary` signature (not Ed25519 delegate key).
+**Config changes:** `PATCH /v1/orgs/{orgID}/config` remains leader-only and uses `WeVibe-Signed` Ed25519 auth.
 
 **Wallet signature verification (`internal/verify/wallet_sig.go`, CO-233):**
 - `VerifyWalletSignature(walletAddress, signature, message []byte) error`
 - Verifies secp256k1 signatures produced by Cosmos wallet `signArbitrary`
 - Canonical message format: `{action}|{orgID}|{field1}|{field2}|...`
-- Used for: report commitment, security config changes
+- Used for: report commitment
 
 ## Observability Stack
 

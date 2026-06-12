@@ -35,19 +35,17 @@ func IsValidMemoryType(s string) bool {
 }
 
 type OrgInfo struct {
-	OrgID               string    `json:"org_id"`
-	OrgName             string    `json:"org_name"`
-	Domain              string    `json:"domain"`
-	LeaderPubkey        string    `json:"leader_pubkey"`
-	CurrentEpoch        int       `json:"current_epoch"`
-	EgressMode          string    `json:"egress_mode"`
-	AllowedProviders    []string  `json:"allowed_providers"`
-	Status              string    `json:"status"`
-	RotationStatus      string    `json:"rotation_status"`
-	RequiredApprovals   int       `json:"required_approvals"`
-	ReportVoteThreshold int       `json:"report_vote_threshold"`
-	ModerationRequired  bool      `json:"moderation_required"`
-	CreatedAt           time.Time `json:"created_at"`
+	OrgID              string    `json:"org_id"`
+	OrgName            string    `json:"org_name"`
+	Domain             string    `json:"domain"`
+	LeaderPubkey       string    `json:"leader_pubkey"`
+	CurrentEpoch       int       `json:"current_epoch"`
+	EgressMode         string    `json:"egress_mode"`
+	AllowedProviders   []string  `json:"allowed_providers"`
+	Status             string    `json:"status"`
+	RotationStatus     string    `json:"rotation_status"`
+	ModerationRequired bool      `json:"moderation_required"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type DiscoverOrg struct {
@@ -194,7 +192,6 @@ type PendingQueueItem struct {
 	CreatedAt              time.Time `json:"created_at"`
 	Status                 string    `json:"status"`
 	Votes                  int       `json:"votes"`
-	RequiredApprovals      int       `json:"required_approvals"`
 	VoterPubkeys           []string  `json:"voter_pubkeys,omitempty"`
 }
 
@@ -443,25 +440,30 @@ type EscalationVote struct {
 	VotedAt time.Time `json:"voted_at"`
 }
 
+type ReportRecommendation struct {
+	ModeratorPubkey string `json:"moderator_pubkey"`
+	Vote            string `json:"vote"`
+}
+
 type ReportRecord struct {
-	ID                     string           `json:"id"`
-	OrgID                  string           `json:"org_id"`
-	MemoryCID              string           `json:"memory_cid"`
-	ReporterPubkey         string           `json:"reporter_pubkey"`
-	ReporterWallet         *string          `json:"reporter_wallet,omitempty"`
-	ReporterRole           string           `json:"reporter_role"`
-	Reason                 string           `json:"reason"`
-	Note                   *string          `json:"note,omitempty"`
-	Status                 string           `json:"status"`
-	Resolution             *string          `json:"resolution,omitempty"`
-	ResolvedBy             *string          `json:"resolved_by,omitempty"`
-	ResolvedAt             *time.Time       `json:"resolved_at,omitempty"`
-	EscalationVotes        []EscalationVote `json:"escalation_votes"`
-	VoteCount              int              `json:"vote_count"`
-	ReportVoteThreshold    int              `json:"report_vote_threshold"`
-	ReporterDismissedCount int              `json:"reporter_dismissed_count"`
-	CreatedAt              time.Time        `json:"created_at"`
-	UpdatedAt              time.Time        `json:"updated_at"`
+	ID                       string                 `json:"id"`
+	OrgID                    string                 `json:"org_id"`
+	MemoryCID                string                 `json:"memory_cid"`
+	ReporterPubkey           string                 `json:"reporter_pubkey"`
+	ReporterWallet           *string                `json:"reporter_wallet,omitempty"`
+	ReporterRole             string                 `json:"reporter_role"`
+	Reason                   string                 `json:"reason"`
+	Note                     *string                `json:"note,omitempty"`
+	Status                   string                 `json:"status"`
+	Resolution               *string                `json:"resolution,omitempty"`
+	ResolvedBy               *string                `json:"resolved_by,omitempty"`
+	ResolvedAt               *time.Time             `json:"resolved_at,omitempty"`
+	EscalationVotes          []EscalationVote       `json:"escalation_votes"`
+	VoteCount                int                    `json:"vote_count"`
+	ModeratorRecommendations []ReportRecommendation `json:"moderator_recommendations"`
+	ReporterDismissedCount   int                    `json:"reporter_dismissed_count"`
+	CreatedAt                time.Time              `json:"created_at"`
+	UpdatedAt                time.Time              `json:"updated_at"`
 }
 
 type UpdateReportRequest struct {
@@ -479,7 +481,6 @@ type VoteOnReportResponse struct {
 	VoteCountUphold     int    `json:"vote_count_uphold"`
 	VoteCountDismiss    int    `json:"vote_count_dismiss"`
 	VoteCountDismissMal int    `json:"vote_count_dismiss_malicious"`
-	Threshold           int    `json:"threshold"`
 	Status              string `json:"status"`
 }
 

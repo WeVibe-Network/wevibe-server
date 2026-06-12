@@ -12,15 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/reports"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/reports"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
 const (
@@ -39,9 +38,9 @@ var (
 	}
 
 	allowedReportStatuses = map[string]struct{}{
-		"pending":          {},
-		"upheld":           {},
-		"dismissed":        {},
+		"pending":             {},
+		"upheld":              {},
+		"dismissed":           {},
 		"dismissed_malicious": {},
 	}
 
@@ -198,6 +197,24 @@ func ListReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reportIDs := make([]string, 0, len(records))
+	for _, record := range records {
+		reportIDs = append(reportIDs, record.ID)
+	}
+
+	recommendationsByReport, err := reports.GetReportRecommendations(r.Context(), pool, orgID, reportIDs)
+	if err != nil {
+		http.Error(w, errorJSON("internal error"), http.StatusInternalServerError)
+		return
+	}
+
+	for idx := range records {
+		records[idx].ModeratorRecommendations = []protocol.ReportRecommendation{}
+		if recommendations, ok := recommendationsByReport[records[idx].ID]; ok {
+			records[idx].ModeratorRecommendations = recommendations
+		}
+	}
+
 	writeJSON(w, http.StatusOK, protocol.ReportListResponse{Reports: records, Total: total})
 }
 
@@ -277,9 +294,6 @@ func UpdateReport(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid vote"}`, http.StatusBadRequest)
 			return
 		}
-		if resolution == "" {
-			resolution = vote
-		}
 	} else if resolution != "" {
 		validResolutions := map[string]struct{}{
 			"upheld":              {},
@@ -292,15 +306,7 @@ func UpdateReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var reportVoteThreshold int
-	err = pool.QueryRow(r.Context(), `
-		SELECT COALESCE(report_vote_threshold, 1) FROM orgs WHERE org_id = $1
-	`, orgID).Scan(&reportVoteThreshold)
-	if err != nil {
-		reportVoteThreshold = 1
-	}
-
-	rec, err := reports.Update(r.Context(), pool, orgID, reportID, actorPubkey, actorRole, req, reportVoteThreshold)
+	rec, err := reports.Update(r.Context(), pool, orgID, reportID, actorPubkey, actorRole, req, 0)
 	if err != nil {
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
@@ -358,19 +364,6 @@ func VoteOnReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var reportVoteThreshold int
-	err = pool.QueryRow(r.Context(), `
-		SELECT COALESCE(report_vote_threshold, 1) FROM orgs WHERE org_id = $1
-	`, orgID).Scan(&reportVoteThreshold)
-	if err != nil {
-		reportVoteThreshold = 1
-	}
-
-	epoch, err := orgs.GetCurrentEpoch(r.Context(), pool, orgID)
-	if err != nil {
-		epoch = 0
-	}
-
 	tx, err := pool.Begin(r.Context())
 	if err != nil {
 		http.Error(w, errorJSON("internal error"), http.StatusInternalServerError)
@@ -379,16 +372,11 @@ func VoteOnReport(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 
 	var currentStatus string
-	var memoryCID string
-	var reporterPubkey string
-	var reporterWallet *string
-	var reason string
-	var note *string
 	err = tx.QueryRow(r.Context(), `
-		SELECT status, memory_cid, reporter_pubkey, reporter_wallet, reason, note
+		SELECT status
 		FROM reports WHERE org_id = $1 AND id = $2
 		FOR UPDATE
-	`, orgID, reportID).Scan(&currentStatus, &memoryCID, &reporterPubkey, &reporterWallet, &reason, &note)
+	`, orgID, reportID).Scan(&currentStatus)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, `{"error":"report not found"}`, http.StatusNotFound)
@@ -427,45 +415,10 @@ func VoteOnReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]any{
-		"vote_count_uphold":              upholdCount,
-		"vote_count_dismiss":             dismissCount,
-		"vote_count_dismiss_malicious":   dismissMalCount,
-		"threshold":                      reportVoteThreshold,
-		"status":                         currentStatus,
-	}
-
-	if float64(upholdCount) >= float64(reportVoteThreshold) {
-		rec := &reportRecordForResolution{
-			ID:             reportID,
-			MemoryCID:      memoryCID,
-			ReporterPubkey: reporterPubkey,
-			ReporterWallet: reporterWallet,
-			Reason:         reason,
-			Note:           note,
-		}
-		if resolveErr := resolveReportUpheld(r.Context(), tx, orgID, reportID, rec, epoch); resolveErr != nil {
-			http.Error(w, errorJSON("resolution failed: "+resolveErr.Error()), http.StatusInternalServerError)
-			return
-		}
-		response["status"] = "upheld"
-	} else if float64(dismissCount+dismissMalCount) >= float64(reportVoteThreshold) {
-		resolution := "dismissed"
-		if dismissMalCount > 0 {
-			resolution = "dismissed_malicious"
-		}
-		rec := &reportRecordForResolution{
-			ID:             reportID,
-			MemoryCID:      memoryCID,
-			ReporterPubkey: reporterPubkey,
-			ReporterWallet: reporterWallet,
-			Reason:         reason,
-			Note:           note,
-		}
-		if resolveErr := resolveReportDismissed(r.Context(), tx, orgID, reportID, rec, resolution); resolveErr != nil {
-			http.Error(w, errorJSON("resolution failed: "+resolveErr.Error()), http.StatusInternalServerError)
-			return
-		}
-		response["status"] = resolution
+		"vote_count_uphold":            upholdCount,
+		"vote_count_dismiss":           dismissCount,
+		"vote_count_dismiss_malicious": dismissMalCount,
+		"status":                       currentStatus,
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
@@ -655,9 +608,9 @@ func CommitReport(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	var req struct {
-		TxHash         string `json:"tx_hash"`
-		Reason         string `json:"reason"`
-		WalletPubkey   []byte `json:"wallet_pubkey"`
+		TxHash          string `json:"tx_hash"`
+		Reason          string `json:"reason"`
+		WalletPubkey    []byte `json:"wallet_pubkey"`
 		WalletSignature []byte `json:"wallet_signature"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -740,7 +693,7 @@ func CommitReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"status":   "upheld",
-		"tx_hash":  req.TxHash,
+		"status":  "upheld",
+		"tx_hash": req.TxHash,
 	})
 }

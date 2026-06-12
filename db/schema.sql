@@ -34,10 +34,8 @@ CREATE TABLE IF NOT EXISTS orgs (
     fee_model                   JSONB       NOT NULL DEFAULT '{}',
     egress_mode                 TEXT        NOT NULL DEFAULT 'unrestricted'
                                         CHECK (egress_mode IN ('local_only', 'allowlist', 'unrestricted')),
-    required_approvals         INTEGER     NOT NULL DEFAULT 1 CHECK (required_approvals >= 1),
     moderation_required        BOOLEAN     NOT NULL DEFAULT FALSE,
     report_ban_threshold        INTEGER     NOT NULL DEFAULT 3 CHECK (report_ban_threshold >= 1),
-    report_vote_threshold       INTEGER     NOT NULL DEFAULT 1 CHECK (report_vote_threshold >= 1),
     allowed_providers           TEXT[]      NOT NULL DEFAULT '{}',
     status                      TEXT        NOT NULL DEFAULT 'active'
                                         CHECK (status IN ('active', 'suspended', 'closed')),

@@ -134,7 +134,7 @@ The canonical chain client is `GrpcClient` (gRPC only). There is no CometBFT RPC
 
 ## Sprint 24 Updates
 
-- Moderator quorum: `approval_votes` table, `required_approvals` on `orgs`, vote endpoints.
+- Moderator vote storage: `submission_mod_votes` table and vote endpoints.
 - Report API: Accept / Deny / Report flow via `/api/v1/orgs/{orgID}/reports`.
 - Chain parity via `GrpcClient` for moderator approvals and fee grant validation.
 

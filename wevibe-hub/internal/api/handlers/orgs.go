@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
@@ -364,83 +362,16 @@ func UpdateOrgConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		RequiredApprovals   *int   `json:"required_approvals"`
-		ReportVoteThreshold *int   `json:"report_vote_threshold"`
-		ModerationRequired  *bool  `json:"moderation_required"`
-		WalletPubkey        []byte `json:"wallet_pubkey"`
-		WalletSignature     []byte `json:"wallet_signature"`
+		ModerationRequired *bool `json:"moderation_required"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
 
-	if req.RequiredApprovals == nil && req.ReportVoteThreshold == nil && req.ModerationRequired == nil {
+	if req.ModerationRequired == nil {
 		http.Error(w, `{"error":"at least one config field required"}`, http.StatusBadRequest)
 		return
-	}
-
-	securityFieldsChanged := false
-	if req.RequiredApprovals != nil || req.ReportVoteThreshold != nil {
-		securityFieldsChanged = true
-	}
-
-	if securityFieldsChanged {
-		leaderWallet, walletErr := getLeaderWallet(r.Context(), pool, orgID)
-		if walletErr != nil || leaderWallet == "" {
-			http.Error(w, `{"error":"no wallet address on file for leader"}`, http.StatusForbidden)
-			return
-		}
-
-		if len(req.WalletPubkey) == 0 || len(req.WalletSignature) == 0 {
-			http.Error(w, `{"error":"wallet signature required for security config changes"}`, http.StatusUnauthorized)
-			return
-		}
-
-		updates := map[string]interface{}{}
-		if req.RequiredApprovals != nil {
-			updates["required_approvals"] = *req.RequiredApprovals
-		}
-		if req.ReportVoteThreshold != nil {
-			updates["report_vote_threshold"] = *req.ReportVoteThreshold
-		}
-		canonicalMsg := verify.BuildConfigUpdateCanonicalMessage(orgID, updates)
-		if sigErr := verify.VerifyCosmosArbitrarySignature(leaderWallet, []byte(canonicalMsg), req.WalletPubkey, req.WalletSignature); sigErr != nil {
-			http.Error(w, `{"error":"wallet signature verification failed"}`, http.StatusUnauthorized)
-			return
-		}
-	}
-
-	if req.RequiredApprovals != nil && *req.RequiredApprovals < 1 {
-		http.Error(w, `{"error":"required_approvals must be >= 1"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.ReportVoteThreshold != nil && *req.ReportVoteThreshold < 1 {
-		http.Error(w, `{"error":"report_vote_threshold must be >= 1"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.RequiredApprovals != nil {
-		if err := orgs.UpdateRequiredApprovals(r.Context(), pool, orgID, *req.RequiredApprovals); err != nil {
-			if strings.Contains(err.Error(), "org not found") {
-				http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
-				return
-			}
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-	}
-
-	if req.ReportVoteThreshold != nil {
-		if err := orgs.UpdateReportVoteThreshold(r.Context(), pool, orgID, *req.ReportVoteThreshold); err != nil {
-			if strings.Contains(err.Error(), "org not found") {
-				http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
-				return
-			}
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
 	}
 
 	if req.ModerationRequired != nil {
@@ -456,32 +387,10 @@ func UpdateOrgConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{}
-	if req.RequiredApprovals != nil {
-		resp["required_approvals"] = *req.RequiredApprovals
-	}
-	if req.ReportVoteThreshold != nil {
-		resp["report_vote_threshold"] = *req.ReportVoteThreshold
-	}
 	if req.ModerationRequired != nil {
 		resp["moderation_required"] = *req.ModerationRequired
 	}
 	json.NewEncoder(w).Encode(resp)
-}
-
-func getLeaderWallet(ctx context.Context, pool *pgxpool.Pool, orgID string) (string, error) {
-	var wallet *string
-	err := pool.QueryRow(ctx, `
-		SELECT m.wallet_address FROM members m
-		JOIN orgs o ON o.org_id = m.org_id AND o.leader_pubkey = m.pubkey
-		WHERE m.org_id = $1 AND m.active = true
-	`, orgID).Scan(&wallet)
-	if err != nil {
-		return "", err
-	}
-	if wallet != nil {
-		return *wallet, nil
-	}
-	return "", nil
 }
 
 func GetEpochManifest(w http.ResponseWriter, r *http.Request) {
