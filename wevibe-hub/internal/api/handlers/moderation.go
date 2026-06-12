@@ -8,15 +8,11 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -757,7 +753,7 @@ func DenySubmission(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "denied"})
 }
 
-func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
+func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -795,10 +791,6 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
 		return
 	}
-	if chainClient == nil {
-		http.Error(w, `{"error":"chain client unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
 
 	rows, err := pool.Query(r.Context(), `
 		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.wrapped_dek_mod,
@@ -816,9 +808,23 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type batchResult struct {
-		SubmissionHash string `json:"submission_hash"`
-		Error          string `json:"error,omitempty"`
+	type preparedBatchMemory struct {
+		SubmissionHash    string   `json:"submission_hash"`
+		ContributorPubkey string   `json:"contributor_pubkey"`
+		ContributorWallet string   `json:"contributor_wallet"`
+		CommittingLeader  string   `json:"committing_leader"`
+		Keywords          []string `json:"keywords"`
+		MemoryType        string   `json:"memory_type"`
+		PlaintextHash     string   `json:"plaintext_hash"`
+		Salt              string   `json:"salt"`
+		CiphertextHash    string   `json:"ciphertext_hash"`
+		ContributorSig    string   `json:"contributor_sig"`
+		EncryptedBlob     string   `json:"encrypted_blob"`
+		WrappedDekEnc     string   `json:"wrapped_dek_enc"`
+	}
+	type prepareBatchResponse struct {
+		Batch        []preparedBatchMemory `json:"batch"`
+		Verification string                `json:"verification"`
 	}
 	type classifiedKeyword struct {
 		Keyword string  `json:"keyword"`
@@ -828,8 +834,7 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		Classified []classifiedKeyword `json:"classified"`
 	}
 
-	memories := make([]chain.BatchMemory, 0)
-	results := make([]batchResult, 0)
+	batch := make([]preparedBatchMemory, 0)
 
 	decodeHex := func(fieldName, fieldValue string) ([]byte, error) {
 		decoded, decodeErr := hex.DecodeString(fieldValue)
@@ -950,7 +955,7 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		keywords := make([]*memorytypes.KeywordWeight, 0, len(payload.Classified))
+		keywords := make([]string, 0, len(payload.Classified))
 		seenKeywords := make(map[string]struct{}, len(payload.Classified))
 		var weightSum float64
 		for _, kw := range payload.Classified {
@@ -969,34 +974,27 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			weightSum += kw.Weight
-			keywords = append(keywords, &memorytypes.KeywordWeight{
-				Keyword: keyword,
-				Weight:  strconv.FormatFloat(kw.Weight, 'f', -1, 64),
-			})
+			keywords = append(keywords, keyword)
 		}
 		if math.Abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
 			http.Error(w, `{"error":"classified keyword weights must sum to 1"}`, http.StatusBadRequest)
 			return
 		}
 
-		submissionHash := hex.EncodeToString(contentHashBytes)
-		memories = append(memories, chain.BatchMemory{
-			ContentHash:         contentHashBytes,
-			PlaintextHash:       plaintextHashBytes,
-			Salt:                saltBytes,
-			CiphertextHash:      ciphertextHashBytes,
-			ContributorSig:      contributorSigBytes,
-			ContributorPubkey:   contributor,
-			CommittingLeader:    signed.Pubkey,
-			Keywords:            keywords,
-			ContributorID:       contributor,
-			ContributorWallet:   walletAddress,
-			EncryptedBlob:       ciphertextBytes,
-			WrappedDekEnc:       wrappedDekEncBytes,
-			SubmittedMemoryType: memoryType,
-			ApprovedMemoryType:  memoryType,
+		batch = append(batch, preparedBatchMemory{
+			SubmissionHash:    hash,
+			ContributorPubkey: contributor,
+			ContributorWallet: walletAddress,
+			CommittingLeader:  signed.Pubkey,
+			Keywords:          keywords,
+			MemoryType:        memoryType,
+			PlaintextHash:     plaintextHash,
+			Salt:              salt,
+			CiphertextHash:    ciphertextHash,
+			ContributorSig:    contributorSig,
+			EncryptedBlob:     ciphertext,
+			WrappedDekEnc:     wrappedDekMod,
 		})
-		results = append(results, batchResult{SubmissionHash: submissionHash})
 	}
 
 	if err := rows.Err(); err != nil {
@@ -1004,44 +1002,9 @@ func BatchSubmitToChain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(memories) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"submitted": 0,
-			"failed":    0,
-			"results":   []batchResult{},
-		})
-		return
-	}
-
-	faucetURL := os.Getenv("FAUCET_URL")
-	txHash, submittedHashes, submitErr := chainClient.SubmitMemoryBatchAtomic(r.Context(), pool, faucetURL, orgID, memories)
-	if submitErr != nil {
-		failureResults := make([]batchResult, 0, len(results))
-		for _, item := range results {
-			failureResults = append(failureResults, batchResult{SubmissionHash: item.SubmissionHash, Error: submitErr.Error()})
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]any{
-			"submitted": 0,
-			"failed":    len(failureResults),
-			"results":   failureResults,
-		})
-		return
-	}
-
-	successResults := make([]batchResult, 0, len(submittedHashes))
-	for _, submissionHash := range submittedHashes {
-		successResults = append(successResults, batchResult{SubmissionHash: submissionHash})
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"submitted": len(successResults),
-		"failed":    len(memories) - len(successResults),
-		"results":   successResults,
-		"tx_hash":   txHash,
+	json.NewEncoder(w).Encode(prepareBatchResponse{
+		Batch:        batch,
+		Verification: "passed",
 	})
 }

@@ -253,7 +253,7 @@ func main() {
 			r.Post("/moderation/{submissionHash}/approve", handlers.ApproveSubmission)
 			r.Post("/moderation/{submissionHash}/deny", handlers.DenySubmission)
 			r.Post("/submissions/{submissionHash}/keyword-vote", handlers.VoteOnKeyword)
-			r.Post("/moderation/batch-submit", handlers.BatchSubmitToChain)
+			r.Post("/moderation/batch-submit", handlers.PrepareBatchForChain)
 
 			r.Post("/serves", handlers.RecordServeEvent)
 			r.Post("/denials", handlers.RecordDenialEvent)
