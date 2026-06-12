@@ -64,12 +64,8 @@ export default function SettingsPage() {
   const isLeader = activeOrg?.role === 'leader';
   const [moderationRequired, setModerationRequired] = useState(false);
   const [savingModerationRequired, setSavingModerationRequired] = useState(false);
-  const [requiredApprovals, setRequiredApprovals] = useState<number>(1);
-  const [reportVoteThreshold, setReportVoteThreshold] = useState<number>(1);
   const [configLoading, setConfigLoading] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
-  const [configSuccess, setConfigSuccess] = useState<string | null>(null);
-  const [savingConfig, setSavingConfig] = useState(false);
   const [chainConfigLoading, setChainConfigLoading] = useState(false);
   const [chainConfigError, setChainConfigError] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);
@@ -130,14 +126,11 @@ export default function SettingsPage() {
     let cancelled = false;
     setConfigLoading(true);
     setConfigError(null);
-    setConfigSuccess(null);
 
     void Promise.all([getOrg(activeOrg.org_id), getHubServingAddress(), getHubResponsePubkey()])
       .then(([summary, fallbackServingAddress, fallbackResponsePubkey]) => {
         if (cancelled) return;
 
-        setRequiredApprovals(summary.required_approvals ?? 1);
-        setReportVoteThreshold(summary.report_vote_threshold ?? 1);
         setModerationRequired(summary.moderation_required ?? false);
 
         const summaryServingAddress = summary.hub_serving_address ?? summary.hub_serving_key_address;
@@ -301,7 +294,6 @@ export default function SettingsPage() {
 
     setSavingModerationRequired(true);
     setConfigError(null);
-    setConfigSuccess(null);
 
     try {
       await setOrgModerationRequired(activeOrg.org_id, nextValue);
@@ -318,42 +310,6 @@ export default function SettingsPage() {
       setSavingModerationRequired(false);
     }
   }, [activeOrg, moderationRequired]);
-
-  const handleConfigSave = useCallback(async () => {
-    if (!activeOrg) {
-      return;
-    }
-
-    if (requiredApprovals < 1) {
-      setConfigError('Required approvals must be at least 1');
-      return;
-    }
-    if (reportVoteThreshold < 1) {
-      setConfigError('Report vote threshold must be at least 1');
-      return;
-    }
-    setSavingConfig(true);
-    setConfigError(null);
-    setConfigSuccess(null);
-    try {
-      const walletConn = await connectWallet();
-      const msgSetOrgConfig = buildSetOrgConfigMsg(
-        walletConn.address,
-        activeOrg.org_id,
-        false,
-        0,
-        0,
-      );
-
-      const orgAccount = await resolveOrgAccountForGas();
-      const result = await directBroadcast(walletConn.address, [msgSetOrgConfig], orgAccount);
-      setConfigSuccess(`Moderation settings updated. Tx: ${result.txHash.slice(0, 16)}...`);
-    } catch (err) {
-      setConfigError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSavingConfig(false);
-    }
-  }, [activeOrg, reportVoteThreshold, requiredApprovals, resolveOrgAccountForGas]);
 
   const handleChainConfigSave = useCallback(async (nextServeAttestationRequired: boolean) => {
     if (!activeOrg) {
@@ -382,7 +338,8 @@ export default function SettingsPage() {
       setServeAttestationRequired(nextServeAttestationRequired);
       txSuccess(
         toastId,
-        `${nextServeAttestationRequired ? 'Serve attestations enabled' : 'Serve attestations disabled'}. Tx: ${result.txHash.slice(0, 16)}...`,
+        `${nextServeAttestationRequired ? 'Serve attestations enabled' : 'Serve attestations disabled'}.`,
+        result.txHash,
       );
     } catch (err) {
       txError(toastId, err instanceof Error ? err.message : String(err));
@@ -402,12 +359,15 @@ export default function SettingsPage() {
       return;
     }
 
+    const toastId = txToast('Serving key');
+
     setSavingServingKey(true);
     setHubInfraError(null);
     setHubInfraSuccess(null);
 
     try {
       const walletConn = await connectWallet();
+      txConfirming(toastId, 'Serving key');
       const msgSetServingKey = buildSetServingKeyMsg(
         walletConn.address,
         activeOrg.org_id,
@@ -419,9 +379,12 @@ export default function SettingsPage() {
       setHubServingAddress(nextServingKey);
       setShowServingKeyEditor(false);
       setNewServingKey('');
-      setHubInfraSuccess(`Serving key updated. Tx: ${result.txHash.slice(0, 16)}...`);
+      setHubInfraSuccess('Serving key updated.');
+      txSuccess(toastId, 'Serving key updated.', result.txHash);
     } catch (err) {
-      setHubInfraError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setHubInfraError(message);
+      txError(toastId, message);
     } finally {
       setSavingServingKey(false);
     }
@@ -476,12 +439,15 @@ export default function SettingsPage() {
       return;
     }
 
+    const toastId = txToast('Serving info');
+
     setSavingServingInfo(true);
     setHubServingInfoError(null);
     setHubServingInfoSuccess(null);
 
     try {
       const walletConn = await connectWallet();
+      txConfirming(toastId, 'Serving info');
       const msgSetServingInfo = buildSetServingInfoMsg(
         walletConn.address,
         activeOrg.org_id,
@@ -496,9 +462,12 @@ export default function SettingsPage() {
       setShowServingInfoEditor(false);
       setNewHubEndpoints(normalizedEndpoints);
       setNewHubResponsePubkey(normalizedResponsePubkey);
-      setHubServingInfoSuccess(`Serving info updated. Tx: ${result.txHash.slice(0, 16)}...`);
+      setHubServingInfoSuccess('Serving info updated.');
+      txSuccess(toastId, 'Serving info updated.', result.txHash);
     } catch (err) {
-      setHubServingInfoError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setHubServingInfoError(message);
+      txError(toastId, message);
     } finally {
       setSavingServingInfo(false);
     }
@@ -654,12 +623,11 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold text-wv-text">Moderation Configuration</h2>
               <InfoTooltip label="About moderation configuration">
-                How many moderator approvals a memory needs, and the votes needed to action a report.
+                Whether appointed moderators review submissions before leader approval.
               </InfoTooltip>
             </div>
             <p className="mt-1 text-sm text-wv-dim">
-              Control how many moderator votes are required before a memory moves to the approval batch.
-              Org leaders can always approve immediately.
+              Control whether moderator recommendations are enabled before leader approval.
             </p>
 
             <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
@@ -684,93 +652,11 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
-              <span>🔐</span>
-              <span>Changes to Required Approvals and Report Vote Threshold require wallet signature.</span>
-            </div>
-
             {configError && (
               <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
                 {configError}
               </div>
             )}
-
-            {configSuccess && (
-              <div className="mt-4 rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-3 py-2 text-sm text-wv-green">
-                {configSuccess}
-              </div>
-            )}
-
-            <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
-              <div className="sm:max-w-xs">
-                <label htmlFor="required-approvals" className="flex items-center gap-2 text-sm font-medium text-wv-text">
-                  <span>Moderator Approvals Required</span>
-                  <InfoTooltip label="About approval requirements">
-                    How many moderator approvals a memory needs before it can advance.
-                  </InfoTooltip>
-                </label>
-                <input
-                  id="required-approvals"
-                  data-testid="required-approvals-input"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={requiredApprovals}
-                  onChange={event => {
-                    const next = Number(event.target.value);
-                    if (Number.isNaN(next)) {
-                      setRequiredApprovals(1);
-                      return;
-                    }
-                    setRequiredApprovals(Math.min(10, Math.max(1, next)));
-                  }}
-                  disabled={configLoading || savingConfig || !orgLoaded}
-                  className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                />
-                <p className="mt-2 text-xs text-wv-dim">
-                  Set between 1 and 10. Moderator votes are tracked off-chain in the hub.
-                </p>
-              </div>
-
-              <div className="sm:max-w-xs">
-                <label htmlFor="report-vote-threshold" className="flex items-center gap-2 text-sm font-medium text-wv-text">
-                  <span>Report Vote Threshold</span>
-                  <InfoTooltip label="About report vote threshold">
-                    Votes needed to action a report.
-                  </InfoTooltip>
-                </label>
-                <input
-                  id="report-vote-threshold"
-                  data-testid="report-vote-threshold-input"
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={reportVoteThreshold}
-                  onChange={event => {
-                    const next = Number(event.target.value);
-                    if (Number.isNaN(next)) {
-                      setReportVoteThreshold(1);
-                      return;
-                    }
-                    setReportVoteThreshold(Math.min(10, Math.max(1, next)));
-                  }}
-                  disabled={configLoading || savingConfig || !orgLoaded}
-                  className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                />
-                <p className="mt-2 text-xs text-wv-dim">
-                  Votes needed to uphold or dismiss a report.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.35)] focus:ring-offset-1 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                onClick={handleConfigSave}
-                disabled={configLoading || savingConfig || !orgLoaded}
-              >
-                {savingConfig ? 'Saving…' : 'Save'}
-              </button>
-            </div>
 
             {configLoading && (
               <p className="mt-4 text-xs text-wv-dim">Loading current moderation settings…</p>

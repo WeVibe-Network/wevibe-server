@@ -258,28 +258,12 @@ export interface OrgSummary {
   allowed_providers: string[];
   status: string;
   rotation_status: string;
-  required_approvals: number;
-  report_vote_threshold: number;
   moderation_required?: boolean;
   created_at: string;
 }
 
 export async function getOrg(orgId: string): Promise<OrgSummary> {
   return hubFetch<OrgSummary>(`/v1/orgs/${orgId}`);
-}
-
-export async function updateOrgConfig(orgId: string, payload: { required_approvals?: number; report_vote_threshold?: number; wallet_pubkey?: Uint8Array; wallet_signature?: Uint8Array }): Promise<{ required_approvals: number; report_vote_threshold?: number }> {
-  const body: Record<string, unknown> = { ...payload };
-  if (payload.wallet_pubkey) {
-    body.wallet_pubkey = Array.from(payload.wallet_pubkey);
-  }
-  if (payload.wallet_signature) {
-    body.wallet_signature = Array.from(payload.wallet_signature);
-  }
-  return hubFetch<{ required_approvals: number; report_vote_threshold?: number }>(`/v1/orgs/${orgId}/config`, {
-    method: 'PATCH',
-    body: JSON.stringify(body),
-  });
 }
 
 export async function setModerationRequired(orgId: string, value: boolean): Promise<{ moderation_required: boolean }> {
@@ -296,6 +280,15 @@ export interface EscalationVote {
   voted_at: string;
 }
 
+export type ReportRecommendationVote = 'uphold' | 'dismiss' | 'dismiss_malicious';
+
+export interface ReportRecommendation {
+  moderator_pubkey: string;
+  vote: ReportRecommendationVote;
+}
+
+export type ReportResolution = 'upheld' | 'dismissed' | 'dismissed_malicious';
+
 export interface Report {
   id: string;
   org_id: string;
@@ -311,7 +304,7 @@ export interface Report {
   resolved_at?: string | null;
   escalation_votes: EscalationVote[];
   vote_count: number;
-  report_vote_threshold: number;
+  moderator_recommendations?: ReportRecommendation[];
   reporter_dismissed_count: number;
   created_at: string;
   updated_at: string;
@@ -350,16 +343,32 @@ export async function getReport(orgId: string, reportId: string): Promise<Report
   return hubFetch<Report>(`/v1/orgs/${orgId}/reports/${reportId}`);
 }
 
-export type ReportAction = 'uphold' | 'dismiss' | 'dismiss_malicious';
-
-export async function updateReport(
+export async function resolveReport(
   orgId: string,
   reportId: string,
-  action: ReportAction,
+  resolution: ReportResolution,
 ): Promise<Report> {
   return hubFetch<Report>(`/v1/orgs/${orgId}/reports/${reportId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ vote: action }),
+    body: JSON.stringify({ resolution }),
+  });
+}
+
+export interface ReportRecommendationResponse {
+  vote_count_uphold: number;
+  vote_count_dismiss: number;
+  vote_count_dismiss_malicious: number;
+  status: string;
+}
+
+export async function recommendReport(
+  orgId: string,
+  reportId: string,
+  vote: ReportRecommendationVote,
+): Promise<ReportRecommendationResponse> {
+  return hubFetch<ReportRecommendationResponse>(`/v1/orgs/${orgId}/reports/${reportId}/vote`, {
+    method: 'POST',
+    body: JSON.stringify({ vote }),
   });
 }
 

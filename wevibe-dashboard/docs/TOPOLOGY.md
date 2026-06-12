@@ -171,14 +171,14 @@ New page `app/(dashboard)/my-submissions/page.tsx` shows contributor submission 
 
 ## Sprint 23 Report Flow Notes (CO-231, CO-232, CO-233; superseded in part by CO-011a.4)
 
-- **Reports page:** Full CRUD with status tabs (pending, upheld_pending_tx, upheld, dismissed, dismissed_malicious). Reporter identity displayed: pubkey, wallet address, account age, dismissed_reports_count. Vote buttons: [Uphold] [Dismiss] [Dismiss as Malicious]. Current vote count shown vs `report_vote_threshold`.
+- **Reports page:** Full CRUD with status tabs (pending, upheld_pending_tx, upheld, dismissed, dismissed_malicious). Reporter identity displayed: pubkey, wallet address, account age, dismissed_reports_count. Moderators submit recommendations ([Uphold] [Dismiss] [Dismiss as Malicious]); the leader resolves autonomously (no quorum/vote-threshold gate).
 - **Submit to Chain button:** Leaders see "Submit to Chain" on reports with status `upheld_pending_tx`. The dashboard builds `MsgReportMemory` and broadcasts it via `directBroadcast` (wallet-direct Keplr/Leap flow).
 - **Config saves:** `MsgSetOrgConfig` updates are sent via `directBroadcast`. `signArbitrary` is no longer used for config saves.
 - **`signArbitraryMessage` in wallet-connect:** `lib/wallet-connect.ts` still exposes `signArbitraryMessage(message: string): Promise<{ signature: Uint8Array; }>` using `window.keplr.signArbitrary` or `window.leap.signArbitrary`. Retained for any non-tx wallet-attestation use cases; no longer used for config saves or report commitment.
 
 ## Sprint 24 Topology Notes
 
-- Reports page (`app/(dashboard)/reports/page.tsx`) consumes hub API and surfaces reporter identity (pubkey, wallet, role), vote buttons (Uphold/Dismiss/Dismiss as Malicious), vote count vs threshold, and reporter's dismissed_reports_count. Vote threshold configurable via `report_vote_threshold` in org config.
+- Reports page (`app/(dashboard)/reports/page.tsx`) consumes hub API and surfaces reporter identity (pubkey, wallet, role), moderator recommendation actions (Uphold/Dismiss/Dismiss as Malicious), and reporter's dismissed_reports_count. The leader makes the final autonomous resolution; there is no vote threshold/quorum config.
 - Settings page (`app/(dashboard)/settings/page.tsx`) exposes org-config controls and submits chain-side changes via `directBroadcast` using `buildSetOrgConfigMsg` / `buildSetServingKeyMsg`.
 - Members page (`app/(dashboard)/members/page.tsx`) displays `dismissed_reports_count` per member with orange highlight when count > 0.
 - Accept / Deny / Report actions: Deny adds memory to local blacklist (never shown again); Report submits to hub for review (remains visible); Accept injects into session.

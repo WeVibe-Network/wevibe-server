@@ -73,7 +73,7 @@ export default function JoinRequestsPage() {
         request.x25519_pubkey,
       );
       const orgAccount = await getOrgAccountAddress(orgId);
-      await directBroadcast(walletConn.address, [msgAddMember], orgAccount);
+      const result = await directBroadcast(walletConn.address, [msgAddMember], orgAccount);
 
       setRequests(prev => prev.filter(r => r.request_id !== requestId));
       setApprovalMode(prev => {
@@ -81,7 +81,7 @@ export default function JoinRequestsPage() {
         delete next[requestId];
         return next;
       });
-      txSuccess(id, 'Approved — confirming on-chain; the member appears once the tx is confirmed.');
+      txSuccess(id, 'Approved — confirming on-chain; the member appears once the tx is confirmed.', result.txHash);
     } catch (err) {
       console.error('Failed to approve:', err);
       if (hubApproved) {

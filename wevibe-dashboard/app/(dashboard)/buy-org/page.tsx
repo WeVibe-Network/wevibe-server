@@ -396,7 +396,7 @@ export default function BuyOrgPage() {
       }
 
       if (confirmed) {
-        txSuccess(toastId, `Organization created: ${orgId}`);
+        txSuccess(toastId, `Organization created: ${orgId}`, broadcastResult.txHash);
       } else {
         txError(toastId, 'Created, but on-chain confirmation is taking longer than expected — refresh shortly.');
       }

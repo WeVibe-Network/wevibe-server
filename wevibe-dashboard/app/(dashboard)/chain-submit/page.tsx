@@ -28,6 +28,7 @@ import {
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
 import { useOrgContext } from '@/lib/org-context';
+import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { toast } from 'sonner';
 
 type DecryptBatchItem = {
@@ -619,6 +620,8 @@ export default function ChainSubmitPage() {
     setTxResult(null);
     setNotice(null);
 
+    let txToastId: string | number | null = null;
+
     try {
       const prepared = await prepareBatchSubmit(orgId);
       if (!prepared.batch || prepared.batch.length === 0) {
@@ -654,31 +657,40 @@ export default function ChainSubmitPage() {
         return [commitment, approval];
       });
 
+      txToastId = txToast('Submit serve batch');
+      txConfirming(txToastId, 'Submit serve batch');
+
       const orgAccount = await resolveOrgAccountForGas();
       const result = await directBroadcast(walletAddress, msgs, orgAccount);
       const txHash = result.txHash;
 
-      if (txHash) {
-        setTxResult({ tx_hash: txHash, committed_count: prepared.batch.length });
-        setNotice(null);
-        // The tx is committed on-chain (DeliverTx code 0), but the hub watcher
-        // flips submission status -> committed asynchronously. Drop the
-        // just-submitted memories from the pending lists immediately for
-        // instant feedback, then reconcile with the hub once the watcher has
-        // had time to catch up.
-        const submittedHashes = new Set(
-          prepared.batch.map((entry) => entry.submission_hash.toLowerCase()),
-        );
-        const dropSubmitted = (items: Submission[]) =>
-          items.filter((item) => !submittedHashes.has(item.submission_hash.toLowerCase()));
-        setPendingChain(dropSubmitted);
-        setReviewKeywords(dropSubmitted);
-        setTimeout(() => { void loadAll(); }, 2500);
-      } else {
-        toast.error('Chain submission failed: missing transaction hash');
+      if (!txHash) {
+        throw new Error('Chain submission failed: missing transaction hash');
       }
+
+      setTxResult({ tx_hash: txHash, committed_count: prepared.batch.length });
+      setNotice(null);
+      // The tx is committed on-chain (DeliverTx code 0), but the hub watcher
+      // flips submission status -> committed asynchronously. Drop the
+      // just-submitted memories from the pending lists immediately for
+      // instant feedback, then reconcile with the hub once the watcher has
+      // had time to catch up.
+      const submittedHashes = new Set(
+        prepared.batch.map((entry) => entry.submission_hash.toLowerCase()),
+      );
+      const dropSubmitted = (items: Submission[]) =>
+        items.filter((item) => !submittedHashes.has(item.submission_hash.toLowerCase()));
+      setPendingChain(dropSubmitted);
+      setReviewKeywords(dropSubmitted);
+      setTimeout(() => { void loadAll(); }, 2500);
+      txSuccess(txToastId, 'Serve batch submitted to chain.', txHash);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      if (txToastId !== null) {
+        txError(txToastId, message);
+      } else {
+        toast.error(message);
+      }
     } finally {
       setBusy(null);
     }

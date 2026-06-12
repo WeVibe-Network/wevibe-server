@@ -123,9 +123,9 @@ export default function MembersPage() {
       txConfirming(id, 'Invite')
       const msgAddMember = buildAddMemberMsg(walletConn.address, orgId, invitePubkey, inviteRole, inviteX25519Pubkey)
       const orgAccount = await resolveOrgAccountForGas()
-      await directBroadcast(walletConn.address, [msgAddMember], orgAccount)
+      const result = await directBroadcast(walletConn.address, [msgAddMember], orgAccount)
       const successMessage = `Invited ${invitePubkey.slice(0, 12)}… as ${inviteRole}`
-      txSuccess(id, successMessage)
+      txSuccess(id, successMessage, result.txHash)
       setInviteSuccess(successMessage)
       setInvitePubkey('')
       setInviteX25519Pubkey('')
@@ -148,10 +148,10 @@ export default function MembersPage() {
       txConfirming(id, 'Role change')
       const msgUpdateMemberRole = buildUpdateMemberRoleMsg(walletConn.address, orgId, pubkey, newRole)
       const orgAccount = await resolveOrgAccountForGas()
-      await directBroadcast(walletConn.address, [msgUpdateMemberRole], orgAccount)
+      const result = await directBroadcast(walletConn.address, [msgUpdateMemberRole], orgAccount)
       setRoleChangeTarget(null)
       await refreshMembers()
-      txSuccess(id, `Role updated to ${newRole}`)
+      txSuccess(id, `Role updated to ${newRole}`, result.txHash)
     } catch (err) {
       const message = (err as Error).message
       setError(message)
@@ -169,10 +169,10 @@ export default function MembersPage() {
       txConfirming(id, 'Remove member')
       const msgRemoveMember = buildRemoveMemberMsg(walletConn.address, orgId, pubkey)
       const orgAccount = await resolveOrgAccountForGas()
-      await directBroadcast(walletConn.address, [msgRemoveMember], orgAccount)
+      const result = await directBroadcast(walletConn.address, [msgRemoveMember], orgAccount)
       setRemoveTarget(null)
       await refreshMembers()
-      txSuccess(id, 'Member removed')
+      txSuccess(id, 'Member removed', result.txHash)
     } catch (err) {
       const message = (err as Error).message
       setError(message)
@@ -233,10 +233,10 @@ export default function MembersPage() {
         targetWalletAddress,
       )
       const orgAccount = await resolveOrgAccountForGas()
-      await directBroadcast(walletConn.address, [msgTransferLeadership], orgAccount)
+      const result = await directBroadcast(walletConn.address, [msgTransferLeadership], orgAccount)
       setTransferTarget(null)
       await refreshMembers()
-      txSuccess(id, 'Leadership transferred')
+      txSuccess(id, 'Leadership transferred', result.txHash)
     } catch (err) {
       const message = (err as Error).message
       setError(message)
@@ -254,10 +254,10 @@ export default function MembersPage() {
       txConfirming(id, 'Close org')
       const msgCloseOrg = buildCloseOrgMsg(walletConn.address, orgId)
       const orgAccount = await resolveOrgAccountForGas()
-      await directBroadcast(walletConn.address, [msgCloseOrg], orgAccount)
+      const result = await directBroadcast(walletConn.address, [msgCloseOrg], orgAccount)
       setCloseDialogOpen(false)
       await refreshMembers()
-      txSuccess(id, 'Org closed')
+      txSuccess(id, 'Org closed', result.txHash)
     } catch (err) {
       const message = (err as Error).message
       setError(message)
