@@ -2,11 +2,12 @@ import { getProfile, type ProfileResponse } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
 
 interface PageProps {
-  params: { wallet: string };
+  params: Promise<{ wallet: string }>;
 }
 
 export default async function PublicProfilePage({ params }: PageProps) {
-  const wallet = decodeURIComponent(params.wallet);
+  const { wallet: rawWallet } = await params;
+  const wallet = decodeURIComponent(rawWallet);
 
   let profile: ProfileResponse | null = null;
   let error: string | null = null;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { use, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { getOrg, submitJoinRequest, OrgSummary } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
@@ -11,7 +11,7 @@ interface EnrichedOrgSummary extends OrgSummary {
 }
 
 interface PageProps {
-  params: { orgId: string };
+  params: Promise<{ orgId: string }>;
 }
 
 function truncatePubkey(pubkey: string): string {
@@ -21,6 +21,7 @@ function truncatePubkey(pubkey: string): string {
 }
 
 export default function OrgDetailPage({ params }: PageProps) {
+  const { orgId } = use(params);
   const [org, setOrg] = useState<EnrichedOrgSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [joining, setJoining] = useState(false);
@@ -28,17 +29,17 @@ export default function OrgDetailPage({ params }: PageProps) {
   const [joinError, setJoinError] = useState('');
 
   useEffect(() => {
-    getOrg(params.orgId)
+    getOrg(orgId)
       .then(setOrg)
       .catch(() => setOrg(null))
       .finally(() => setLoading(false));
-  }, [params.orgId]);
+  }, [orgId]);
 
   const handleJoin = async () => {
     setJoining(true);
     setJoinError('');
     try {
-      await submitJoinRequest(params.orgId);
+      await submitJoinRequest(orgId);
       setJoinStatus('success');
     } catch (err: unknown) {
       setJoinStatus('error');
