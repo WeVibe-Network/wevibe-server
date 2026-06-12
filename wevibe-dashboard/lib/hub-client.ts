@@ -573,6 +573,12 @@ export interface KeywordWeight {
   weight: number;
 }
 
+export interface KeywordSuggestionPayload {
+  keyword: string;
+  weight: number;
+  rationale: string;
+}
+
 export interface MemoryKeywordResult {
   submission_hash: string;
   classified: KeywordWeight[];
@@ -716,17 +722,16 @@ export async function updateKeywords(
   orgId: string,
   hash: string,
   classified: KeywordWeight[],
-  suggestions?: KeywordWeight[],
+  suggestions?: KeywordSuggestionPayload[],
 ): Promise<{ status: string }> {
-  const payload: { hash: string; classified: KeywordWeight[]; suggestions?: KeywordWeight[] } = {
-    hash,
+  const payload: { classified: KeywordWeight[]; suggestions?: KeywordSuggestionPayload[] } = {
     classified,
   };
   if (suggestions) {
     payload.suggestions = suggestions;
   }
 
-  return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/update-keywords`, {
+  return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/submissions/${encodeURIComponent(hash)}/update-keywords`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   });

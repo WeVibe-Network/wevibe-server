@@ -12,6 +12,7 @@ import {
   addKeyword,
   type Submission,
   type KeywordWeight,
+  type KeywordSuggestionPayload,
   type KeywordCandidate,
   type OrgHealth,
   type VerificationResult,
@@ -35,28 +36,16 @@ type DecryptBatchItem = {
   error?: string;
 };
 
-type KeywordPillVariant = 'classified' | 'suggestion' | 'earned';
+type KeywordPillVariant = 'classified' | 'excluded';
 
-const SUGGESTION_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.14)] px-2.5 py-0.5 text-xs font-medium text-wv-amber transition-colors transition-opacity duration-200';
-const BLUE_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(96,165,250,0.45)] bg-[rgba(96,165,250,0.14)] px-2.5 py-0.5 text-xs font-medium text-[rgba(147,197,253,0.95)] transition-colors transition-opacity duration-200';
 const CLASSIFIED_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green transition-colors transition-opacity duration-200';
-const REMOVED_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(148,163,184,0.4)] bg-[rgba(148,163,184,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-dim opacity-65 transition-colors transition-opacity duration-200';
+const EXCLUDED_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(148,163,184,0.4)] bg-[rgba(148,163,184,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-dim opacity-65 transition-colors transition-opacity duration-200';
 
-function buildRemovedKeywordPillKey(variant: KeywordPillVariant, keyword: string, index: number): string {
-  return `${variant}:${keyword.toLowerCase()}:${index}`;
-}
-
-function getKeywordPillClass(variant: KeywordPillVariant, removed: boolean): string {
-  if (removed) {
-    return REMOVED_PILL_CLASS;
-  }
+function getKeywordPillClass(variant: KeywordPillVariant): string {
   if (variant === 'classified') {
     return CLASSIFIED_PILL_CLASS;
   }
-  if (variant === 'earned') {
-    return BLUE_PILL_CLASS;
-  }
-  return SUGGESTION_PILL_CLASS;
+  return EXCLUDED_PILL_CLASS;
 }
 
 function shortenPubkey(pubkey: string, visibleChars = 12): string {
@@ -244,6 +233,14 @@ function renormalizeClassifiedWeights(classified: KeywordWeight[]): KeywordWeigh
   return normalized;
 }
 
+function toExcludedSuggestionPayload(suggestions: KeywordWeight[]): KeywordSuggestionPayload[] {
+  return normalizeKeywordWeights(suggestions).map((suggestion) => ({
+    keyword: suggestion.keyword,
+    weight: suggestion.weight,
+    rationale: 'excluded',
+  }));
+}
+
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.trim();
   if (clean.length % 2 !== 0) {
@@ -268,7 +265,6 @@ export default function ChainSubmitPage() {
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
   const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
   const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
-  const [removedKeywordPills, setRemovedKeywordPills] = useState<Record<string, Record<string, true>>>({});
   const [expandedModeratorVotes, setExpandedModeratorVotes] = useState<Record<string, boolean>>({});
   const [denyModalSubmissionHash, setDenyModalSubmissionHash] = useState<string | null>(null);
 
@@ -287,38 +283,6 @@ export default function ChainSubmitPage() {
       throw new Error('could not resolve org account for gas');
     }
   }, [orgId]);
-
-  const markKeywordPillRemoved = useCallback((submissionHash: string, pillKey: string) => {
-    setRemovedKeywordPills((prev) => ({
-      ...prev,
-      [submissionHash]: {
-        ...(prev[submissionHash] ?? {}),
-        [pillKey]: true,
-      },
-    }));
-  }, []);
-
-  const unmarkKeywordPillRemoved = useCallback((submissionHash: string, pillKey: string) => {
-    setRemovedKeywordPills((prev) => {
-      const current = prev[submissionHash];
-      if (!current || !current[pillKey]) {
-        return prev;
-      }
-
-      const restKeywords = { ...current };
-      delete restKeywords[pillKey];
-      if (Object.keys(restKeywords).length === 0) {
-        const restSubmissions = { ...prev };
-        delete restSubmissions[submissionHash];
-        return restSubmissions;
-      }
-
-      return {
-        ...prev,
-        [submissionHash]: restKeywords,
-      };
-    });
-  }, []);
 
   const toggleModeratorVotes = useCallback((submissionHash: string) => {
     setExpandedModeratorVotes((prev) => ({
@@ -433,7 +397,6 @@ export default function ChainSubmitPage() {
       setKeywordCandidates(candidateMap);
       setReviewKeywords(keywordQueue);
       setPendingChain(chainQueue);
-      setRemovedKeywordPills({});
       setLoadDiagnostics(diagnostics);
     } catch (err) {
       toast.error((err as Error).message);
@@ -533,67 +496,38 @@ export default function ChainSubmitPage() {
     }
   }, [reviewKeywords, loadAll, orgId]);
 
-  const handleDeleteClassifiedKeyword = useCallback(async (
+  const handleExcludeClassifiedKeyword = useCallback(async (
     hash: string,
     classified: KeywordWeight[],
     suggestions: KeywordWeight[],
-    removeIndex: number,
-    removedPillKey: string,
+    excludeIndex: number,
   ) => {
     if (!orgId) return;
 
-    const nextClassified = renormalizeClassifiedWeights(
-      classified.filter((_, idx) => idx !== removeIndex),
-    );
+    const excluded = classified[excludeIndex];
+    if (!excluded) {
+      toast.error('Included keyword no longer available. Refresh and try again.');
+      return;
+    }
+
+    const remainingClassified = classified.filter((_, idx) => idx !== excludeIndex);
+    const nextClassified = renormalizeClassifiedWeights(remainingClassified);
     if (nextClassified.length === 0) {
-      toast.error('Cannot remove the last classified keyword. Approve a suggestion first.');
+      toast.error('Cannot remove the last included keyword.');
       return;
     }
 
-    markKeywordPillRemoved(hash, removedPillKey);
-    setBusy(hash);
-    setNotice(null);
-
-    try {
-      await updateKeywords(orgId, hash, nextClassified, suggestions);
-      setNotice(`Removed keyword for ${hash.slice(0, 12)}…`);
-      await loadAll();
-    } catch (err) {
-      unmarkKeywordPillRemoved(hash, removedPillKey);
-      toast.error((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [loadAll, markKeywordPillRemoved, orgId, unmarkKeywordPillRemoved]);
-
-  const handleApproveSuggestion = useCallback(async (
-    hash: string,
-    classified: KeywordWeight[],
-    suggestions: KeywordWeight[],
-    approveIndex: number,
-  ) => {
-    if (!orgId) return;
-
-    const approved = suggestions[approveIndex];
-    if (!approved) {
-      toast.error('Suggestion no longer available. Refresh and try again.');
-      return;
-    }
+    const nextSuggestionsWithRationale = toExcludedSuggestionPayload([
+      ...suggestions,
+      { keyword: excluded.keyword, weight: excluded.weight },
+    ]);
 
     setBusy(hash);
     setNotice(null);
 
     try {
-      await addKeyword(orgId, approved.keyword);
-
-      const nextClassified = renormalizeClassifiedWeights([
-        ...classified,
-        { keyword: approved.keyword, weight: approved.weight },
-      ]);
-      const nextSuggestions = suggestions.filter((_, idx) => idx !== approveIndex);
-
-      await updateKeywords(orgId, hash, nextClassified, nextSuggestions);
-      setNotice(`Approved “${approved.keyword}” for ${hash.slice(0, 12)}…`);
+      await updateKeywords(orgId, hash, nextClassified, nextSuggestionsWithRationale);
+      setNotice(`Excluded “${excluded.keyword}” for ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
       toast.error((err as Error).message);
@@ -602,38 +536,55 @@ export default function ChainSubmitPage() {
     }
   }, [loadAll, orgId]);
 
-  const handleDismissSuggestion = useCallback(async (
+  const handleIncludeSuggestionKeyword = useCallback(async (
     hash: string,
     classified: KeywordWeight[],
     suggestions: KeywordWeight[],
-    dismissIndex: number,
-    removedPillKey: string,
+    includeIndex: number,
   ) => {
     if (!orgId) return;
 
-    const nextClassified = renormalizeClassifiedWeights(classified);
-    if (nextClassified.length === 0) {
-      toast.error('Cannot dismiss suggestions while classified keywords are empty. Approve one first.');
+    const included = suggestions[includeIndex];
+    if (!included) {
+      toast.error('Suggestion no longer available. Refresh and try again.');
       return;
     }
 
-    const nextSuggestions = suggestions.filter((_, idx) => idx !== dismissIndex);
-
-    markKeywordPillRemoved(hash, removedPillKey);
     setBusy(hash);
     setNotice(null);
 
     try {
-      await updateKeywords(orgId, hash, nextClassified, nextSuggestions);
-      setNotice(`Dismissed suggestion for ${hash.slice(0, 12)}…`);
+      try {
+        await addKeyword(orgId, included.keyword);
+      } catch (addKeywordError) {
+        const addKeywordMessage = normalizeErrorMessage(addKeywordError).toLowerCase();
+        if (!addKeywordMessage.includes('already exists')) {
+          throw addKeywordError;
+        }
+      }
+
+      const nextClassified = renormalizeClassifiedWeights([
+        ...classified,
+        { keyword: included.keyword, weight: included.weight },
+      ]);
+      if (nextClassified.length === 0) {
+        toast.error('Failed to include keyword. Refresh and try again.');
+        return;
+      }
+
+      const nextSuggestionsWithRationale = toExcludedSuggestionPayload(
+        suggestions.filter((_, idx) => idx !== includeIndex),
+      );
+
+      await updateKeywords(orgId, hash, nextClassified, nextSuggestionsWithRationale);
+      setNotice(`Included “${included.keyword}” for ${hash.slice(0, 12)}…`);
       await loadAll();
     } catch (err) {
-      unmarkKeywordPillRemoved(hash, removedPillKey);
       toast.error((err as Error).message);
     } finally {
       setBusy(null);
     }
-  }, [loadAll, markKeywordPillRemoved, orgId, unmarkKeywordPillRemoved]);
+  }, [loadAll, orgId]);
 
   const handleDenyFinal = useCallback(async (hash: string) => {
     if (!orgId) return;
@@ -710,6 +661,19 @@ export default function ChainSubmitPage() {
       if (txHash) {
         setTxResult({ tx_hash: txHash, committed_count: prepared.batch.length });
         setNotice(null);
+        // The tx is committed on-chain (DeliverTx code 0), but the hub watcher
+        // flips submission status -> committed asynchronously. Drop the
+        // just-submitted memories from the pending lists immediately for
+        // instant feedback, then reconcile with the hub once the watcher has
+        // had time to catch up.
+        const submittedHashes = new Set(
+          prepared.batch.map((entry) => entry.submission_hash.toLowerCase()),
+        );
+        const dropSubmitted = (items: Submission[]) =>
+          items.filter((item) => !submittedHashes.has(item.submission_hash.toLowerCase()));
+        setPendingChain(dropSubmitted);
+        setReviewKeywords(dropSubmitted);
+        setTimeout(() => { void loadAll(); }, 2500);
       } else {
         toast.error('Chain submission failed: missing transaction hash');
       }
@@ -718,7 +682,7 @@ export default function ChainSubmitPage() {
     } finally {
       setBusy(null);
     }
-  }, [orgId, pendingChain, resolveOrgAccountForGas]);
+  }, [orgId, pendingChain, resolveOrgAccountForGas, loadAll]);
 
   if (!orgId) {
     return (
@@ -867,7 +831,7 @@ export default function ChainSubmitPage() {
               {reviewKeywords.length} memories awaiting curation
             </p>
             <p className="mt-1 text-xs text-wv-amber">
-              <span className="text-wv-green">Green</span> = in vocabulary · <span className="text-wv-amber">Yellow</span> = proposed (not yet earned) · <span className="text-[rgba(147,197,253,0.95)]">Blue</span> = earned (proposed by 2+ contributors — promote to add to vocabulary).
+              <span className="text-wv-green">Green</span> = included · <span className="text-wv-dim">Gray</span> = excluded candidate. Click a keyword to include it (adds to vocabulary), click × on an included keyword to undo. Only included keywords are attached and submitted.
             </p>
           </div>
           <button
@@ -976,31 +940,26 @@ export default function ChainSubmitPage() {
 
                   <div className="mt-3 space-y-3">
                     <div>
-                      <p className="text-xs font-medium text-wv-dim">Classified</p>
+                      <p className="text-xs font-medium text-wv-dim">Included</p>
                       {extraction.classified.length === 0 ? (
-                        <p className="mt-1 text-xs text-wv-dim">No classified keywords yet.</p>
+                        <p className="mt-1 text-xs text-wv-dim">No included keywords yet.</p>
                       ) : (
                         <div className="mt-1 flex flex-wrap gap-2">
                           {extraction.classified.map((kw, idx) => {
-                            const removedPillKey = buildRemovedKeywordPillKey('classified', kw.keyword, idx);
-                            const removed = Boolean(removedKeywordPills[item.submission_hash]?.[removedPillKey]);
-
                             return (
                               <span
                                 key={`${kw.keyword}-${idx}`}
-                                className={getKeywordPillClass('classified', removed)}
-                                title={`In org vocabulary · Weight: ${(kw.weight * 100).toFixed(0)}%`}
+                                className={getKeywordPillClass('classified')}
+                                title={`Included keyword · Weight: ${(kw.weight * 100).toFixed(0)}%`}
                               >
                                 {kw.keyword}
                                 <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
                                 <button
                                   type="button"
-                                  onClick={() => handleDeleteClassifiedKeyword(item.submission_hash, extraction.classified, extraction.suggestions, idx, removedPillKey)}
-                                  disabled={itemBusy || loading || removed}
-                                  className={removed
-                                    ? 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-dim'
-                                    : 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-green transition hover:bg-[rgba(54,211,153,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim'}
-                                  title="Remove keyword"
+                                  onClick={() => handleExcludeClassifiedKeyword(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
+                                  disabled={itemBusy || loading}
+                                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-green transition hover:bg-[rgba(54,211,153,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim"
+                                  title="Exclude keyword"
                                 >
                                   ×
                                 </button>
@@ -1012,26 +971,28 @@ export default function ChainSubmitPage() {
                     </div>
 
                     <div>
-                      <p className="text-xs font-medium text-wv-dim">Suggestions</p>
+                      <p className="text-xs font-medium text-wv-dim">Excluded candidates</p>
                       {extraction.suggestions.length === 0 ? (
-                        <p className="mt-1 text-xs text-wv-dim">No new keyword suggestions.</p>
+                        <p className="mt-1 text-xs text-wv-dim">No excluded keyword candidates.</p>
                       ) : (
                         <div className="mt-1 flex flex-wrap gap-2">
                           {extraction.suggestions.map((kw, idx) => {
                             const tally = parseKeywordVoteTally(item.keyword_votes, kw.keyword);
                             const keywordCandidate = keywordCandidates.get(kw.keyword.trim().toLowerCase());
                             const earned = keywordCandidate?.earned === true;
-                            const suggestionVariant: KeywordPillVariant = earned ? 'earned' : 'suggestion';
-                            const removedPillKey = buildRemovedKeywordPillKey(suggestionVariant, kw.keyword, idx);
-                            const removed = Boolean(removedKeywordPills[item.submission_hash]?.[removedPillKey]);
 
                             return (
-                              <span
+                              <button
+                                type="button"
                                 key={`${kw.keyword}-${idx}`}
-                                className={getKeywordPillClass(suggestionVariant, removed)}
+                                onClick={() => handleIncludeSuggestionKeyword(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
+                                disabled={itemBusy || loading}
+                                className={`${getKeywordPillClass('excluded')} ${itemBusy || loading
+                                  ? 'cursor-not-allowed'
+                                  : 'cursor-pointer hover:border-[rgba(148,163,184,0.6)] hover:bg-[rgba(148,163,184,0.18)] hover:opacity-90'}`}
                                 title={earned
-                                  ? `Earned suggestion (${keywordCandidate?.distinct_contributors ?? 0} contributors) · Weight: ${(kw.weight * 100).toFixed(0)}%`
-                                  : `New keyword suggestion · Weight: ${(kw.weight * 100).toFixed(0)}%`}
+                                  ? `Excluded earned suggestion (${keywordCandidate?.distinct_contributors ?? 0} contributors) · Weight: ${(kw.weight * 100).toFixed(0)}% · Click to include`
+                                  : `Excluded keyword suggestion · Weight: ${(kw.weight * 100).toFixed(0)}% · Click to include`}
                               >
                                 {kw.keyword}
                                 <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
@@ -1045,28 +1006,7 @@ export default function ChainSubmitPage() {
                                     include {tally.include} / exclude {tally.exclude}
                                   </span>
                                 )}
-                                <button
-                                  type="button"
-                                  onClick={() => handleApproveSuggestion(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
-                                  disabled={itemBusy || loading || removed}
-                                  className="ml-2 rounded bg-[rgba(255,255,255,0.2)] px-1.5 py-0.5 text-[10px] font-semibold text-wv-text transition hover:bg-[rgba(255,255,255,0.3)] disabled:cursor-not-allowed disabled:text-wv-dim"
-                                >
-                                  {earned ? 'Promote' : '+vocab'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDismissSuggestion(item.submission_hash, extraction.classified, extraction.suggestions, idx, removedPillKey)}
-                                  disabled={itemBusy || loading || removed}
-                                  className={removed
-                                    ? 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-dim'
-                                    : earned
-                                      ? 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-[rgba(147,197,253,0.95)] transition hover:bg-[rgba(96,165,250,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim'
-                                      : 'ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-amber transition hover:bg-[rgba(255,178,85,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim'}
-                                  title="Dismiss suggestion"
-                                >
-                                  ×
-                                </button>
-                              </span>
+                              </button>
                             );
                           })}
                         </div>
