@@ -191,6 +191,10 @@ func AddKeyword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"keyword required"}`, http.StatusBadRequest)
 		return
 	}
+	if !keywordFormatRegex.MatchString(req.Keyword) {
+		http.Error(w, `{"error":"keyword must match `+keywordFormatRegex.String()+`"}`, http.StatusBadRequest)
+		return
+	}
 
 	_, err = pool.Exec(r.Context(), `
 		INSERT INTO org_keywords (org_id, keyword)
