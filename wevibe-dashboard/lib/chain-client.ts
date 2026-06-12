@@ -575,26 +575,47 @@ export async function directBroadcast(
   const signer = getOfflineSigner(chainId);
   const client = await getSigningClient(signer);
 
-  const fee: {
-    amount: { denom: string; amount: string }[];
-    gas: string;
-    granter?: string;
-  } = {
-    amount: [{ denom: 'uvibe', amount: '5000' }],
-    gas: '200000',
-  };
-
-  const normalizedFeeGranter = feeGranter?.trim();
-  if (normalizedFeeGranter) {
-    fee.granter = normalizedFeeGranter;
-  }
-
   const [account] = await signer.getAccounts();
   if (!account) {
     throw new Error('No account found');
   }
   if (account.address !== walletAddress) {
     throw new Error('Signer account mismatch for requested wallet address');
+  }
+
+  // Gas must scale with the transaction: a batch of N memories is 2N messages,
+  // so a fixed limit cannot work. Simulate the tx to get the real gas cost and
+  // apply a safety buffer. Fall back to a generous per-message budget only if
+  // the node's simulation service is unreachable. Never go below a sane floor.
+  const GAS_PRICE_UVIBE = 0.025; // matches average gasPriceStep
+  const GAS_SIM_BUFFER = 1.5;
+  const GAS_FLOOR = 200_000;
+  const GAS_PER_MSG_FALLBACK = 150_000;
+
+  let gasLimit: number;
+  try {
+    const simulatedGas = await client.simulate(account.address, msgs, '');
+    gasLimit = Math.ceil(simulatedGas * GAS_SIM_BUFFER);
+  } catch {
+    gasLimit = GAS_FLOOR + msgs.length * GAS_PER_MSG_FALLBACK;
+  }
+  if (gasLimit < GAS_FLOOR) {
+    gasLimit = GAS_FLOOR;
+  }
+  const feeAmount = Math.max(1, Math.ceil(gasLimit * GAS_PRICE_UVIBE));
+
+  const fee: {
+    amount: { denom: string; amount: string }[];
+    gas: string;
+    granter?: string;
+  } = {
+    amount: [{ denom: 'uvibe', amount: String(feeAmount) }],
+    gas: String(gasLimit),
+  };
+
+  const normalizedFeeGranter = feeGranter?.trim();
+  if (normalizedFeeGranter) {
+    fee.granter = normalizedFeeGranter;
   }
 
   const txRaw = await client.sign(account.address, msgs, fee, '');
