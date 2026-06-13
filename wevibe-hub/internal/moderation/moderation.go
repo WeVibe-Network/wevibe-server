@@ -164,8 +164,9 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 	if err != nil {
 		return nil, fmt.Errorf("member not found or inactive")
 	}
-	if role != "moderator" && role != "leader" {
-		return nil, fmt.Errorf("insufficient role: %s", role)
+	_, canModerate, capErr := members.GetMemberCapabilities(ctx, pool, orgID, moderatorPubkey)
+	if capErr != nil || (role != "leader" && !canModerate) {
+		return nil, fmt.Errorf("insufficient capability: cannot moderate")
 	}
 
 	rows, err := pool.Query(ctx, `
@@ -234,8 +235,9 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 	if err != nil {
 		return 0, 0, fmt.Errorf("member not found or inactive")
 	}
-	if role != "moderator" && role != "leader" {
-		return 0, 0, fmt.Errorf("insufficient role: %s", role)
+	_, canModerate, capErr := members.GetMemberCapabilities(ctx, pool, orgID, moderatorPubkey)
+	if capErr != nil || (role != "leader" && !canModerate) {
+		return 0, 0, fmt.Errorf("insufficient capability: cannot moderate")
 	}
 
 	vote = strings.TrimSpace(vote)
@@ -299,8 +301,12 @@ func CastApprovalVote(ctx context.Context, pool *pgxpool.Pool, orgID, submission
 
 func ApproveSubmission(ctx context.Context, pool *pgxpool.Pool, orgID, submissionHash, moderatorPubkey, memoryType string, vector []float32, embeddingModelID string, embeddingSchemaVersion string) error {
 	role, err := members.GetMemberRole(ctx, pool, orgID, moderatorPubkey)
-	if err != nil || (role != "moderator" && role != "leader") {
+	if err != nil {
 		return fmt.Errorf("forbidden: not authorized")
+	}
+	_, canModerate, capErr := members.GetMemberCapabilities(ctx, pool, orgID, moderatorPubkey)
+	if capErr != nil || (role != "leader" && !canModerate) {
+		return fmt.Errorf("insufficient capability: cannot moderate")
 	}
 	if !protocol.IsValidMemoryType(memoryType) {
 		return fmt.Errorf("invalid memory_type: %s", memoryType)
@@ -334,8 +340,9 @@ func CastKeywordVote(ctx context.Context, pool *pgxpool.Pool, orgID, submissionH
 	if err != nil {
 		return 0, 0, fmt.Errorf("member not found or inactive")
 	}
-	if role != "moderator" && role != "leader" {
-		return 0, 0, fmt.Errorf("insufficient role: %s", role)
+	_, canModerate, capErr := members.GetMemberCapabilities(ctx, pool, orgID, moderatorPubkey)
+	if capErr != nil || (role != "leader" && !canModerate) {
+		return 0, 0, fmt.Errorf("insufficient capability: cannot moderate")
 	}
 
 	keyword = strings.TrimSpace(keyword)

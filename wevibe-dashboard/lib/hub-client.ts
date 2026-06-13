@@ -144,6 +144,8 @@ export interface MemberRecord {
   pubkey: string;
   display_name?: string;
   role: OrgRole;
+  can_contribute?: boolean;
+  can_moderate?: boolean;
   join_epoch: number;
   active: boolean;
   membership_active?: boolean;
@@ -281,19 +283,11 @@ export interface OrgSummary {
   allowed_providers: string[];
   status: string;
   rotation_status: string;
-  moderation_required?: boolean;
   created_at: string;
 }
 
 export async function getOrg(orgId: string): Promise<OrgSummary> {
   return hubFetch<OrgSummary>(`/v1/orgs/${orgId}`);
-}
-
-export async function setModerationRequired(orgId: string, value: boolean): Promise<{ moderation_required: boolean }> {
-  return hubFetch<{ moderation_required: boolean }>(`/v1/orgs/${orgId}/config`, {
-    method: 'PATCH',
-    body: JSON.stringify({ moderation_required: value }),
-  });
 }
 
 

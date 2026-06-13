@@ -17,9 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
@@ -353,84 +351,6 @@ func RotateEpoch(w http.ResponseWriter, r *http.Request) {
 		"epoch_sk":       epochSK,
 		"epoch_pk":       epochPK,
 	})
-}
-
-func UpdateOrgConfig(w http.ResponseWriter, r *http.Request) {
-	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	orgID := chi.URLParam(r, "orgID")
-	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
-		return
-	}
-
-	signed, err := auth.ParseWeVibeSigned(r)
-	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
-	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp"}`, http.StatusBadRequest)
-		return
-	}
-	now := time.Now()
-	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired"}`, http.StatusUnauthorized)
-		return
-	}
-
-	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
-		return
-	}
-
-	var req struct {
-		ModerationRequired *bool `json:"moderation_required"`
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.ModerationRequired == nil {
-		http.Error(w, `{"error":"at least one config field required"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.ModerationRequired != nil {
-		if err := orgs.UpdateModerationRequired(r.Context(), pool, orgID, *req.ModerationRequired); err != nil {
-			if strings.Contains(err.Error(), "org not found") {
-				http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
-				return
-			}
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	resp := map[string]interface{}{}
-	if req.ModerationRequired != nil {
-		resp["moderation_required"] = *req.ModerationRequired
-	}
-	json.NewEncoder(w).Encode(resp)
 }
 
 func GetEpochManifest(w http.ResponseWriter, r *http.Request) {

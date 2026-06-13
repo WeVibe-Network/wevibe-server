@@ -8,9 +8,10 @@ import {
   getHubServingAddress,
   getOrg,
   getOrgChainConfig,
-  setModerationRequired as setOrgModerationRequired,
+  listMembers,
   updateExtractionProfile,
   type ExtractionPreset,
+  type MemberRecord,
 } from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
 import { connectWallet } from '@/lib/wallet-connect';
@@ -18,6 +19,7 @@ import {
   buildSetOrgConfigMsg,
   buildSetServingInfoMsg,
   buildSetServingKeyMsg,
+  buildTransferLeadershipMsg,
   directBroadcast,
   getOrgAccountAddress,
 } from '@/lib/chain-client';
@@ -58,14 +60,17 @@ function isValidHttpOrHttpsUrl(value: string): boolean {
   }
 }
 
+function truncateMiddle(value: string, start = 12, end = 8): string {
+  if (value.length <= start + end + 1) {
+    return value;
+  }
+  return `${value.slice(0, start)}…${value.slice(-end)}`;
+}
+
 export default function SettingsPage() {
   const { activeOrg } = useOrgContext();
   const orgLoaded = activeOrg !== null;
   const isLeader = activeOrg?.role === 'leader';
-  const [moderationRequired, setModerationRequired] = useState(false);
-  const [savingModerationRequired, setSavingModerationRequired] = useState(false);
-  const [configLoading, setConfigLoading] = useState(false);
-  const [configError, setConfigError] = useState<string | null>(null);
   const [chainConfigLoading, setChainConfigLoading] = useState(false);
   const [chainConfigError, setChainConfigError] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);
@@ -100,6 +105,29 @@ export default function SettingsPage() {
     num_ctx: null,
     model: null,
   });
+  const [transferMembers, setTransferMembers] = useState<MemberRecord[]>([]);
+  const [transferMembersLoading, setTransferMembersLoading] = useState(false);
+  const [transferMembersError, setTransferMembersError] = useState<string | null>(null);
+  const [selectedTransferPubkey, setSelectedTransferPubkey] = useState('');
+  const [showTransferLeadershipConfirm, setShowTransferLeadershipConfirm] = useState(false);
+  const [savingTransferLeadership, setSavingTransferLeadership] = useState(false);
+
+  const transferCandidates = useMemo(() => (
+    transferMembers.filter((member) => member.active && member.role !== 'leader')
+  ), [transferMembers]);
+
+  const selectedTransferMember = useMemo(() => (
+    transferCandidates.find((member) => member.pubkey === selectedTransferPubkey) ?? null
+  ), [selectedTransferPubkey, transferCandidates]);
+
+  const getTransferMemberLabel = useCallback((member: MemberRecord): string => {
+    const displayName = member.display_name?.trim();
+    if (displayName) {
+      return displayName;
+    }
+    const fallback = member.wallet_address?.trim() || member.pubkey;
+    return truncateMiddle(fallback);
+  }, []);
 
   const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
     if (!activeOrg) {
@@ -119,19 +147,58 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!activeOrg) {
-      setModerationRequired(false);
+      setTransferMembers([]);
+      setTransferMembersError(null);
+      setTransferMembersLoading(false);
+      setSelectedTransferPubkey('');
+      setShowTransferLeadershipConfirm(false);
       return;
     }
 
     let cancelled = false;
-    setConfigLoading(true);
-    setConfigError(null);
+    setTransferMembersLoading(true);
+    setTransferMembersError(null);
+
+    void listMembers(activeOrg.org_id)
+      .then((members) => {
+        if (cancelled) return;
+
+        const nextMembers = members ?? [];
+        setTransferMembers(nextMembers);
+
+        const nextCandidates = nextMembers.filter((member) => member.active && member.role !== 'leader');
+        setSelectedTransferPubkey((previous) => (
+          nextCandidates.some((member) => member.pubkey === previous)
+            ? previous
+            : nextCandidates[0]?.pubkey ?? ''
+        ));
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setTransferMembers([]);
+        setSelectedTransferPubkey('');
+        setTransferMembersError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setTransferMembersLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrg]);
+
+  useEffect(() => {
+    if (!activeOrg) {
+      return;
+    }
+
+    let cancelled = false;
 
     void Promise.all([getOrg(activeOrg.org_id), getHubServingAddress(), getHubResponsePubkey()])
       .then(([summary, fallbackServingAddress, fallbackResponsePubkey]) => {
         if (cancelled) return;
-
-        setModerationRequired(summary.moderation_required ?? false);
 
         const summaryServingAddress = summary.hub_serving_address ?? summary.hub_serving_key_address;
         const resolvedServingAddress = [
@@ -151,15 +218,12 @@ export default function SettingsPage() {
         setHubResponsePubkey(resolvedResponsePubkey.trim());
         setHubAdvertisedResponsePubkey(normalizedFallbackResponsePubkey);
       })
-      .catch(err => {
-        if (cancelled) return;
-        setConfigError(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setConfigLoading(false);
+      .catch(() => {
+        if (cancelled) {
+          return;
         }
       });
+
     return () => {
       cancelled = true;
     };
@@ -284,32 +348,35 @@ export default function SettingsPage() {
     };
   }, [activeOrg]);
 
-  const handleModerationRequiredToggle = useCallback(async () => {
-    if (!activeOrg) {
+  const handleTransferLeadership = useCallback(async () => {
+    if (!activeOrg || !selectedTransferPubkey) {
       return;
     }
 
-    const nextValue = !moderationRequired;
-    const toastId = txToast('Moderation mode');
-
-    setSavingModerationRequired(true);
-    setConfigError(null);
+    const toastId = txToast('Transfer leadership');
+    setSavingTransferLeadership(true);
+    setTransferMembersError(null);
 
     try {
-      await setOrgModerationRequired(activeOrg.org_id, nextValue);
-      setModerationRequired(nextValue);
-      txSuccess(
-        toastId,
-        nextValue
-          ? 'Moderators enabled. Recommendations now appear to leaders in chain-submit.'
-          : 'Moderators disabled. Submissions now go straight to chain-submit.',
-      );
+      const target = transferMembers.find(m => m.pubkey === selectedTransferPubkey);
+      const targetWalletAddress = target?.wallet_address?.trim();
+      if (!targetWalletAddress) {
+        txError(toastId, 'The new leader must link a wallet address before leadership can be transferred.');
+        return;
+      }
+      const walletConn = await connectWallet();
+      txConfirming(toastId, 'Transfer leadership');
+      const msg = buildTransferLeadershipMsg(walletConn.address, activeOrg.org_id, selectedTransferPubkey, targetWalletAddress);
+      const orgAccount = await resolveOrgAccountForGas();
+      const result = await directBroadcast(walletConn.address, [msg], orgAccount);
+      setShowTransferLeadershipConfirm(false);
+      txSuccess(toastId, 'Leadership transferred', result.txHash);
     } catch (err) {
       txError(toastId, err instanceof Error ? err.message : String(err));
     } finally {
-      setSavingModerationRequired(false);
+      setSavingTransferLeadership(false);
     }
-  }, [activeOrg, moderationRequired]);
+  }, [activeOrg, resolveOrgAccountForGas, selectedTransferPubkey, transferMembers]);
 
   const handleChainConfigSave = useCallback(async (nextServeAttestationRequired: boolean) => {
     if (!activeOrg) {
@@ -619,49 +686,93 @@ export default function SettingsPage() {
         <GuardCard title="Select or create an org to manage its settings." />
       ) : (
         <>
-          <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-wv-text">Moderation Configuration</h2>
-              <InfoTooltip label="About moderation configuration">
-                Whether appointed moderators review submissions before leader approval.
-              </InfoTooltip>
-            </div>
-            <p className="mt-1 text-sm text-wv-dim">
-              Control whether moderator recommendations are enabled before leader approval.
-            </p>
+          {isLeader && (
+            <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-semibold text-wv-text">Leadership Transfer</h2>
+              </div>
+              <p className="mt-1 text-sm text-wv-dim">
+                Transfer leadership to an active member. This action is irreversible.
+              </p>
 
-            <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-wv-text">Use moderators</p>
-                  <p className="mt-1 text-xs text-wv-dim">
-                    When on, appointed moderators can review and vote on submissions as recommendations. The leader always has final say.
-                  </p>
+              {transferMembersError && (
+                <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                  {transferMembersError}
                 </div>
+              )}
 
-                <label className="inline-flex items-center gap-2 text-sm text-wv-text">
-                  <input
-                    type="checkbox"
-                    checked={moderationRequired}
-                    onChange={() => void handleModerationRequiredToggle()}
-                    disabled={configLoading || savingModerationRequired || !orgLoaded}
-                    className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2"
-                  />
-                  {savingModerationRequired ? 'Saving…' : moderationRequired ? 'On' : 'Off'}
-                </label>
+              <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div className="w-full sm:max-w-md">
+                    <label htmlFor="leadership-transfer-member" className="block text-sm font-medium text-wv-text">
+                      New leader
+                    </label>
+                    <select
+                      id="leadership-transfer-member"
+                      value={selectedTransferPubkey}
+                      onChange={(event) => setSelectedTransferPubkey(event.target.value)}
+                      disabled={transferMembersLoading || savingTransferLeadership || transferCandidates.length === 0}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    >
+                      {transferCandidates.length === 0 ? (
+                        <option value="">No eligible members available</option>
+                      ) : (
+                        transferCandidates.map((member) => (
+                          <option key={member.pubkey} value={member.pubkey}>
+                            {member.display_name?.trim() || truncateMiddle(member.wallet_address?.trim() || member.pubkey)}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                    <p className="mt-2 text-xs text-wv-dim">Only active, non-leader members are eligible.</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowTransferLeadershipConfirm(true)}
+                    disabled={transferMembersLoading || savingTransferLeadership || !selectedTransferMember || !orgLoaded}
+                    className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  >
+                    Transfer Leadership
+                  </button>
+                </div>
+              </div>
+
+              {transferMembersLoading && <p className="mt-4 text-xs text-wv-dim">Loading members…</p>}
+            </section>
+          )}
+
+          {isLeader && showTransferLeadershipConfirm && selectedTransferMember && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-wv-bg/70 px-4">
+              <div className="w-full max-w-md rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+                <h3 className="text-lg font-semibold text-wv-text">Confirm leadership transfer</h3>
+                <p className="mt-2 text-sm text-wv-dim">
+                  This action is irreversible. <span className="font-medium text-wv-text">{getTransferMemberLabel(selectedTransferMember)}</span> will become the new leader for {activeOrg.org_name}.
+                </p>
+                <p className="mt-2 text-xs text-wv-dim">
+                  You will immediately lose leader permissions for this organization.
+                </p>
+                <div className="mt-4 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTransferLeadership}
+                    disabled={savingTransferLeadership || !orgLoaded}
+                    className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  >
+                    {savingTransferLeadership ? 'Transferring…' : 'Confirm transfer'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowTransferLeadershipConfirm(false)}
+                    disabled={savingTransferLeadership}
+                    className="inline-flex items-center justify-center rounded-lg border border-wv-line-2 px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
-
-            {configError && (
-              <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
-                {configError}
-              </div>
-            )}
-
-            {configLoading && (
-              <p className="mt-4 text-xs text-wv-dim">Loading current moderation settings…</p>
-            )}
-          </section>
+          )}
 
           <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
             <div className="flex items-center gap-2">

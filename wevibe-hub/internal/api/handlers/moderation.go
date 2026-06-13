@@ -48,6 +48,12 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canContribute, _, err := members.GetMemberCapabilities(r.Context(), pool, orgID, memberPubkey)
+	if err != nil || !canContribute {
+		http.Error(w, `{"error":"contributor capability required to submit"}`, http.StatusForbidden)
+		return
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
@@ -172,6 +178,13 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"Trial members cannot contribute. Upgrade to full membership."}`, http.StatusForbidden)
 		return
 	}
+
+	canContribute, _, err := members.GetMemberCapabilities(r.Context(), pool, orgID, memberPubkey)
+	if err != nil || !canContribute {
+		http.Error(w, `{"error":"contributor capability required to submit"}`, http.StatusForbidden)
+		return
+	}
+
 	var req protocol.SubmitMemoryBatchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
@@ -329,7 +342,7 @@ func GetPendingQueue(w http.ResponseWriter, r *http.Request) {
 	items, err := moderation.GetPendingQueue(r.Context(), pool, orgID, pubkey)
 	if err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "insufficient role") || strings.Contains(errMsg, "not found") {
+		if strings.Contains(errMsg, "insufficient role") || strings.Contains(errMsg, "insufficient capability") || strings.Contains(errMsg, "not found") {
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		}
@@ -514,7 +527,7 @@ func VoteOnSubmission(w http.ResponseWriter, r *http.Request) {
 		case strings.Contains(msg, "not found"):
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, msg), http.StatusNotFound)
 			return
-		case strings.Contains(msg, "inactive"), strings.Contains(msg, "insufficient role"):
+		case strings.Contains(msg, "inactive"), strings.Contains(msg, "insufficient role"), strings.Contains(msg, "insufficient capability"):
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		case strings.Contains(msg, "resolved"):
@@ -597,7 +610,7 @@ func VoteOnKeyword(w http.ResponseWriter, r *http.Request) {
 		case strings.Contains(msg, "not found"):
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, msg), http.StatusNotFound)
 			return
-		case strings.Contains(msg, "inactive"), strings.Contains(msg, "insufficient role"):
+		case strings.Contains(msg, "inactive"), strings.Contains(msg, "insufficient role"), strings.Contains(msg, "insufficient capability"):
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 			return
 		case strings.Contains(msg, "resolved"):
@@ -679,7 +692,7 @@ func ApproveSubmission(w http.ResponseWriter, r *http.Request) {
 		req.EmbeddingSchemaVersion,
 	); err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "forbidden") {
+		if strings.Contains(errMsg, "forbidden") || strings.Contains(errMsg, "insufficient capability") {
 			http.Error(w, `{"error":"forbidden: not a moderator"}`, http.StatusForbidden)
 			return
 		}

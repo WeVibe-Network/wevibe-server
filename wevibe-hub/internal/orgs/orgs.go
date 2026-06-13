@@ -73,12 +73,12 @@ func GetOrg(ctx context.Context, pool *pgxpool.Pool, orgID string) (*protocol.Or
 	err := pool.QueryRow(ctx, `
 		SELECT org_id, org_name, domain, description, tech_stack, focus_areas, leader_pubkey, current_epoch,
 		       egress_mode, allowed_providers, status, rotation_status,
-		       COALESCE(moderation_required, FALSE), created_at
+		       created_at
 		FROM orgs WHERE org_id = $1
 	`, orgID).Scan(
 		&org.OrgID, &org.OrgName, &org.Domain, &org.Description, &org.TechStack, &org.FocusAreas, &org.LeaderPubkey,
 		&org.CurrentEpoch, &org.EgressMode, &org.AllowedProviders,
-		&org.Status, &org.RotationStatus, &org.ModerationRequired, &org.CreatedAt,
+		&org.Status, &org.RotationStatus, &org.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -341,21 +341,6 @@ func OrgExists(ctx context.Context, pool *pgxpool.Pool, orgID string) (bool, err
 		return false, err
 	}
 	return exists, nil
-}
-
-func UpdateModerationRequired(ctx context.Context, pool *pgxpool.Pool, orgID string, moderationRequired bool) error {
-	tag, err := pool.Exec(ctx, `
-		UPDATE orgs
-		SET moderation_required = $1, updated_at = NOW()
-		WHERE org_id = $2
-	`, moderationRequired, orgID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("org not found")
-	}
-	return nil
 }
 
 func EpochExists(ctx context.Context, pool *pgxpool.Pool, orgID string, epochID int) (bool, error) {

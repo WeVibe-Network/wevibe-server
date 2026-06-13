@@ -18,7 +18,7 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.org.v1.MsgAddMember',
   '/wevibe.org.v1.MsgRemoveMember',
   '/wevibe.org.v1.MsgSetOrgConfig',
-  '/wevibe.org.v1.MsgUpdateMemberRole',
+  '/wevibe.org.v1.MsgSetMemberCapabilities',
   '/wevibe.org.v1.MsgTransferLeadership',
   '/wevibe.org.v1.MsgCloseOrg',
   '/wevibe.org.v1.MsgSetServingKey',
@@ -131,6 +131,10 @@ function encodeVarint(value: number): number[] {
 function encodeStringField(tag: number, value: string): number[] {
   const bytes = [...Buffer.from(value)];
   return [tag, ...encodeVarint(bytes.length), ...bytes];
+}
+
+function encodeBoolField(tag: number, value: boolean): number[] {
+  return [tag, ...encodeVarint(value ? 1 : 0)];
 }
 
 function encodeBytesField(tag: number, value: string): number[] {
@@ -321,6 +325,8 @@ export function buildAddMemberMsg(
   pubkey: string,
   role: string,
   x25519Pubkey: string,
+  canContribute: boolean,
+  canModerate: boolean,
 ): EncodeObject {
   const fields: number[] = [
     ...encodeStringField(0x0a, signer),
@@ -328,6 +334,8 @@ export function buildAddMemberMsg(
     ...encodeStringField(0x1a, pubkey),
     ...encodeStringField(0x22, role),
     ...encodeStringField(0x2a, x25519Pubkey),
+    ...encodeBoolField(0x30, canContribute),
+    ...encodeBoolField(0x38, canModerate),
   ];
 
   return {
@@ -353,21 +361,23 @@ export function buildRemoveMemberMsg(
   };
 }
 
-export function buildUpdateMemberRoleMsg(
+export function buildSetMemberCapabilitiesMsg(
   signer: string,
   orgId: string,
   pubkey: string,
-  newRole: string,
+  canContribute: boolean,
+  canModerate: boolean,
 ): EncodeObject {
   const fields: number[] = [
     ...encodeStringField(0x0a, signer),
     ...encodeStringField(0x12, orgId),
     ...encodeStringField(0x1a, pubkey),
-    ...encodeStringField(0x22, newRole),
+    ...encodeBoolField(0x20, canContribute),
+    ...encodeBoolField(0x28, canModerate),
   ];
 
   return {
-    typeUrl: '/wevibe.org.v1.MsgUpdateMemberRole',
+    typeUrl: '/wevibe.org.v1.MsgSetMemberCapabilities',
     value: Uint8Array.from(fields),
   };
 }

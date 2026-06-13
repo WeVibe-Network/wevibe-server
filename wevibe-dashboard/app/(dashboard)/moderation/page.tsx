@@ -5,7 +5,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ConnectionState, WeVibeMcpClient, getMcpClient } from '@/lib/mcp-client';
 import {
-  getOrg,
   voteKeyword,
   voteSubmission,
   type SanitizationFinding,
@@ -151,8 +150,6 @@ export default function ModerationPage() {
   const { activeOrg } = useOrgContext();
   const orgId = activeOrg?.org_id ?? '';
 
-  const [moderationRequired, setModerationRequired] = useState<boolean | null>(null);
-  const [moderationGateLoading, setModerationGateLoading] = useState(false);
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
   const [items, setItems] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -177,44 +174,9 @@ export default function ModerationPage() {
     };
   }, [attachClient]);
 
-  useEffect(() => {
-    if (!orgId) {
-      setModerationRequired(null);
-      setModerationGateLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setModerationGateLoading(true);
-
-    void getOrg(orgId)
-      .then((summary) => {
-        if (cancelled) {
-          return;
-        }
-        setModerationRequired(summary.moderation_required ?? false);
-      })
-      .catch((err) => {
-        if (cancelled) {
-          return;
-        }
-        setModerationRequired(false);
-        toast.error(err instanceof Error ? err.message : String(err));
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setModerationGateLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId]);
-
   const loadQueue = useCallback(async () => {
     const client = clientRef.current;
-    if (!orgId || moderationRequired !== true || !client || client.state !== 'connected') {
+    if (!orgId || !client || client.state !== 'connected') {
       return;
     }
 
@@ -229,20 +191,20 @@ export default function ModerationPage() {
     } finally {
       setLoading(false);
     }
-  }, [moderationRequired, orgId]);
+  }, [orgId]);
 
   const hasLoadedRef = useRef(false);
 
   useEffect(() => {
-    if (clientState === 'connected' && moderationRequired === true && !hasLoadedRef.current) {
+    if (clientState === 'connected' && !hasLoadedRef.current) {
       hasLoadedRef.current = true;
       void loadQueue();
     }
-    if (clientState !== 'connected' || moderationRequired !== true) {
+    if (clientState !== 'connected') {
       hasLoadedRef.current = false;
       setItems([]);
     }
-  }, [clientState, loadQueue, moderationRequired, orgId]);
+  }, [clientState, loadQueue, orgId]);
 
   const voteOnSubmission = useCallback(async (hash: string, vote: 'approve' | 'flag') => {
     if (!orgId) {
@@ -315,40 +277,6 @@ export default function ModerationPage() {
         </header>
         <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
           No organization selected. Choose an org first.
-        </div>
-      </div>
-    );
-  }
-
-  if (moderationGateLoading && moderationRequired === null) {
-    return (
-      <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
-          <p className="text-sm text-wv-dim">
-            Loading moderation configuration for {activeOrg.org_name}…
-          </p>
-        </header>
-      </div>
-    );
-  }
-
-  if (moderationRequired === false) {
-    return (
-      <div className="mx-auto flex max-w-5xl flex-col gap-6">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
-          <p className="text-sm text-wv-dim">
-            Moderation is optional and advisory for this org.
-          </p>
-        </header>
-        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center">
-          <p className="text-sm text-wv-text">
-            Moderation is off for this org — submissions go straight to the leader&apos;s chain-submit queue. Enable moderators in Settings.
-          </p>
-          <p className="mt-3 text-sm text-wv-dim">
-            Open <Link href="/settings" className="font-medium text-wv-violet underline-offset-2 hover:underline">Settings</Link> to turn on moderator recommendations.
-          </p>
         </div>
       </div>
     );

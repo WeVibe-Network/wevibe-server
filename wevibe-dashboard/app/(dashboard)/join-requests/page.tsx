@@ -48,7 +48,7 @@ export default function JoinRequestsPage() {
     }
   };
 
-  const handleApprove = async (requestId: string, role: 'member' | 'contributor') => {
+  const handleApprove = async (requestId: string, wantContributor: boolean) => {
     if (!orgId) return;
     setProcessing(requestId);
     const id = txToast('Approve');
@@ -69,8 +69,10 @@ export default function JoinRequestsPage() {
         walletConn.address,
         orgId,
         request.requester_pubkey,
-        role,
+        'member',
         request.x25519_pubkey,
+        wantContributor,
+        false,
       );
       const orgAccount = await getOrgAccountAddress(orgId);
       const result = await directBroadcast(walletConn.address, [msgAddMember], orgAccount);
@@ -219,14 +221,14 @@ export default function JoinRequestsPage() {
                           <option value="trial">Trial Member</option>
                         </select>
                         <button
-                          onClick={() => handleApprove(request.request_id, 'member')}
+                          onClick={() => handleApprove(request.request_id, false)}
                           disabled={processing === request.request_id}
                           className="px-4 py-2 bg-wv-panel-2 text-wv-text text-sm rounded hover:bg-wv-panel-3 disabled:opacity-50"
                         >
                           {processing === request.request_id ? 'Processing...' : 'Approve as member'}
                         </button>
                         <button
-                          onClick={() => handleApprove(request.request_id, 'contributor')}
+                          onClick={() => handleApprove(request.request_id, true)}
                           disabled={processing === request.request_id}
                           className="px-4 py-2 bg-wv-green text-white text-sm rounded hover:opacity-90 disabled:opacity-50"
                         >

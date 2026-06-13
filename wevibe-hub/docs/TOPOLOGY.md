@@ -60,7 +60,7 @@ The literal `WV-RELAY-v1` magic line MUST appear first. No trailing or additiona
 /wevibe.org.v1.MsgRemoveMember
 /wevibe.org.v1.MsgSetOrgConfig
 /wevibe.org.v1.MsgSetRepTiers
-/wevibe.org.v1.MsgUpdateMemberRole
+/wevibe.org.v1.MsgSetMemberCapabilities
 /wevibe.org.v1.MsgRotateEpoch
 ```
 
@@ -248,7 +248,7 @@ Only the **read-only** chain config endpoint remains:
 
 **Category A vs Category B (Decision C):**
 
-- **Category A** (off-chain mirror, hub-owned): `moderation_required`. Written via `PATCH /v1/orgs/{orgID}/config` (handler: `UpdateOrgConfig`). The dashboard is responsible for any Category A chain-side broadcast directly via Keplr — the hub has no involvement.
+- **Category A** (off-chain mirror, hub-owned): *(none.)* The former `moderation_required` field and its `PATCH /v1/orgs/{orgID}/config` route + `UpdateOrgConfig` handler were REMOVED 2026-06-13 — moderation is always-on advisory keyed on the per-member `can_moderate` capability, with no per-org toggle (D-MODERATION-ADVISORY, amended). There is no remaining hub-owned off-chain org-config mirror.
 - **Category B** (on-chain canonical): all fields listed above. Hub never writes these; the dashboard relays the appropriate `MsgSetOrgConfig` / `MsgSetRepTiers` through `POST /v1/relay/broadcast`.
 
 ### Moderation Submit with Trial Block (GAP-N9)
@@ -1117,7 +1117,7 @@ CREATE TABLE report_votes (
 4. On TX confirmation, the ChainWatcher's `processReportBookkeeping` handler deletes the memory from Qdrant, marks `pending_submissions.banned = TRUE`, and sets the report status to `'upheld'`.
 5. On TX failure (non-confirmation), the watcher takes no action; status remains `'upheld_pending_tx'` and the memory is NOT deleted (atomic via watcher gating).
 
-**Config changes:** `PATCH /v1/orgs/{orgID}/config` remains leader-only and uses `WeVibe-Signed` Ed25519 auth.
+**Config changes:** the `PATCH /v1/orgs/{orgID}/config` route + `UpdateOrgConfig` handler were REMOVED 2026-06-13 (its only field, `moderation_required`, is gone — moderation is always-on advisory). There is no remaining hub-side org-config mutation route; all org config is on-chain (Category B) via dashboard-direct CosmJS.
 
 **Wallet signature verification (`internal/verify/wallet_sig.go`, CO-233):**
 - `VerifyWalletSignature(walletAddress, signature, message []byte) error`

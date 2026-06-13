@@ -387,14 +387,14 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 
 		case *orgtypes.MsgAddMember:
 			if err := w.processAddMemberBookkeeping(ctx, txHashHex, height, timestamp,
-				m.OrgId, m.Pubkey, m.X25519Pubkey, m.Role); err != nil {
+				m.OrgId, m.Pubkey, m.X25519Pubkey, m.Role, m.CanContribute, m.CanModerate); err != nil {
 				w.logger.Error("processAddMemberBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
 			}
 
-		case *orgtypes.MsgUpdateMemberRole:
-			if err := w.processUpdateMemberRoleBookkeeping(ctx, txHashHex, height, timestamp,
-				m.OrgId, m.Pubkey, m.NewRole); err != nil {
-				w.logger.Error("processUpdateMemberRoleBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
+		case *orgtypes.MsgSetMemberCapabilities:
+			if err := w.processSetMemberCapabilitiesBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Pubkey, m.CanContribute, m.CanModerate); err != nil {
+				w.logger.Error("processSetMemberCapabilitiesBookkeeping failed", "err", err, "org_id", m.OrgId, "pubkey", m.Pubkey)
 			}
 
 		case *orgtypes.MsgRemoveMember:
@@ -426,102 +426,23 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 	return nil
 }
 
-func (w *ChainWatcher) processUpdateMemberRoleBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, newRole string) error {
-	var oldRole string
-	err := w.db.QueryRow(ctx, `
-		SELECT role
-		FROM members
-		WHERE org_id = $1 AND pubkey = $2
-	`, orgID, pubkey).Scan(&oldRole)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("failed to fetch current member role: %w", err)
-	}
-
+func (w *ChainWatcher) processSetMemberCapabilitiesBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, canContribute bool, canModerate bool) error {
 	tag, err := w.db.Exec(ctx, `
 		UPDATE members
-		SET role = $1,
+		SET can_contribute = $1,
+		    can_moderate = $2,
 		    chain_confirmed = TRUE,
 		    updated_at = NOW()
-		WHERE org_id = $2 AND pubkey = $3
-	`, newRole, orgID, pubkey)
+		WHERE org_id = $3 AND pubkey = $4
+	`, canContribute, canModerate, orgID, pubkey)
 	if err != nil {
-		return fmt.Errorf("failed to update member role: %w", err)
+		return fmt.Errorf("failed to update member capabilities: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		w.logger.Warn("member row not found during update-member-role bookkeeping",
+		w.logger.Warn("member row not found during set-member-capabilities bookkeeping",
 			"org_id", orgID,
 			"pubkey", pubkey,
 			"tx_hash", txHash)
-		return nil
-	}
-
-	if oldRole == newRole {
-		return nil
-	}
-
-	orgLabel := orgID
-	var orgName string
-	err = w.db.QueryRow(ctx, `
-		SELECT org_name
-		FROM orgs
-		WHERE org_id = $1
-	`, orgID).Scan(&orgName)
-	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			w.logger.Warn("failed to load org name for role-change notification",
-				"org_id", orgID,
-				"pubkey", pubkey,
-				"tx_hash", txHash,
-				"err", err)
-		}
-	} else if orgName != "" {
-		orgLabel = orgName
-	}
-
-	var category, title, body string
-	switch newRole {
-	case "moderator":
-		category = "moderator_promoted"
-		title = "Promoted to Moderator"
-		body = fmt.Sprintf("You're now a moderator of %s. You can review submissions and contribute memories.", orgLabel)
-	case "contributor":
-		if oldRole == "moderator" {
-			category = "moderator_revoked"
-			title = "Moderator role removed"
-			body = fmt.Sprintf("You're no longer a moderator of %s. You can still contribute memories.", orgLabel)
-		} else {
-			category = "contributor_promoted"
-			title = "Promoted to Contributor"
-			body = fmt.Sprintf("You can now contribute memories to %s.", orgLabel)
-		}
-	case "member":
-		if oldRole == "moderator" {
-			category = "moderator_revoked"
-			title = "Moderator role removed"
-			body = fmt.Sprintf("You're no longer a moderator of %s.", orgLabel)
-		} else {
-			category = "contributor_revoked"
-			title = "Contributor access revoked"
-			body = fmt.Sprintf("Your contributor access to %s has been revoked.", orgLabel)
-		}
-	default:
-		// Unrecognized target role — no notification.
-		return nil
-	}
-
-	if err := notifications.EmitUserNotification(
-		ctx,
-		w.db,
-		w.notifHub,
-		w.dispatcher,
-		pubkey,
-		category,
-		title,
-		body,
-		txHash,
-		orgID,
-	); err != nil {
-		return fmt.Errorf("failed to emit role-change notification: %w", err)
 	}
 
 	return nil
@@ -597,15 +518,17 @@ func (w *ChainWatcher) processRemoveMemberBookkeeping(ctx context.Context, txHas
 	return nil
 }
 
-func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, x25519Pubkey string, role string) error {
+func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string, x25519Pubkey string, role string, canContribute bool, canModerate bool) error {
 	tag, err := w.db.Exec(ctx, `
 		UPDATE members
 		SET role = $1,
+		    can_contribute = $2,
+		    can_moderate = $3,
 		    chain_confirmed = TRUE,
 		    active = TRUE,
 		    updated_at = NOW()
-		WHERE org_id = $2 AND pubkey = $3
-	`, role, orgID, pubkey)
+		WHERE org_id = $4 AND pubkey = $5
+	`, role, canContribute, canModerate, orgID, pubkey)
 	if err != nil {
 		return fmt.Errorf("failed to mark member chain-confirmed: %w", err)
 	}
@@ -649,6 +572,8 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 				x25519_pubkey,
 				pre_pubkey,
 				role,
+				can_contribute,
+				can_moderate,
 				join_epoch,
 				member_tier,
 				is_trial,
@@ -663,18 +588,22 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 				$4,
 				$5,
 				$6,
-				COALESCE($7, 'member'),
+				$7,
 				$8,
-				CASE WHEN $8 THEN NOW() + ($9 * INTERVAL '1 day') ELSE NULL END,
+				COALESCE($9, 'member'),
+				$10,
+				CASE WHEN $10 THEN NOW() + ($11 * INTERVAL '1 day') ELSE NULL END,
 				TRUE,
 				TRUE
 			)
 			ON CONFLICT (org_id, pubkey) DO UPDATE
 			SET role = EXCLUDED.role,
+			    can_contribute = EXCLUDED.can_contribute,
+			    can_moderate = EXCLUDED.can_moderate,
 			    chain_confirmed = TRUE,
 			    active = TRUE,
 			    updated_at = NOW()
-		`, orgID, pubkey, x25519Pubkey, prePubkey, role, currentEpoch, approvalTier, approvalIsTrial, trialDays); err != nil {
+		`, orgID, pubkey, x25519Pubkey, prePubkey, role, canContribute, canModerate, currentEpoch, approvalTier, approvalIsTrial, trialDays); err != nil {
 			return fmt.Errorf("failed to upsert confirmed member from join request: %w", err)
 		}
 
@@ -723,6 +652,8 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			x25519_pubkey,
 			pre_pubkey,
 			role,
+			can_contribute,
+			can_moderate,
 			join_epoch,
 			member_tier,
 			is_trial,
@@ -737,6 +668,8 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			NULL,
 			$4,
 			$5,
+			$6,
+			$7,
 			'member',
 			FALSE,
 			NULL,
@@ -745,10 +678,12 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 		)
 		ON CONFLICT (org_id, pubkey) DO UPDATE
 		SET role = EXCLUDED.role,
+		    can_contribute = EXCLUDED.can_contribute,
+		    can_moderate = EXCLUDED.can_moderate,
 		    chain_confirmed = TRUE,
 		    active = TRUE,
 		    updated_at = NOW()
-	`, orgID, pubkey, x25519Pubkey, role, currentEpoch); err != nil {
+	`, orgID, pubkey, x25519Pubkey, role, canContribute, canModerate, currentEpoch); err != nil {
 		return fmt.Errorf("failed to upsert confirmed invited member: %w", err)
 	}
 

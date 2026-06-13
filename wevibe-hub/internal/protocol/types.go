@@ -35,20 +35,19 @@ func IsValidMemoryType(s string) bool {
 }
 
 type OrgInfo struct {
-	OrgID              string    `json:"org_id"`
-	OrgName            string    `json:"org_name"`
-	Domain             string    `json:"domain"`
-	Description        string    `json:"description"`
-	TechStack          string    `json:"tech_stack"`
-	FocusAreas         string    `json:"focus_areas"`
-	LeaderPubkey       string    `json:"leader_pubkey"`
-	CurrentEpoch       int       `json:"current_epoch"`
-	EgressMode         string    `json:"egress_mode"`
-	AllowedProviders   []string  `json:"allowed_providers"`
-	Status             string    `json:"status"`
-	RotationStatus     string    `json:"rotation_status"`
-	ModerationRequired bool      `json:"moderation_required"`
-	CreatedAt          time.Time `json:"created_at"`
+	OrgID            string    `json:"org_id"`
+	OrgName          string    `json:"org_name"`
+	Domain           string    `json:"domain"`
+	Description      string    `json:"description"`
+	TechStack        string    `json:"tech_stack"`
+	FocusAreas       string    `json:"focus_areas"`
+	LeaderPubkey     string    `json:"leader_pubkey"`
+	CurrentEpoch     int       `json:"current_epoch"`
+	EgressMode       string    `json:"egress_mode"`
+	AllowedProviders []string  `json:"allowed_providers"`
+	Status           string    `json:"status"`
+	RotationStatus   string    `json:"rotation_status"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type DiscoverOrg struct {
@@ -106,6 +105,8 @@ type MemberRecord struct {
 	Pubkey                 string    `json:"pubkey" db:"pubkey"`
 	X25519Pubkey           string    `json:"x25519_pubkey" db:"x25519_pubkey"`
 	Role                   string    `json:"role" db:"role"`
+	CanContribute          bool      `json:"can_contribute" db:"can_contribute"`
+	CanModerate            bool      `json:"can_moderate" db:"can_moderate"`
 	JoinEpoch              int       `json:"join_epoch" db:"join_epoch"`
 	HistoryAccessFromEpoch int       `json:"history_access_from_epoch" db:"history_access_from_epoch"`
 	AuthorizedUntilEpoch   *int      `json:"authorized_until_epoch" db:"authorized_until_epoch"`
@@ -122,6 +123,8 @@ type InviteMemberRequest struct {
 	X25519Pubkey   string `json:"x25519_pubkey"`
 	PrePubkey      string `json:"pre_pubkey,omitempty"`
 	Role           string `json:"role"`
+	CanContribute  bool   `json:"can_contribute"`
+	CanModerate    bool   `json:"can_moderate"`
 	SignedBy       string `json:"signed_by"`
 	Signature      string `json:"signature"`
 	EncEnvelope    string `json:"enc_envelope"`
@@ -374,6 +377,8 @@ type MemberOrgEntry struct {
 	OrgID                  string   `json:"org_id"`
 	OrgName                string   `json:"org_name"`
 	Role                   string   `json:"role"`
+	CanContribute          bool     `json:"can_contribute"`
+	CanModerate            bool     `json:"can_moderate"`
 	CurrentEpoch           int      `json:"current_epoch"`
 	HistoryAccessFromEpoch int      `json:"history_access_from_epoch"`
 	EgressMode             string   `json:"egress_mode"`

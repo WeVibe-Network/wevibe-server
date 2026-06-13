@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS orgs (
     fee_model                   JSONB       NOT NULL DEFAULT '{}',
     egress_mode                 TEXT        NOT NULL DEFAULT 'unrestricted'
                                         CHECK (egress_mode IN ('local_only', 'allowlist', 'unrestricted')),
-    moderation_required        BOOLEAN     NOT NULL DEFAULT FALSE,
     report_ban_threshold        INTEGER     NOT NULL DEFAULT 3 CHECK (report_ban_threshold >= 1),
     allowed_providers           TEXT[]      NOT NULL DEFAULT '{}',
     status                      TEXT        NOT NULL DEFAULT 'active'
@@ -78,7 +77,9 @@ CREATE TABLE IF NOT EXISTS members (
     x25519_pubkey               TEXT        NOT NULL,
     pre_pubkey                  BYTEA,
     role                        TEXT        NOT NULL
-                                            CHECK (role IN ('leader', 'moderator', 'member', 'contributor')),
+                                            CHECK (role IN ('leader', 'member')),
+    can_contribute              BOOLEAN     NOT NULL DEFAULT FALSE,
+    can_moderate                BOOLEAN     NOT NULL DEFAULT FALSE,
     join_epoch                  INTEGER     NOT NULL,
     history_access_from_epoch   INTEGER     NOT NULL DEFAULT 0,
     authorized_until_epoch      INTEGER,

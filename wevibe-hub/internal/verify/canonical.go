@@ -27,9 +27,11 @@ func CreateOrgMessage(leaderPubkey, leaderX25519Pubkey, orgName, domain, encEnve
 	}, "\n"))
 }
 
-func InviteMemberMessage(orgID, pubkey, x25519Pubkey, role, signedBy, encEnvelope, searchEnvelope, modEnvelope string) []byte {
+func InviteMemberMessage(orgID, pubkey, x25519Pubkey, role, signedBy, encEnvelope, searchEnvelope, modEnvelope string, canContribute, canModerate bool) []byte {
 	return []byte(strings.Join([]string{
 		"wevibe.invite_member.v1",
+		fmt.Sprintf("can_contribute:%t", canContribute),
+		fmt.Sprintf("can_moderate:%t", canModerate),
 		fmt.Sprintf("enc_envelope:%s", encEnvelope),
 		fmt.Sprintf("mod_envelope:%s", modEnvelope),
 		fmt.Sprintf("org_id:%s", orgID),

@@ -11,6 +11,8 @@ import (
 
 type hubActiveMember struct {
 	role           string
+	canContribute  bool
+	canModerate    bool
 	chainConfirmed bool
 }
 
@@ -45,13 +47,18 @@ func ReconcileMembership(ctx context.Context, chainClient *GrpcClient, pool *pgx
 			continue
 		}
 
-		chainByPubkey := make(map[string]string, len(chainMembers))
+		chainByPubkey := make(map[string]hubActiveMember, len(chainMembers))
 		for _, member := range chainMembers {
 			pubkey := strings.TrimSpace(member.Pubkey)
 			if pubkey == "" {
 				continue
 			}
-			chainByPubkey[pubkey] = strings.TrimSpace(member.Role)
+			chainByPubkey[pubkey] = hubActiveMember{
+				role:           strings.TrimSpace(member.Role),
+				canContribute:  member.CanContribute,
+				canModerate:    member.CanModerate,
+				chainConfirmed: true,
+			}
 		}
 
 		hubMembers, err := loadHubActiveMembers(ctx, pool, orgID)
@@ -60,7 +67,7 @@ func ReconcileMembership(ctx context.Context, chainClient *GrpcClient, pool *pgx
 			continue
 		}
 
-		for pubkey, chainRole := range chainByPubkey {
+		for pubkey, chainMember := range chainByPubkey {
 			hubMember, exists := hubMembers[pubkey]
 			if !exists {
 				log.Printf("WARNING: chain member missing from hub; cannot provision without crypto (org_id=%s pubkey=%s)", orgID, pubkey)
@@ -68,19 +75,25 @@ func ReconcileMembership(ctx context.Context, chainClient *GrpcClient, pool *pgx
 				continue
 			}
 
-			if hubMember.role != chainRole {
+			if hubMember.role != chainMember.role ||
+				hubMember.canContribute != chainMember.canContribute ||
+				hubMember.canModerate != chainMember.canModerate {
 				if _, err := pool.Exec(ctx, `
 					UPDATE members
 					SET role = $1,
+					    can_contribute = $2,
+					    can_moderate = $3,
 					    chain_confirmed = TRUE,
 					    updated_at = NOW()
-					WHERE org_id = $2 AND pubkey = $3
-				`, chainRole, orgID, pubkey); err != nil {
+					WHERE org_id = $4 AND pubkey = $5
+				`, chainMember.role, chainMember.canContribute, chainMember.canModerate, orgID, pubkey); err != nil {
 					log.Printf("WARNING: membership reconcile role heal failed for org=%s pubkey=%s: %v", orgID, pubkey, err)
 					continue
 				}
 				rolesHealed++
-				hubMember.role = chainRole
+				hubMember.role = chainMember.role
+				hubMember.canContribute = chainMember.canContribute
+				hubMember.canModerate = chainMember.canModerate
 				hubMember.chainConfirmed = true
 				hubMembers[pubkey] = hubMember
 				continue
@@ -161,7 +174,7 @@ func loadNonClosedOrgIDs(ctx context.Context, pool *pgxpool.Pool) ([]string, err
 
 func loadHubActiveMembers(ctx context.Context, pool *pgxpool.Pool, orgID string) (map[string]hubActiveMember, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT pubkey, role, chain_confirmed
+		SELECT pubkey, role, can_contribute, can_moderate, chain_confirmed
 		FROM members
 		WHERE org_id=$1 AND active=true
 	`, orgID)
@@ -174,11 +187,13 @@ func loadHubActiveMembers(ctx context.Context, pool *pgxpool.Pool, orgID string)
 	for rows.Next() {
 		var pubkey string
 		var role string
+		var canContribute bool
+		var canModerate bool
 		var chainConfirmed bool
-		if err := rows.Scan(&pubkey, &role, &chainConfirmed); err != nil {
+		if err := rows.Scan(&pubkey, &role, &canContribute, &canModerate, &chainConfirmed); err != nil {
 			return nil, err
 		}
-		members[pubkey] = hubActiveMember{role: role, chainConfirmed: chainConfirmed}
+		members[pubkey] = hubActiveMember{role: role, canContribute: canContribute, canModerate: canModerate, chainConfirmed: chainConfirmed}
 	}
 
 	if err := rows.Err(); err != nil {

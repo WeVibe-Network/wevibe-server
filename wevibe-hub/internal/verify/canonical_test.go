@@ -98,38 +98,46 @@ func TestInviteMemberMessage_Deterministic(t *testing.T) {
 		"enc_env_base64_data",
 		"srch_env_base64_data",
 		"mod_envelope_data",
+		false,
+		false,
 	)
 
 	lines := splitLines(string(msg))
-	if len(lines) != 9 {
-		t.Fatalf("expected 9 lines, got %d", len(lines))
+	if len(lines) != 11 {
+		t.Fatalf("expected 11 lines, got %d", len(lines))
 	}
 	if lines[0] != "wevibe.invite_member.v1" {
 		t.Errorf("line 0: %q", lines[0])
 	}
-	if lines[1] != "enc_envelope:enc_env_base64_data" {
+	if lines[1] != "can_contribute:false" {
 		t.Errorf("line 1: %q", lines[1])
 	}
-	if lines[2] != "mod_envelope:mod_envelope_data" {
+	if lines[2] != "can_moderate:false" {
 		t.Errorf("line 2: %q", lines[2])
 	}
-	if lines[3] != "org_id:org-test-1" {
+	if lines[3] != "enc_envelope:enc_env_base64_data" {
 		t.Errorf("line 3: %q", lines[3])
 	}
-	if lines[4] != "pubkey:invitee_pubkey_hex" {
+	if lines[4] != "mod_envelope:mod_envelope_data" {
 		t.Errorf("line 4: %q", lines[4])
 	}
-	if lines[5] != "role:member" {
+	if lines[5] != "org_id:org-test-1" {
 		t.Errorf("line 5: %q", lines[5])
 	}
-	if lines[6] != "search_envelope:srch_env_base64_data" {
+	if lines[6] != "pubkey:invitee_pubkey_hex" {
 		t.Errorf("line 6: %q", lines[6])
 	}
-	if lines[7] != "signed_by:leader_pubkey_hex" {
+	if lines[7] != "role:member" {
 		t.Errorf("line 7: %q", lines[7])
 	}
-	if lines[8] != "x25519_pubkey:invitee_x25519_hex" {
+	if lines[8] != "search_envelope:srch_env_base64_data" {
 		t.Errorf("line 8: %q", lines[8])
+	}
+	if lines[9] != "signed_by:leader_pubkey_hex" {
+		t.Errorf("line 9: %q", lines[9])
+	}
+	if lines[10] != "x25519_pubkey:invitee_x25519_hex" {
+		t.Errorf("line 10: %q", lines[10])
 	}
 }
 

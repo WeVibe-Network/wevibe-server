@@ -66,7 +66,7 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.Role == "moderator" || req.Role == "leader" {
+	if req.CanModerate || req.Role == "leader" {
 		if req.ModEnvelope == "" {
 			http.Error(w, `{"error":"mod_envelope is required for moderator/leader role"}`, http.StatusBadRequest)
 			return
@@ -88,7 +88,7 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	canonical := verify.InviteMemberMessage(orgID, req.Pubkey, req.X25519Pubkey, req.Role, req.SignedBy, req.EncEnvelope, req.SearchEnvelope, req.ModEnvelope)
+	canonical := verify.InviteMemberMessage(orgID, req.Pubkey, req.X25519Pubkey, req.Role, req.SignedBy, req.EncEnvelope, req.SearchEnvelope, req.ModEnvelope, req.CanContribute, req.CanModerate)
 	if err := verify.RequestSignature(req.SignedBy, req.Signature, canonical); err != nil {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return

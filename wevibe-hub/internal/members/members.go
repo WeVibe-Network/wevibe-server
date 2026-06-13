@@ -28,9 +28,9 @@ func InviteMember(ctx context.Context, pool *pgxpool.Pool, orgID string, current
 	}
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, pre_pubkey, role, join_epoch)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, orgID, req.Pubkey, req.X25519Pubkey, prePubkey, req.Role, currentEpoch)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, pre_pubkey, role, can_contribute, can_moderate, join_epoch)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, orgID, req.Pubkey, req.X25519Pubkey, prePubkey, req.Role, req.CanContribute, req.CanModerate, currentEpoch)
 	if err != nil {
 		return nil, fmt.Errorf("insert member: %w", err)
 	}
@@ -71,11 +71,11 @@ func GetPrePubkey(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string)
 func GetMember(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (*protocol.MemberRecord, error) {
 	var m protocol.MemberRecord
 	err := pool.QueryRow(ctx, `
-		SELECT org_id, pubkey, x25519_pubkey, role, join_epoch,
+		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate, join_epoch,
 			   history_access_from_epoch, authorized_until_epoch, active, membership_active, joined_at, wallet_address
 		FROM members WHERE org_id = $1 AND pubkey = $2
 	`, orgID, pubkey).Scan(
-		&m.OrgID, &m.Pubkey, &m.X25519Pubkey, &m.Role, &m.JoinEpoch,
+		&m.OrgID, &m.Pubkey, &m.X25519Pubkey, &m.Role, &m.CanContribute, &m.CanModerate, &m.JoinEpoch,
 		&m.HistoryAccessFromEpoch, &m.AuthorizedUntilEpoch, &m.Active, &m.MembershipActive, &m.JoinedAt, &m.WalletAddress,
 	)
 	if err != nil {
@@ -119,7 +119,7 @@ func GetWalletAddress(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey str
 
 func ListMembers(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]protocol.MemberRecord, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT org_id, pubkey, x25519_pubkey, role, join_epoch,
+		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate, join_epoch,
 			   history_access_from_epoch, authorized_until_epoch, active, joined_at, wallet_address,
 			   dismissed_reports_count
 		FROM members WHERE org_id = $1 ORDER BY joined_at
@@ -152,6 +152,19 @@ func VerifyMemberAccess(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey s
 		return true, nil
 	}
 	return false, nil
+}
+
+func GetMemberCapabilities(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (canContribute bool, canModerate bool, err error) {
+	err = pool.QueryRow(ctx, `
+		SELECT can_contribute, can_moderate
+		FROM members
+		WHERE org_id = $1 AND pubkey = $2 AND active = true
+	`, orgID, pubkey).Scan(&canContribute, &canModerate)
+	if err != nil {
+		return false, false, err
+	}
+
+	return canContribute, canModerate, nil
 }
 
 func GetMemberRole(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (string, error) {
@@ -192,8 +205,8 @@ func IsLeader(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (bo
 
 func ListOrgsForMember(ctx context.Context, pool *pgxpool.Pool, pubkey string) ([]protocol.MemberOrgEntry, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT m.org_id, o.org_name, m.role, o.current_epoch,
-			   m.history_access_from_epoch, o.egress_mode, o.allowed_providers, m.wallet_address
+		SELECT m.org_id, o.org_name, m.role, m.can_contribute, m.can_moderate, o.current_epoch,
+		       m.history_access_from_epoch, o.egress_mode, o.allowed_providers, m.wallet_address
 		FROM members m
 		JOIN orgs o ON o.org_id = m.org_id
 		WHERE m.pubkey = $1 AND m.active = true
@@ -208,7 +221,7 @@ func ListOrgsForMember(ctx context.Context, pool *pgxpool.Pool, pubkey string) (
 		var e protocol.MemberOrgEntry
 		var allowedProviders []string
 		if err := rows.Scan(
-			&e.OrgID, &e.OrgName, &e.Role, &e.CurrentEpoch,
+			&e.OrgID, &e.OrgName, &e.Role, &e.CanContribute, &e.CanModerate, &e.CurrentEpoch,
 			&e.HistoryAccessFromEpoch, &e.EgressMode, &allowedProviders, &e.WalletAddress,
 		); err != nil {
 			return nil, err

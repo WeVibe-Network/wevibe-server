@@ -52,7 +52,16 @@ export function useDashboardState(): DashboardState {
       return 'IDENTITY_NO_ORG';
     }
 
-    return (`CONNECTED_${activeOrg.role.toUpperCase()}` as ViewState);
+    if (activeOrg.role === 'leader') {
+      return 'CONNECTED_LEADER';
+    }
+    if (activeOrg.can_moderate) {
+      return 'CONNECTED_MODERATOR';
+    }
+    if (activeOrg.can_contribute) {
+      return 'CONNECTED_CONTRIBUTOR';
+    }
+    return 'CONNECTED_MEMBER';
   }, [activeOrg, identity, identityLoading, orgsLoading]);
 
   return {
