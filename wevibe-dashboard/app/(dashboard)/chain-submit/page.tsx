@@ -263,7 +263,6 @@ export default function ChainSubmitPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
   const [verifyResults, setVerifyResults] = useState<VerificationResult[] | null>(null);
-  const [verifyProgress, setVerifyProgress] = useState<{ phase: 'embedding' | 'verifying'; current: number; total: number } | null>(null);
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
   const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
   const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
@@ -426,44 +425,47 @@ export default function ChainSubmitPage() {
     setBusy('verify');
     setVerifyResults(null);
     setNotice(null);
-    setVerifyProgress(null);
+
+    const client = getMcpClient();
+    if (client.state !== 'connected') {
+      toast.error('Connect to the MCP server to verify keywords.');
+      setBusy(null);
+      return;
+    }
+
+    const missingPayload = reviewKeywords.find((submission) => (
+      typeof submission.ciphertext_hex !== 'string'
+      || submission.ciphertext_hex.length === 0
+      || typeof submission.wrapped_dek_mod !== 'string'
+      || submission.wrapped_dek_mod.length === 0
+    ));
+    if (missingPayload) {
+      toast.error(`Missing encrypted payload for ${missingPayload.submission_hash.slice(0, 12)}…; cannot verify.`);
+      setBusy(null);
+      return;
+    }
+
+    const total = reviewKeywords.length;
+
+    type EmbedResult = {
+      id: string;
+      vector: number[] | null;
+      embedding_model_id: string;
+      embedding_schema_version: string;
+      error?: string;
+    };
+
+    // Progress lives in the toaster (a single sonner toast updated in place across
+    // both stages), not on the page.
+    const progressToastId = toast.loading(`Embedding retrieval cards… 0 / ${total}`);
 
     try {
-      const client = getMcpClient();
-      if (client.state !== 'connected') {
-        toast.error('Connect to the MCP server to verify keywords.');
-        return;
-      }
-
-      const missingPayload = reviewKeywords.find((submission) => (
-        typeof submission.ciphertext_hex !== 'string'
-        || submission.ciphertext_hex.length === 0
-        || typeof submission.wrapped_dek_mod !== 'string'
-        || submission.wrapped_dek_mod.length === 0
-      ));
-      if (missingPayload) {
-        toast.error(`Missing encrypted payload for ${missingPayload.submission_hash.slice(0, 12)}…; cannot verify.`);
-        return;
-      }
-
-      const total = reviewKeywords.length;
-
-      type EmbedResult = {
-        id: string;
-        vector: number[] | null;
-        embedding_model_id: string;
-        embedding_schema_version: string;
-        error?: string;
-      };
-
-      // Stage 1 — embed retrieval cards ONE memory at a time. Decrypting + embedding
-      // each card through the local LLM provider is the slow step; driving the loop
-      // here (instead of one opaque batched call) lets us report real "X of N"
-      // progress so the leader stays connected to what is happening.
+      // Stage 1 — embed retrieval cards ONE memory at a time so we can report real
+      // "X of N" progress. Decrypting + embedding each card through the local LLM
+      // provider is the slow step.
       const embedResults: EmbedResult[] = [];
       for (let index = 0; index < reviewKeywords.length; index += 1) {
         const submission = reviewKeywords[index];
-        setVerifyProgress({ phase: 'embedding', current: index, total });
 
         const batch = await client.callTool<EmbedResult[]>('wevibe_embed_retrieval_card', {
           org_id: orgId,
@@ -476,7 +478,7 @@ export default function ChainSubmitPage() {
         });
 
         embedResults.push(...batch);
-        setVerifyProgress({ phase: 'embedding', current: index + 1, total });
+        toast.loading(`Embedding retrieval cards… ${index + 1} / ${total}`, { id: progressToastId });
       }
 
       const embedById = new Map(embedResults.map((result) => [result.id, result] as const));
@@ -484,13 +486,13 @@ export default function ChainSubmitPage() {
         (submission) => !embedById.has(submission.submission_hash),
       );
       if (embedResults.length !== reviewKeywords.length || missingHashes.length > 0) {
-        toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`);
+        toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`, { id: progressToastId });
         return;
       }
 
       const failed = embedResults.filter((r) => !r.vector || r.error);
       if (failed.length > 0) {
-        toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`);
+        toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`, { id: progressToastId });
         return;
       }
 
@@ -501,23 +503,21 @@ export default function ChainSubmitPage() {
         embedding_schema_version: r.embedding_schema_version,
       }));
 
-      // Stage 2 — the hub verifies canonical messages + signatures for all entries
-      // in a single call.
-      setVerifyProgress({ phase: 'verifying', current: total, total });
+      // Stage 2 — hub verifies canonical messages + signatures for all entries.
+      toast.loading(`Verifying ${total} ${total === 1 ? 'memory' : 'memories'} on the hub…`, { id: progressToastId });
       const results = await verifyKeywords(orgId, entries);
       setVerifyResults(results);
       const allPassed = results.every(r => r.passed);
       if (allPassed) {
-        setNotice('All keywords verified successfully.');
+        toast.success('All keywords verified successfully.', { id: progressToastId });
       } else {
         const firstError = results.find((result) => !result.passed && result.error)?.error;
-        toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.');
+        toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.', { id: progressToastId });
       }
       await loadAll();
     } catch (err) {
-      toast.error((err as Error).message);
+      toast.error((err as Error).message, { id: progressToastId });
     } finally {
-      setVerifyProgress(null);
       setBusy(null);
     }
   }, [reviewKeywords, loadAll, orgId]);
@@ -835,40 +835,6 @@ export default function ChainSubmitPage() {
         </div>
       )}
 
-      {verifyProgress && (
-        <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.12)] p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-wv-text">
-                {verifyProgress.phase === 'embedding'
-                  ? 'Step 1 of 2 — Embedding retrieval cards…'
-                  : 'Step 2 of 2 — Verifying on the hub…'}
-              </p>
-              <p className="mt-1 text-xs text-wv-dim">
-                {verifyProgress.phase === 'embedding'
-                  ? `Decrypting and embedding each memory through your local LLM provider, one at a time — this is the slow part and can take a while. ${verifyProgress.current} of ${verifyProgress.total} embedded.`
-                  : `Hub is checking canonical messages and signatures for ${verifyProgress.total} ${verifyProgress.total === 1 ? 'memory' : 'memories'}.`}
-              </p>
-            </div>
-            <span className="shrink-0 font-mono text-sm text-wv-violet">
-              {verifyProgress.phase === 'embedding'
-                ? `${Math.round((verifyProgress.current / Math.max(verifyProgress.total, 1)) * 100)}%`
-                : '…'}
-            </span>
-          </div>
-          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-wv-panel-2">
-            <div
-              className={`h-full rounded-full bg-wv-grad-btn transition-all duration-300 ${verifyProgress.phase === 'verifying' ? 'animate-pulse' : ''}`}
-              style={{
-                width: verifyProgress.phase === 'verifying'
-                  ? '100%'
-                  : `${Math.round((verifyProgress.current / Math.max(verifyProgress.total, 1)) * 100)}%`,
-              }}
-            />
-          </div>
-        </div>
-      )}
-
       {verifyResults && (
         <div className="rounded-xl border border-wv-line bg-wv-panel p-4">
           <h3 className="font-semibold text-wv-text">Verification Results</h3>
@@ -902,7 +868,7 @@ export default function ChainSubmitPage() {
               {reviewKeywords.length} memories awaiting curation
             </p>
             <p className="mt-1 text-xs text-wv-amber">
-              <span className="text-wv-green">Green</span> = included · <span className="text-wv-dim">Gray</span> = excluded candidate. Click a keyword to include it (adds to vocabulary), click × on an included keyword to undo. Only included keywords are attached and submitted.
+              <span className="text-wv-green">Green</span> = included (click to exclude) · <span className="text-wv-dim">Gray</span> = excluded (click to include; adds to vocabulary). Click any keyword pill once to toggle its state. Only included keywords are attached and submitted.
             </p>
           </div>
           <button
@@ -911,11 +877,7 @@ export default function ChainSubmitPage() {
             disabled={busy === 'verify' || loading || reviewKeywords.length === 0}
             className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
-            {busy === 'verify'
-              ? (verifyProgress?.phase === 'embedding'
-                  ? `Embedding ${verifyProgress.current}/${verifyProgress.total}…`
-                  : 'Verifying…')
-              : 'Verify All'}
+            {busy === 'verify' ? 'Verifying…' : 'Verify All'}
           </button>
         </div>
 
@@ -929,6 +891,18 @@ export default function ChainSubmitPage() {
               const recommendation = parseModerationRecommendation(item.mod_votes);
               const moderatorRecommendations = item.moderator_recommendations ?? [];
               const moderatorVotesExpanded = expandedModeratorVotes[item.submission_hash] ?? false;
+              const mergedKeywords = [
+                ...extraction.classified.map((kw, classifiedIndex) => ({
+                  ...kw,
+                  included: true as const,
+                  sourceIndex: classifiedIndex,
+                })),
+                ...extraction.suggestions.map((kw, suggestionIndex) => ({
+                  ...kw,
+                  included: false as const,
+                  sourceIndex: suggestionIndex,
+                })),
+              ].sort((left, right) => left.keyword.localeCompare(right.keyword));
 
               return (
                 <div key={item.submission_hash} className="rounded-lg border border-[rgba(124,92,255,0.4)] bg-wv-panel p-4">
@@ -1013,80 +987,73 @@ export default function ChainSubmitPage() {
                     {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
                   </p>
 
-                  <div className="mt-3 space-y-3">
-                    <div>
-                      <p className="text-xs font-medium text-wv-dim">Included</p>
-                      {extraction.classified.length === 0 ? (
-                        <p className="mt-1 text-xs text-wv-dim">No included keywords yet.</p>
-                      ) : (
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {extraction.classified.map((kw, idx) => {
-                            return (
-                              <span
-                                key={`${kw.keyword}-${idx}`}
-                                className={getKeywordPillClass('classified')}
-                                title={`Included keyword · Weight: ${(kw.weight * 100).toFixed(0)}%`}
-                              >
-                                {kw.keyword}
-                                <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleExcludeClassifiedKeyword(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
-                                  disabled={itemBusy || loading}
-                                  className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] text-wv-green transition hover:bg-[rgba(54,211,153,0.24)] disabled:cursor-not-allowed disabled:text-wv-dim"
-                                  title="Exclude keyword"
-                                >
-                                  ×
-                                </button>
-                              </span>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-wv-dim">Keywords</p>
+                    <p className="mt-1 text-[11px] text-wv-dim">
+                      <span className="text-wv-green">Green</span> = included (click to exclude) · <span className="text-wv-dim">Gray</span> = excluded (click to include)
+                    </p>
+                    {mergedKeywords.length === 0 ? (
+                      <p className="mt-1 text-xs text-wv-dim">No extracted keywords yet.</p>
+                    ) : (
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {mergedKeywords.map((kw) => {
+                          const weightLabel = `${(kw.weight * 100).toFixed(0)}%`;
+                          const keywordCandidate = kw.included
+                            ? null
+                            : keywordCandidates.get(kw.keyword.trim().toLowerCase());
+                          const earned = keywordCandidate?.earned === true;
+                          const tally = kw.included
+                            ? null
+                            : parseKeywordVoteTally(item.keyword_votes, kw.keyword);
 
-                    <div>
-                      <p className="text-xs font-medium text-wv-dim">Excluded candidates</p>
-                      {extraction.suggestions.length === 0 ? (
-                        <p className="mt-1 text-xs text-wv-dim">No excluded keyword candidates.</p>
-                      ) : (
-                        <div className="mt-1 flex flex-wrap gap-2">
-                          {extraction.suggestions.map((kw, idx) => {
-                            const tally = parseKeywordVoteTally(item.keyword_votes, kw.keyword);
-                            const keywordCandidate = keywordCandidates.get(kw.keyword.trim().toLowerCase());
-                            const earned = keywordCandidate?.earned === true;
-
-                            return (
-                              <button
-                                type="button"
-                                key={`${kw.keyword}-${idx}`}
-                                onClick={() => handleIncludeSuggestionKeyword(item.submission_hash, extraction.classified, extraction.suggestions, idx)}
-                                disabled={itemBusy || loading}
-                                className={`${getKeywordPillClass('excluded')} ${itemBusy || loading
-                                  ? 'cursor-not-allowed'
+                          return (
+                            <button
+                              type="button"
+                              key={kw.keyword}
+                              onClick={() => (
+                                kw.included
+                                  ? handleExcludeClassifiedKeyword(
+                                    item.submission_hash,
+                                    extraction.classified,
+                                    extraction.suggestions,
+                                    kw.sourceIndex,
+                                  )
+                                  : handleIncludeSuggestionKeyword(
+                                    item.submission_hash,
+                                    extraction.classified,
+                                    extraction.suggestions,
+                                    kw.sourceIndex,
+                                  )
+                              )}
+                              disabled={itemBusy || loading}
+                              className={`${getKeywordPillClass(kw.included ? 'classified' : 'excluded')} ${itemBusy || loading
+                                ? 'cursor-not-allowed'
+                                : kw.included
+                                  ? 'cursor-pointer hover:border-[rgba(54,211,153,0.45)] hover:bg-[rgba(54,211,153,0.2)]'
                                   : 'cursor-pointer hover:border-[rgba(148,163,184,0.6)] hover:bg-[rgba(148,163,184,0.18)] hover:opacity-90'}`}
-                                title={earned
-                                  ? `Excluded earned suggestion (${keywordCandidate?.distinct_contributors ?? 0} contributors) · Weight: ${(kw.weight * 100).toFixed(0)}% · Click to include`
-                                  : `Excluded keyword suggestion · Weight: ${(kw.weight * 100).toFixed(0)}% · Click to include`}
-                              >
-                                {kw.keyword}
-                                <span className="ml-1 text-wv-dim">{(kw.weight * 100).toFixed(0)}%</span>
-                                {earned && keywordCandidate && (
-                                  <span className="ml-2 text-[10px] font-semibold text-[rgba(147,197,253,0.95)]">
-                                    earned · {keywordCandidate.distinct_contributors} contributors
-                                  </span>
-                                )}
-                                {tally && (
-                                  <span className="ml-2 text-[10px] font-normal text-wv-dim">
-                                    include {tally.include} / exclude {tally.exclude}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
+                              title={kw.included
+                                ? `Included · Weight ${weightLabel} · Click to exclude`
+                                : earned
+                                  ? `Excluded · Weight ${weightLabel} · Earned · ${keywordCandidate?.distinct_contributors ?? 0} contributors · Click to include`
+                                  : `Excluded · Weight ${weightLabel} · Click to include`}
+                            >
+                              {kw.keyword}
+                              <span className="ml-1 text-wv-dim">{weightLabel}</span>
+                              {!kw.included && earned && keywordCandidate && (
+                                <span className="ml-2 text-[10px] font-semibold text-[rgba(147,197,253,0.95)]">
+                                  earned · {keywordCandidate.distinct_contributors} contributors
+                                </span>
+                              )}
+                              {!kw.included && tally && (
+                                <span className="ml-2 text-[10px] font-normal text-wv-dim">
+                                  include {tally.include} / exclude {tally.exclude}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {item.extraction_feedback && (
