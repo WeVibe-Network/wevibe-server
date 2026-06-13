@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { invalidateReadinessCache } from '@/lib/provider-readiness';
 import {
   getProviderReadiness,
   loadSettings,
@@ -39,6 +40,7 @@ export async function PUT(request: NextRequest) {
   };
 
   saveSettings(updated);
+  invalidateReadinessCache();
   return NextResponse.json({
     ...updated,
     openrouter_api_key: updated.openrouter_api_key

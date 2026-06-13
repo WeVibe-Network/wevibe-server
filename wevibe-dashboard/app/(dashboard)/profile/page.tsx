@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PairPlugin } from '@/components/pairing/pair-plugin';
 import InfoTooltip from '@/components/ui/tooltip';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
@@ -13,6 +13,7 @@ import { txError, txSuccess, txToast } from '@/lib/toast';
 import { clearWalletAddress, getIdentity, setWalletAddress } from '@/lib/wevibe-auth';
 import { connectWallet, disconnectWallet } from '@/lib/wallet-connect';
 import ClientTime from '@/components/ui/client-time';
+import { toast } from 'sonner';
 
 const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
   llm_provider: 'ollama',
@@ -36,6 +37,16 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
   };
 }
 
+interface CertifiedReadiness {
+  ready: boolean;
+  reason: string | null;
+  provider: 'ollama' | 'openrouter';
+  model: string;
+  stage: 'config' | 'live';
+  checkedAt: number;
+  transient: boolean;
+}
+
 export default function ProfilePage() {
   const { walletAddress, refresh } = useIdentity();
 
@@ -54,12 +65,82 @@ export default function ProfilePage() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [localSaveMessage, setLocalSaveMessage] = useState<string | null>(null);
-  const [settingsTesting, setSettingsTesting] = useState(false);
-  const [settingsTestResult, setSettingsTestResult] = useState<{ ok: boolean; detail: string } | null>(null);
+  const [readiness, setReadiness] = useState<CertifiedReadiness | null>(null);
+  const [readinessChecking, setReadinessChecking] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaModelsError, setOllamaModelsError] = useState(false);
   const [openRouterModels, setOpenRouterModels] = useState<SearchableModelOption[]>([]);
   const [openRouterModelsError, setOpenRouterModelsError] = useState(false);
+  const readinessCheckInFlightRef = useRef(false);
+  const lastReadinessToastReasonRef = useRef<string | null>(null);
+
+  const runReadinessCheck = useCallback(async () => {
+    if (readinessCheckInFlightRef.current) {
+      return;
+    }
+
+    readinessCheckInFlightRef.current = true;
+    setReadinessChecking(true);
+
+    let settledReadiness: CertifiedReadiness | null = null;
+
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (attempt > 0) {
+          const backoffMs = attempt === 1 ? 1000 : 2000;
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, backoffMs);
+          });
+        }
+
+        const response = await fetch('/api/settings/readiness', { cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`Failed to check model availability (${response.status}).`);
+        }
+
+        const data = await response.json() as CertifiedReadiness;
+        settledReadiness = data;
+        setReadiness(data);
+
+        if (!data.transient) {
+          break;
+        }
+      }
+
+      if (settledReadiness?.ready) {
+        lastReadinessToastReasonRef.current = null;
+        return;
+      }
+
+      if (settledReadiness) {
+        const reason = settledReadiness.reason?.trim() || 'Provider/model readiness check failed.';
+        if (lastReadinessToastReasonRef.current !== reason) {
+          toast.error(reason);
+          lastReadinessToastReasonRef.current = reason;
+        }
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'Failed to check model availability.';
+
+      setReadiness((current) => ({
+        ready: false,
+        reason,
+        provider: current?.provider ?? 'ollama',
+        model: current?.model ?? '',
+        stage: 'live',
+        checkedAt: Date.now(),
+        transient: false,
+      }));
+
+      if (lastReadinessToastReasonRef.current !== reason) {
+        toast.error(reason);
+        lastReadinessToastReasonRef.current = reason;
+      }
+    } finally {
+      readinessCheckInFlightRef.current = false;
+      setReadinessChecking(false);
+    }
+  }, []);
 
   useEffect(() => {
     async function loadProfile() {
@@ -107,6 +188,7 @@ export default function ProfilePage() {
         const normalized = normalizeDashboardSettings(data);
         setSettings(normalized);
         setPersistedSettings(normalized);
+        void runReadinessCheck();
       })
       .catch((err: unknown) => {
         if (cancelled) {
@@ -124,7 +206,7 @@ export default function ProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [runReadinessCheck]);
 
   useEffect(() => {
     if (!settings || settings.llm_provider !== 'ollama') {
@@ -215,16 +297,6 @@ export default function ProfilePage() {
     };
   }, [settings?.llm_provider]);
 
-  useEffect(() => {
-    setSettingsTestResult(null);
-  }, [
-    settings?.llm_provider,
-    settings?.ollama_url,
-    settings?.ollama_model,
-    settings?.openrouter_model,
-    settings?.openrouter_api_key,
-  ]);
-
   const handleWalletConnect = useCallback(async () => {
     setWalletActionError(null);
     setConnectingWallet(true);
@@ -292,6 +364,7 @@ export default function ProfilePage() {
       setSettings(normalized);
       setPersistedSettings(normalized);
       txSuccess(toastId, 'Settings saved.');
+      void runReadinessCheck();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings.';
       txError(toastId, message);
@@ -299,35 +372,7 @@ export default function ProfilePage() {
     } finally {
       setSettingsSaving(false);
     }
-  }, [mcpUrl, settings]);
-
-  const handleTestProviderSettings = useCallback(async () => {
-    setSettingsTesting(true);
-    setSettingsTestResult(null);
-
-    try {
-      const response = await fetch('/api/settings/test', {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to test settings (${response.status}).`);
-      }
-
-      const data = await response.json() as { ok?: unknown; detail?: unknown };
-      const ok = data.ok === true;
-      const detail = typeof data.detail === 'string' && data.detail.length > 0
-        ? data.detail
-        : (ok ? 'Provider test succeeded.' : 'Provider test failed.');
-
-      setSettingsTestResult({ ok, detail });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to test settings.';
-      setSettingsTestResult({ ok: false, detail: message });
-    } finally {
-      setSettingsTesting(false);
-    }
-  }, []);
+  }, [mcpUrl, runReadinessCheck, settings]);
 
   if (loading) {
     return (
@@ -804,29 +849,38 @@ export default function ProfilePage() {
               >
                 {settingsSaving ? 'Saving…' : 'Save Settings'}
               </button>
-
-              <button
-                type="button"
-                onClick={handleTestProviderSettings}
-                disabled={settingsTesting || settingsLoading}
-                className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {settingsTesting ? 'Testing…' : 'Test provider'}
-              </button>
             </div>
 
-            {isSettingsDirty ? (
-              <p className="text-xs text-wv-amber">Test checks your SAVED settings — Save first to test your latest changes.</p>
+            {readinessChecking && !readiness ? (
+              <p className="text-xs text-wv-dim">Checking model availability…</p>
             ) : null}
 
-            {settingsTestResult ? (
-              <div
-                className={`rounded-lg px-3 py-2 text-sm ${settingsTestResult.ok
-                  ? 'border border-[rgba(51,214,166,0.4)] bg-[rgba(51,214,166,0.12)] text-wv-green'
-                  : 'border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] text-wv-amber'}`}
-              >
-                {settingsTestResult.detail}
+            {readiness?.ready ? (
+              <div className="rounded-lg border border-[rgba(51,214,166,0.4)] bg-[rgba(51,214,166,0.12)] px-3 py-2 text-sm text-wv-green">
+                ✓ {readiness.model} verified available on {readiness.provider}.
               </div>
+            ) : null}
+
+            {readiness && !readiness.ready ? (
+              <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span>{readiness.reason || 'Provider/model readiness check failed.'}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void runReadinessCheck();
+                    }}
+                    disabled={readinessChecking}
+                    className="inline-flex items-center rounded-md border border-[rgba(255,178,85,0.6)] px-3 py-1 text-xs font-medium text-wv-amber transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {readinessChecking ? 'Checking…' : 'Re-check'}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {isSettingsDirty ? (
+              <p className="text-xs text-wv-amber">Save to certify your changes.</p>
             ) : null}
           </div>
         </div>

@@ -4,7 +4,8 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
-import { getProviderReadiness, loadSettings } from '@/lib/settings';
+import { getCertifiedReadiness } from '@/lib/provider-readiness';
+import { loadSettings } from '@/lib/settings';
 import type {
   ClassifiedKeyword,
   MemoryCandidate,
@@ -325,10 +326,10 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = loadSettings();
-  const providerReadiness = getProviderReadiness(settings);
-  if (!providerReadiness.ready) {
+  const readiness = await getCertifiedReadiness(settings);
+  if (!readiness.ready) {
     return NextResponse.json(
-      { error: providerReadiness.reason!, code: 'provider_not_configured' },
+      { error: readiness.reason ?? 'Extraction model is not available.', code: 'provider_not_configured' },
       { status: 422 },
     );
   }

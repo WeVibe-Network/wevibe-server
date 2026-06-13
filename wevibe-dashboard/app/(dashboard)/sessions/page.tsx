@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import Badge from '@/components/ui/badge';
 import ClientTime from '@/components/ui/client-time';
 import Spinner from '@/components/ui/spinner';
@@ -30,10 +31,15 @@ interface LlmSettingsSnapshot {
   openrouter_model: string;
 }
 
-type SettingsResponse = Partial<LlmSettingsSnapshot> & {
-  provider_ready?: boolean;
-  provider_ready_reason?: string | null;
-};
+interface CertifiedReadiness {
+  ready: boolean;
+  reason: string | null;
+  provider: 'ollama' | 'openrouter';
+  model: string;
+  stage: 'config' | 'live';
+  checkedAt: number;
+  transient: boolean;
+}
 
 const DEFAULT_LLM_SETTINGS: LlmSettingsSnapshot = {
   llm_provider: 'ollama',
@@ -57,8 +63,9 @@ export default function SessionsPage() {
   const [draftsVersion, setDraftsVersion] = useState(0);
 
   const [llmSettings, setLlmSettings] = useState<LlmSettingsSnapshot>(DEFAULT_LLM_SETTINGS);
-  const [providerReady, setProviderReady] = useState(true);
+  const [providerReady, setProviderReady] = useState<boolean | null>(null);
   const [providerReadyReason, setProviderReadyReason] = useState<string | null>(null);
+  const providerReadyToastReasonRef = useRef<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [sortKey, setSortKey] = useState<SessionSortKey>('updated');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -95,7 +102,7 @@ export default function SessionsPage() {
     : `Ollama (local) · ${ollamaModel}`;
   const etaText = useOpenRouter ? '~5–20s' : '~30–90s';
   const queueCtaLabel = queueSnapshot.activeCount > 0 ? 'Add to queue' : 'Extract';
-  const canEnqueueExtraction = Boolean(pubkeyHex) && providerReady;
+  const canEnqueueExtraction = Boolean(pubkeyHex) && providerReady === true;
   const providerNotReadyMessage = providerReadyReason?.trim().length
     ? providerReadyReason.trim()
     : 'LLM provider not configured.';
@@ -161,42 +168,96 @@ export default function SessionsPage() {
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
 
-    async function loadSettings() {
+    const wait = (delayMs: number) => new Promise<void>((resolve) => {
+      window.setTimeout(resolve, delayMs);
+    });
+
+    async function loadReadiness() {
+      if (inFlight) {
+        return;
+      }
+
+      inFlight = true;
+
       try {
-        const response = await fetch('/api/settings');
-        if (!response.ok) {
+        const retryBackoffs = [1000, 2000];
+        let readiness: CertifiedReadiness | null = null;
+
+        for (let attempt = 0; attempt <= retryBackoffs.length; attempt += 1) {
+          const response = await fetch('/api/settings/readiness');
+          if (!response.ok) {
+            throw new Error('Failed to load readiness settings');
+          }
+
+          readiness = (await response.json()) as CertifiedReadiness;
+          if (!readiness.transient || attempt === retryBackoffs.length) {
+            break;
+          }
+
+          const delay = retryBackoffs[attempt] ?? 0;
+          await wait(delay);
+          if (cancelled) {
+            return;
+          }
+        }
+
+        if (cancelled || !readiness) {
           return;
         }
 
-        const data = (await response.json()) as SettingsResponse;
+        const nextModel = readiness.model.trim();
+
+        setLlmSettings((previous) => (
+          readiness.provider === 'openrouter'
+            ? {
+              llm_provider: 'openrouter',
+              ollama_model: previous.ollama_model || DEFAULT_LLM_SETTINGS.ollama_model,
+              openrouter_model: nextModel || previous.openrouter_model,
+            }
+            : {
+              llm_provider: 'ollama',
+              ollama_model: nextModel || DEFAULT_LLM_SETTINGS.ollama_model,
+              openrouter_model: previous.openrouter_model,
+            }
+        ));
+
+        const normalizedReason = readiness.reason?.trim().length
+          ? readiness.reason.trim()
+          : null;
+
+        setProviderReady(readiness.ready);
+        setProviderReadyReason(normalizedReason);
+
+        if (readiness.ready) {
+          providerReadyToastReasonRef.current = null;
+          return;
+        }
+
+        const toastReason = normalizedReason ?? 'Extraction model unavailable.';
+        if (providerReadyToastReasonRef.current !== toastReason) {
+          providerReadyToastReasonRef.current = toastReason;
+          toast.error(toastReason);
+        }
+      } catch {
         if (cancelled) {
           return;
         }
 
-        setLlmSettings({
-          llm_provider: data.llm_provider === 'openrouter' ? 'openrouter' : 'ollama',
-          ollama_model: typeof data.ollama_model === 'string'
-            ? data.ollama_model
-            : DEFAULT_LLM_SETTINGS.ollama_model,
-          openrouter_model: typeof data.openrouter_model === 'string'
-            ? data.openrouter_model
-            : DEFAULT_LLM_SETTINGS.openrouter_model,
-        });
-        setProviderReady(typeof data.provider_ready === 'boolean' ? data.provider_ready : true);
-        setProviderReadyReason(
-          data.provider_ready_reason === null
-            ? null
-            : typeof data.provider_ready_reason === 'string'
-              ? data.provider_ready_reason
-              : null,
-        );
-      } catch {
-        // keep defaults
+        const fallbackReason = 'Unable to verify extraction model readiness.';
+        setProviderReady(false);
+        setProviderReadyReason(fallbackReason);
+        if (providerReadyToastReasonRef.current !== fallbackReason) {
+          providerReadyToastReasonRef.current = fallbackReason;
+          toast.error(fallbackReason);
+        }
+      } finally {
+        inFlight = false;
       }
     }
 
-    void loadSettings();
+    void loadReadiness();
 
     return () => {
       cancelled = true;
@@ -388,7 +449,14 @@ export default function SessionsPage() {
     const failureReason = getFailureReasonForSession(session.id);
 
     return (
-      <div key={session.id}>
+      <div key={session.id} className="space-y-2">
+        {providerReady === false && (
+          <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-4 py-3 text-sm text-wv-amber">
+            Please set up your extraction model — memory extraction disabled.{' '}
+            <Link href="/profile" className="underline hover:text-wv-text">Open Profile settings</Link>
+            {providerReadyReason ? <span className="mt-1 block text-xs text-wv-dim">{providerReadyReason}</span> : null}
+          </div>
+        )}
         <button
           disabled={isQueueLocked}
           onClick={() => selectSession(session.id)}
@@ -489,12 +557,17 @@ export default function SessionsPage() {
                 <p className="text-xs text-wv-dim">
                   Extracts with {providerLabel} · {etaText}
                 </p>
+                {providerReady === null && (
+                  <p className="text-xs text-wv-dim">
+                    Checking extraction model…
+                  </p>
+                )}
                 {!pubkeyHex && (
                   <p className="text-xs text-wv-amber">
                     Create an identity first to queue extraction.
                   </p>
                 )}
-                {!providerReady && (
+                {providerReady === false && (
                   <p className="text-xs text-wv-amber">
                     {providerNotReadyMessage}{' '}
                     <Link href="/profile" className="underline hover:text-wv-text">

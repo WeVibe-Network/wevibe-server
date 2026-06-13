@@ -15,9 +15,9 @@ export interface DashboardSettings {
 const DEFAULTS: DashboardSettings = {
   llm_provider: 'ollama',
   ollama_url: process.env.WEVIBE_OLLAMA_URL ?? 'http://localhost:11434',
-  ollama_model: 'qwen2.5:14b',
+  ollama_model: '',
   openrouter_api_key: '',
-  openrouter_model: 'anthropic/claude-sonnet-4',
+  openrouter_model: '',
   org_id: '',
   mod_pubkey: '',
 };
