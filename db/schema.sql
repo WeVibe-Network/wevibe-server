@@ -22,6 +22,18 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- ── Hub instance identity ───────────────────────────────────────────────────
+-- Single row whose UUID is generated once on a fresh database and persists
+-- across hub restarts. Wiping the DB (docker compose down -v) regenerates it,
+-- letting clients detect a fresh backend and drop stale local draft state.
+CREATE TABLE IF NOT EXISTS hub_instance (
+    id          integer     PRIMARY KEY DEFAULT 1,
+    instance_id uuid        NOT NULL DEFAULT gen_random_uuid(),
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT hub_instance_singleton CHECK (id = 1)
+);
+INSERT INTO hub_instance (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
 -- ── Organizations ──────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS orgs (

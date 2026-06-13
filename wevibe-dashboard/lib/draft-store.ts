@@ -24,6 +24,9 @@ interface DraftStorePayload {
 }
 
 const STORAGE_VERSION = 1;
+const DRAFT_STORAGE_PREFIX = 'wevibe.drafts.';
+const DRAFT_STORAGE_KEY_PREFIX = `${DRAFT_STORAGE_PREFIX}v1.`;
+const BACKEND_INSTANCE_STORAGE_KEY = 'wevibe.backend-instance.v1';
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined';
@@ -44,7 +47,7 @@ function getStorageKey(pubkeyHex: string): string | null {
     return null;
   }
 
-  return `wevibe.drafts.v1.${normalized}`;
+  return `${DRAFT_STORAGE_KEY_PREFIX}${normalized}`;
 }
 
 function emptyPayload(): DraftStorePayload {
@@ -167,5 +170,46 @@ export function clearDrafts(pubkeyHex: string): void {
     window.localStorage.removeItem(key);
   } catch {
     // no-op on storage failures
+  }
+}
+
+export function reconcileBackendInstance(instanceId: string): { cleared: boolean } {
+  if (!isBrowser()) {
+    return { cleared: false };
+  }
+
+  const normalizedInstanceId = instanceId.trim();
+  if (!normalizedInstanceId) {
+    return { cleared: false };
+  }
+
+  try {
+    const storedInstanceId = window.localStorage.getItem(BACKEND_INSTANCE_STORAGE_KEY);
+
+    if (!storedInstanceId) {
+      window.localStorage.setItem(BACKEND_INSTANCE_STORAGE_KEY, normalizedInstanceId);
+      return { cleared: false };
+    }
+
+    if (storedInstanceId === normalizedInstanceId) {
+      return { cleared: false };
+    }
+
+    const draftKeys: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key && key.startsWith(DRAFT_STORAGE_PREFIX)) {
+        draftKeys.push(key);
+      }
+    }
+
+    for (const key of draftKeys) {
+      window.localStorage.removeItem(key);
+    }
+
+    window.localStorage.setItem(BACKEND_INSTANCE_STORAGE_KEY, normalizedInstanceId);
+    return { cleared: true };
+  } catch {
+    return { cleared: false };
   }
 }

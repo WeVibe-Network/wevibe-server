@@ -8,6 +8,25 @@ function getHubUrl(): string {
   return getConfig().hubUrl;
 }
 
+export async function getHubInstanceId(): Promise<string | null> {
+  try {
+    const response = await fetch(new URL('/health', getHubUrl()).toString());
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json().catch(() => null) as { instanceId?: unknown } | null;
+    if (!payload || typeof payload.instanceId !== 'string') {
+      return null;
+    }
+
+    const instanceId = payload.instanceId.trim();
+    return instanceId.length > 0 ? instanceId : null;
+  } catch {
+    return null;
+  }
+}
+
 async function hubFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const authHeaders = await buildAuthHeaders();
   const resp = await fetch(`${getHubUrl()}${path}`, {
