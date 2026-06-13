@@ -118,6 +118,70 @@ func Subscribe(ctx context.Context, pool *pgxpool.Pool, orgID, memberPubkey, act
 	return tx.Commit(ctx)
 }
 
+// GrantFreeRecall activates a member's recall entitlement without debiting org
+// credits and records an auditable zero-delta comp transaction.
+func GrantFreeRecall(ctx context.Context, pool *pgxpool.Pool, orgID, memberPubkey, actor string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE members
+		SET membership_active = TRUE, updated_at = NOW()
+		WHERE org_id = $1 AND pubkey = $2
+	`, orgID, memberPubkey)
+	if err != nil {
+		return fmt.Errorf("activate membership: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("member %s not found in org %s", memberPubkey, orgID)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO credit_transactions (org_id, delta, reason, actor)
+		VALUES ($1, 0, 'comp', $2)
+	`, orgID, actor)
+	if err != nil {
+		return fmt.Errorf("record comp transaction: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// RevokeRecall deactivates a member's recall entitlement without credit impact
+// and records an auditable zero-delta revoke transaction.
+func RevokeRecall(ctx context.Context, pool *pgxpool.Pool, orgID, memberPubkey, actor string) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE members
+		SET membership_active = FALSE, updated_at = NOW()
+		WHERE org_id = $1 AND pubkey = $2
+	`, orgID, memberPubkey)
+	if err != nil {
+		return fmt.Errorf("revoke membership: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("member %s not found in org %s", memberPubkey, orgID)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO credit_transactions (org_id, delta, reason, actor)
+		VALUES ($1, 0, 'revoked', $2)
+	`, orgID, actor)
+	if err != nil {
+		return fmt.Errorf("record revoke transaction: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 func GetBalance(ctx context.Context, pool *pgxpool.Pool, orgID string) (int64, error) {
 	var balance int64
 	err := pool.QueryRow(ctx,

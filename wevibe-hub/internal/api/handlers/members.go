@@ -382,6 +382,15 @@ func LinkWallet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type enableMemberRecallRequest struct {
+	SignedBy string `json:"signed_by"`
+	Free     bool   `json:"free"`
+}
+
+type disableMemberRecallRequest struct {
+	SignedBy string `json:"signed_by"`
+}
+
 func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
@@ -407,6 +416,24 @@ func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var req enableMemberRecallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.Free {
+		err = billing.GrantFreeRecall(r.Context(), pool, orgID, memberPubkey, signed.Pubkey)
+		if err != nil {
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"membership_active": true})
+		return
+	}
+
 	err = billing.Subscribe(r.Context(), pool, orgID, memberPubkey, signed.Pubkey)
 	if err != nil {
 		if errors.Is(err, billing.ErrInsufficientCredits) {
@@ -421,6 +448,47 @@ func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"membership_active": true})
+}
+
+func DisableMemberRecall(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	memberPubkey := chi.URLParam(r, "pubkey")
+	if orgID == "" || memberPubkey == "" {
+		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
+	if err != nil || (role != "leader" && role != "moderator") {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+
+	var req disableMemberRecallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+
+	err = billing.RevokeRecall(r.Context(), pool, orgID, memberPubkey, signed.Pubkey)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"membership_active": false})
 }
 
 func RegisterPreKey(w http.ResponseWriter, r *http.Request) {

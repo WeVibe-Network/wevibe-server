@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { listMembers, enableMemberRecall, type MemberRecord } from '@/lib/hub-client'
+import { listMembers, enableMemberRecall, disableMemberRecall, type MemberRecord } from '@/lib/hub-client'
 import { getIdentity } from '@/lib/wevibe-auth'
 import { connectWallet } from '@/lib/wallet-connect'
 import {
@@ -185,23 +185,40 @@ export default function MembersPage() {
   async function handleEnableRecall(pubkey: string) {
     setEnableRecallTarget(pubkey)
     setError('')
-    const id = toast.loading('Enabling recall…')
+    const id = toast.loading('Enabling free recall…')
     try {
-      await enableMemberRecall(orgId, pubkey)
+      await enableMemberRecall(orgId, pubkey, true)
       await refreshMembers()
-      toast.success('Recall enabled for this member', { id })
+      toast.success('Free recall enabled for this member', { id })
     } catch (err) {
       const status = typeof err === 'object' && err !== null
         ? (err as { status?: number }).status
         : undefined
       if (status === 402) {
-        setError('Org has insufficient credits to enable recall')
-        toast.error('Org has insufficient recall credits — top up to enable recall.', { id })
+        setError('Org has insufficient credits to enable free recall')
+        toast.error('Org has insufficient recall credits — top up to enable free recall.', { id })
       } else {
         const message = (err as Error).message
         setError(message)
         toast.error(message, { id })
       }
+    } finally {
+      setEnableRecallTarget(null)
+    }
+  }
+
+  async function handleDisableRecall(pubkey: string) {
+    setEnableRecallTarget(pubkey)
+    setError('')
+    const id = toast.loading('Disabling recall…')
+    try {
+      await disableMemberRecall(orgId, pubkey)
+      await refreshMembers()
+      toast.success('Recall disabled for this member', { id })
+    } catch (err) {
+      const message = (err as Error).message
+      setError(message)
+      toast.error(message, { id })
     } finally {
       setEnableRecallTarget(null)
     }
@@ -400,15 +417,26 @@ export default function MembersPage() {
                   {viewerRole === 'leader' && (
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        {!m.membership_active && (
+                        {m.membership_active ? (
                           <button
-                            data-testid="enable-recall-trigger"
-                            onClick={() => handleEnableRecall(m.pubkey)}
+                            data-testid="disable-recall-trigger"
+                            onClick={() => handleDisableRecall(m.pubkey)}
                             disabled={enableRecallTarget === m.pubkey}
-                            className="text-xs text-wv-green hover:opacity-80 disabled:opacity-50 disabled:pointer-events-none"
+                            className="text-xs text-wv-red hover:opacity-80 disabled:opacity-50 disabled:pointer-events-none"
                           >
-                            {enableRecallTarget === m.pubkey ? 'Enabling...' : 'Enable recall'}
+                            {enableRecallTarget === m.pubkey ? 'Disabling...' : 'Disable recall'}
                           </button>
+                        ) : (
+                          !m.is_trial && (
+                            <button
+                              data-testid="enable-recall-trigger"
+                              onClick={() => handleEnableRecall(m.pubkey)}
+                              disabled={enableRecallTarget === m.pubkey}
+                              className="text-xs text-wv-green hover:opacity-80 disabled:opacity-50 disabled:pointer-events-none"
+                            >
+                              {enableRecallTarget === m.pubkey ? 'Enabling...' : 'Enable free recall'}
+                            </button>
+                          )
                         )}
                         <button
                           data-testid="role-change-trigger"

@@ -147,6 +147,7 @@ export interface MemberRecord {
   join_epoch: number;
   active: boolean;
   membership_active?: boolean;
+  is_trial?: boolean;
   joined_at: string;
   wallet_address?: string;
   dismissed_reports_count?: number;
@@ -1038,7 +1039,7 @@ export async function cancelJoinApproval(orgId: string, requestId: string): Prom
   });
 }
 
-export async function enableMemberRecall(orgId: string, pubkey: string): Promise<void> {
+export async function enableMemberRecall(orgId: string, pubkey: string, free?: boolean): Promise<void> {
   const identity = await getIdentity();
   if (!identity) {
     throw new Error('No identity');
@@ -1047,6 +1048,36 @@ export async function enableMemberRecall(orgId: string, pubkey: string): Promise
   const authHeaders = await buildAuthHeaders();
   const response = await fetch(
     `${getHubUrl()}/v1/orgs/${orgId}/members/${encodeURIComponent(pubkey)}/enable-recall`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
+      body: JSON.stringify({
+        signed_by: identity.pubkeyHex,
+        ...(free ? { free: true } : {}),
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
+    const error = new Error(err.error ?? `Hub error ${response.status}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+}
+
+export async function disableMemberRecall(orgId: string, pubkey: string): Promise<void> {
+  const identity = await getIdentity();
+  if (!identity) {
+    throw new Error('No identity');
+  }
+
+  const authHeaders = await buildAuthHeaders();
+  const response = await fetch(
+    `${getHubUrl()}/v1/orgs/${orgId}/members/${encodeURIComponent(pubkey)}/disable-recall`,
     {
       method: 'POST',
       headers: {
