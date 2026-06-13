@@ -24,6 +24,7 @@ interface ExtractionJob extends ExtractionJobInput {
 interface QueueSnapshot {
   jobs: { sessionId: string; status: QueueJobStatus }[];
   activeCount: number;
+  failedSessions: { sessionId: string; reason: string }[];
 }
 
 interface ExtractResponseBody {
@@ -39,12 +40,17 @@ interface ExtractErrorBody {
 const EMPTY_SERVER_JOBS: QueueSnapshot['jobs'] = [];
 Object.freeze(EMPTY_SERVER_JOBS);
 
+const EMPTY_SERVER_FAILED_SESSIONS: QueueSnapshot['failedSessions'] = [];
+Object.freeze(EMPTY_SERVER_FAILED_SESSIONS);
+
 const EMPTY_SERVER_SNAPSHOT = Object.freeze({
   jobs: EMPTY_SERVER_JOBS,
   activeCount: 0,
+  failedSessions: EMPTY_SERVER_FAILED_SESSIONS,
 }) as QueueSnapshot;
 
 let jobs: ExtractionJob[] = [];
+let failedSessions: Map<string, string> = new Map();
 let isProcessing = false;
 let persistentToastId: string | number | undefined;
 let toastSequence = 0;
@@ -59,9 +65,15 @@ function isBrowser(): boolean {
 function rebuildSnapshot(): void {
   const snapshotJobs = jobs.map(({ sessionId, status }) => ({ sessionId, status }));
   Object.freeze(snapshotJobs);
+  const snapshotFailedSessions = Array.from(failedSessions.entries()).map(([sessionId, reason]) => ({
+    sessionId,
+    reason,
+  }));
+  Object.freeze(snapshotFailedSessions);
   cachedSnapshot = Object.freeze({
     jobs: snapshotJobs,
     activeCount: snapshotJobs.length,
+    failedSessions: snapshotFailedSessions,
   }) as QueueSnapshot;
 }
 
@@ -142,16 +154,28 @@ async function runJob(job: ExtractionJob): Promise<void> {
       throw new Error('Extraction response missing memories array');
     }
 
-    saveDraft(job.pubkeyHex, {
-      sessionId: job.sessionId,
-      sessionTitle: job.title,
-      sessionDirectory: job.directory,
-      memories: payload.memories as MemoryCandidate[],
-      extractionMeta: payload.extraction_meta,
-      createdAt: Date.now(),
-    });
+    const emptyReason = payload.extraction_meta?.empty_reason;
+    if (
+      payload.memories.length === 0
+      && (emptyReason === 'off_task_output' || emptyReason === 'unparseable_output')
+    ) {
+      failedSessions.set(
+        job.sessionId,
+        'The model returned output we could not extract memories from. Retry to try again.',
+      );
+    } else {
+      saveDraft(job.pubkeyHex, {
+        sessionId: job.sessionId,
+        sessionTitle: job.title,
+        sessionDirectory: job.directory,
+        memories: payload.memories as MemoryCandidate[],
+        extractionMeta: payload.extraction_meta,
+        createdAt: Date.now(),
+      });
+    }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    failedSessions.set(job.sessionId, reason);
     toast.error(`Extraction failed for session ${job.sessionId}`, {
       description: reason,
       duration: 8000,
@@ -192,6 +216,9 @@ export function enqueueExtraction(input: ExtractionJobInput): void {
     return;
   }
 
+  failedSessions.delete(sessionId);
+  notify();
+
   if (jobs.some((job) => job.sessionId === sessionId)) {
     return;
   }
@@ -207,10 +234,7 @@ export function enqueueExtraction(input: ExtractionJobInput): void {
   processNext();
 }
 
-export function getQueueSnapshot(): {
-  jobs: { sessionId: string; status: 'queued' | 'running' }[];
-  activeCount: number;
-} {
+export function getQueueSnapshot(): QueueSnapshot {
   if (!isBrowser()) {
     return EMPTY_SERVER_SNAPSHOT;
   }

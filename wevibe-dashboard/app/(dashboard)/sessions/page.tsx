@@ -11,10 +11,12 @@ import type {
   SessionDetail,
 } from '@/lib/session-types';
 import { getIdentity } from '@/lib/wevibe-auth';
-import { enqueueExtraction, statusForSession, useExtractionQueue } from '@/lib/extraction-queue';
+import { enqueueExtraction, useExtractionQueue } from '@/lib/extraction-queue';
+import { getHubInstanceId } from '@/lib/hub-client';
 import {
   getDraft,
   loadDrafts,
+  reconcileBackendInstance,
 } from '@/lib/draft-store';
 
 type SessionSortKey = 'updated' | 'title' | 'message_count';
@@ -52,6 +54,7 @@ export default function SessionsPage() {
   const [identity, setIdentity] = useState<{ pubkeyHex: string } | null>(null);
   const [pubkeyHex, setPubkeyHex] = useState<string | null>(null);
   const [extractedDraftCount, setExtractedDraftCount] = useState(0);
+  const [draftsVersion, setDraftsVersion] = useState(0);
 
   const [llmSettings, setLlmSettings] = useState<LlmSettingsSnapshot>(DEFAULT_LLM_SETTINGS);
   const [providerReady, setProviderReady] = useState(true);
@@ -61,6 +64,27 @@ export default function SessionsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
 
   const queueSnapshot = useExtractionQueue();
+
+  const queueStatusBySession = useMemo(() => {
+    const lookup = new Map<string, 'queued' | 'running'>();
+    for (const job of queueSnapshot.jobs) {
+      lookup.set(job.sessionId, job.status);
+    }
+    return lookup;
+  }, [queueSnapshot.jobs]);
+
+  const failedSessionsById = useMemo(() => {
+    const lookup = new Map<string, string>();
+    for (const failedSession of queueSnapshot.failedSessions) {
+      lookup.set(failedSession.sessionId, failedSession.reason);
+    }
+    return lookup;
+  }, [queueSnapshot.failedSessions]);
+
+  const getFailureReasonForSession = useCallback(
+    (sessionId: string) => failedSessionsById.get(sessionId),
+    [failedSessionsById],
+  );
 
   const openRouterModel = llmSettings.openrouter_model.trim();
   const ollamaModel = llmSettings.ollama_model.trim() || DEFAULT_LLM_SETTINGS.ollama_model;
@@ -88,6 +112,28 @@ export default function SessionsPage() {
       const normalizedPubkey = nextIdentity?.pubkeyHex?.trim() ?? '';
       setPubkeyHex(normalizedPubkey.length > 0 ? normalizedPubkey : null);
     });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function reconcileExtractedDrafts() {
+      const instanceId = await getHubInstanceId();
+      if (cancelled || !instanceId) {
+        return;
+      }
+
+      const result = reconcileBackendInstance(instanceId);
+      if (!cancelled && result.cleared) {
+        setDraftsVersion((previous) => previous + 1);
+      }
+    }
+
+    void reconcileExtractedDrafts();
 
     return () => {
       cancelled = true;
@@ -250,6 +296,17 @@ export default function SessionsPage() {
     });
   }, [pubkeyHex, sessionDetail]);
 
+  const retryExtraction = useCallback(
+    (session: SessionSummary) => {
+      if (activeSessionId !== session.id) {
+        return;
+      }
+
+      enqueueActiveSession();
+    },
+    [activeSessionId, enqueueActiveSession],
+  );
+
   const draftReadySessionIds = useMemo(() => {
     if (!pubkeyHex) {
       return new Set<string>();
@@ -262,7 +319,7 @@ export default function SessionsPage() {
       }
     }
     return ready;
-  }, [sessions, pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs]);
+  }, [sessions, pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs, draftsVersion]);
 
   useEffect(() => {
     if (!pubkeyHex) {
@@ -271,11 +328,24 @@ export default function SessionsPage() {
     }
 
     setExtractedDraftCount(Object.keys(loadDrafts(pubkeyHex)).length);
-  }, [pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs]);
+  }, [pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs, draftsVersion]);
 
-  const visibleSessions = useMemo(() => {
+  const extractedSessions = useMemo(() => {
+    const sorted = sessions.filter((session) => draftReadySessionIds.has(session.id));
+    return sorted.sort((a, b) => {
+      const aUpdated = Date.parse(a.time_updated) || 0;
+      const bUpdated = Date.parse(b.time_updated) || 0;
+      return bUpdated - aUpdated;
+    });
+  }, [sessions, draftReadySessionIds]);
+
+  const visibleNonExtractedSessions = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     const filtered = sessions.filter((session) => {
+      if (draftReadySessionIds.has(session.id)) {
+        return false;
+      }
+
       if (!query) {
         return true;
       }
@@ -304,7 +374,168 @@ export default function SessionsPage() {
     });
 
     return sorted;
-  }, [searchTerm, sessions, sortDirection, sortKey]);
+  }, [draftReadySessionIds, searchTerm, sessions, sortDirection, sortKey]);
+
+  const renderSessionCard = (session: SessionSummary) => {
+    const isActive = activeSessionId === session.id;
+    const sessionQueueStatus = queueStatusBySession.get(session.id);
+    const isQueued = sessionQueueStatus === 'queued';
+    const isRunning = sessionQueueStatus === 'running';
+    const isQueueLocked = isQueued || isRunning;
+    const hasDraft = draftReadySessionIds.has(session.id);
+    const activeDraft = isActive && pubkeyHex ? getDraft(pubkeyHex, session.id) : null;
+    const extractedMemoryCount = activeDraft?.memories.length ?? 0;
+    const failureReason = getFailureReasonForSession(session.id);
+
+    return (
+      <div key={session.id}>
+        <button
+          disabled={isQueueLocked}
+          onClick={() => selectSession(session.id)}
+          className={`w-full rounded-2xl border bg-wv-panel p-5 text-left shadow-wv-sm transition disabled:cursor-not-allowed
+            ${isActive
+              ? 'border-[rgba(124,92,255,0.4)] ring-2 ring-[rgba(124,92,255,0.22)]'
+              : 'border-wv-line hover:border-wv-line-2'
+            }
+            ${isQueueLocked ? 'opacity-60' : ''}`}
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate font-medium text-wv-text">
+                {session.title || 'Untitled Session'}
+              </h3>
+              <p className="mt-1 truncate text-xs font-mono text-wv-dim">
+                {session.directory}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <ClientTime
+                value={session.time_updated}
+                mode="relative"
+                className="font-mono text-xs text-wv-faint"
+              />
+              <div className="text-[11px] font-medium">
+                {isRunning && <span className="text-wv-violet">Extracting…</span>}
+                {!isRunning && isQueued && <span className="text-wv-amber">Queued</span>}
+                {!isRunning && !isQueued && hasDraft && <span className="text-wv-green">Draft ready</span>}
+              </div>
+              <div className="flex gap-2">
+                {session.model && (
+                  <Badge>{session.model.split('/').pop()}</Badge>
+                )}
+                <Badge variant="default">
+                  {session.message_count} msgs
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </button>
+
+        {isActive && (
+          <div className="mt-2 ml-4 space-y-4">
+            <div className="space-y-1 rounded-xl border border-wv-line bg-wv-panel p-4 text-xs font-mono text-wv-dim">
+              <p><span className="font-medium text-wv-dim">Created:</span> <ClientTime value={session.time_created} mode="datetime-compact" /></p>
+              <p><span className="font-medium text-wv-dim">Updated:</span> <ClientTime value={session.time_updated} mode="datetime-compact" /></p>
+              <p><span className="font-medium text-wv-dim">Model:</span> {session.model || 'unknown'}</p>
+              <p><span className="font-medium text-wv-dim">Messages:</span> {sessionDetail?.message_count ?? session.message_count}</p>
+            </div>
+
+            {sessionDetailLoading && (
+              <div className="flex items-center gap-3 py-4 text-sm text-wv-dim">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-wv-line-2 border-t-wv-violet" />
+                Loading session transcript…
+              </div>
+            )}
+
+            {!sessionDetailLoading && extractionError && (
+              <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
+                {extractionError}
+                <button
+                  onClick={() => void loadSessionDetail(session.id)}
+                  className="ml-3 text-wv-red underline"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
+
+            {!sessionDetailLoading && sessionDetail && isRunning && (
+              <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] p-6">
+                <Spinner
+                  text={`Extracting with ${providerLabel}…`}
+                  className="text-sm"
+                />
+                <p className="mt-2 text-xs text-wv-violet">
+                  {`ETA ${etaText}`}
+                </p>
+              </div>
+            )}
+
+            {!sessionDetailLoading && sessionDetail && !isRunning && isQueued && (
+              <div className="inline-flex items-center rounded-lg border border-wv-line bg-wv-panel px-4 py-2 text-sm font-medium text-wv-amber opacity-80">
+                Queued
+              </div>
+            )}
+
+            {!sessionDetailLoading && sessionDetail && !isRunning && !isQueued && !hasDraft && (
+              <div className="space-y-2">
+                <button
+                  onClick={enqueueActiveSession}
+                  disabled={!canEnqueueExtraction}
+                  className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {queueCtaLabel}
+                </button>
+                <p className="text-xs text-wv-dim">
+                  Extracts with {providerLabel} · {etaText}
+                </p>
+                {!pubkeyHex && (
+                  <p className="text-xs text-wv-amber">
+                    Create an identity first to queue extraction.
+                  </p>
+                )}
+                {!providerReady && (
+                  <p className="text-xs text-wv-amber">
+                    {providerNotReadyMessage}{' '}
+                    <Link href="/profile" className="underline hover:text-wv-text">
+                      Open Profile settings
+                    </Link>
+                    .
+                  </p>
+                )}
+              </div>
+            )}
+
+            {!sessionDetailLoading && sessionDetail && !isRunning && !isQueued && hasDraft && (
+              <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
+                <span className="font-semibold">
+                  ✓ {extractedMemoryCount} memor{extractedMemoryCount !== 1 ? 'ies' : 'y'} extracted
+                </span>
+                <span className="ml-2">
+                  <Link href="/sessions/extracted" className="underline hover:text-wv-text">
+                    Review in Extracted →
+                  </Link>
+                </span>
+              </div>
+            )}
+
+            {!sessionDetailLoading && sessionDetail && failureReason && !isRunning && !isQueued && (
+              <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-amber">
+                <span>{failureReason}</span>
+                <button
+                  onClick={() => retryExtraction(session)}
+                  disabled={!canEnqueueExtraction}
+                  className="ml-3 text-wv-amber underline hover:text-wv-text disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Retry extraction
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -391,160 +622,28 @@ export default function SessionsPage() {
         </div>
       )}
 
-      {!loading && sessions.length > 0 && visibleSessions.length === 0 && (
+      {!loading && sessions.length > 0 && visibleNonExtractedSessions.length === 0 && searchTerm.trim().length > 0 && (
         <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-12 text-center text-sm text-wv-dim">
           No sessions match your search.
         </div>
       )}
 
-      <div className="space-y-3">
-        {visibleSessions.map((session) => {
-          const isActive = activeSessionId === session.id;
-          const sessionQueueStatus = statusForSession(session.id);
-          const isQueued = sessionQueueStatus === 'queued';
-          const isRunning = sessionQueueStatus === 'running';
-          const isQueueLocked = isQueued || isRunning;
-          const hasDraft = draftReadySessionIds.has(session.id);
-          const activeDraft = isActive && pubkeyHex ? getDraft(pubkeyHex, session.id) : null;
-          const extractedMemoryCount = activeDraft?.memories.length ?? 0;
+      {visibleNonExtractedSessions.length > 0 && (
+        <div className="space-y-3">
+          {visibleNonExtractedSessions.map((session) => renderSessionCard(session))}
+        </div>
+      )}
 
-          return (
-            <div key={session.id}>
-              <button
-                disabled={isQueueLocked}
-                onClick={() => selectSession(session.id)}
-                className={`w-full rounded-2xl border bg-wv-panel p-5 text-left shadow-wv-sm transition disabled:cursor-not-allowed
-                  ${isActive
-                    ? 'border-[rgba(124,92,255,0.4)] ring-2 ring-[rgba(124,92,255,0.22)]'
-                    : 'border-wv-line hover:border-wv-line-2'
-                  }
-                  ${isQueueLocked ? 'opacity-60' : ''}`}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <h3 className="truncate font-medium text-wv-text">
-                      {session.title || 'Untitled Session'}
-                    </h3>
-                    <p className="mt-1 truncate text-xs font-mono text-wv-dim">
-                      {session.directory}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    <ClientTime
-                      value={session.time_updated}
-                      mode="relative"
-                      className="font-mono text-xs text-wv-faint"
-                    />
-                    <div className="text-[11px] font-medium">
-                      {isRunning && <span className="text-wv-violet">Extracting…</span>}
-                      {!isRunning && isQueued && <span className="text-wv-amber">Queued</span>}
-                      {!isRunning && !isQueued && hasDraft && <span className="text-wv-green">Draft ready</span>}
-                    </div>
-                    <div className="flex gap-2">
-                      {session.model && (
-                        <Badge>{session.model.split('/').pop()}</Badge>
-                      )}
-                      <Badge variant="default">
-                        {session.message_count} msgs
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-              </button>
-
-              {isActive && (
-                <div className="mt-2 ml-4 space-y-4">
-                  <div className="space-y-1 rounded-xl border border-wv-line bg-wv-panel p-4 text-xs font-mono text-wv-dim">
-                    <p><span className="font-medium text-wv-dim">Created:</span> <ClientTime value={session.time_created} mode="datetime-compact" /></p>
-                    <p><span className="font-medium text-wv-dim">Updated:</span> <ClientTime value={session.time_updated} mode="datetime-compact" /></p>
-                    <p><span className="font-medium text-wv-dim">Model:</span> {session.model || 'unknown'}</p>
-                    <p><span className="font-medium text-wv-dim">Messages:</span> {sessionDetail?.message_count ?? session.message_count}</p>
-                  </div>
-
-                  {sessionDetailLoading && (
-                    <div className="flex items-center gap-3 py-4 text-sm text-wv-dim">
-                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-wv-line-2 border-t-wv-violet" />
-                      Loading session transcript…
-                    </div>
-                  )}
-
-                  {!sessionDetailLoading && extractionError && (
-                    <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
-                      {extractionError}
-                      <button
-                        onClick={() => void loadSessionDetail(session.id)}
-                        className="ml-3 text-wv-red underline"
-                      >
-                        Try again
-                      </button>
-                    </div>
-                  )}
-
-                  {!sessionDetailLoading && sessionDetail && isRunning && (
-                    <div className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] p-6">
-                      <Spinner
-                        text={`Extracting with ${providerLabel}…`}
-                        className="text-sm"
-                      />
-                      <p className="mt-2 text-xs text-wv-violet">
-                        {`ETA ${etaText}`}
-                      </p>
-                    </div>
-                  )}
-
-                  {!sessionDetailLoading && sessionDetail && !isRunning && isQueued && (
-                    <div className="inline-flex items-center rounded-lg border border-wv-line bg-wv-panel px-4 py-2 text-sm font-medium text-wv-amber opacity-80">
-                      Queued
-                    </div>
-                  )}
-
-                  {!sessionDetailLoading && sessionDetail && !isRunning && !isQueued && !hasDraft && (
-                    <div className="space-y-2">
-                      <button
-                        onClick={enqueueActiveSession}
-                        disabled={!canEnqueueExtraction}
-                        className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {queueCtaLabel}
-                      </button>
-                      <p className="text-xs text-wv-dim">
-                        Extracts with {providerLabel} · {etaText}
-                      </p>
-                      {!pubkeyHex && (
-                        <p className="text-xs text-wv-amber">
-                          Create an identity first to queue extraction.
-                        </p>
-                      )}
-                      {!providerReady && (
-                        <p className="text-xs text-wv-amber">
-                          {providerNotReadyMessage}{' '}
-                          <Link href="/profile" className="underline hover:text-wv-text">
-                            Open Profile settings
-                          </Link>
-                          .
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {!sessionDetailLoading && sessionDetail && !isRunning && !isQueued && hasDraft && (
-                    <div className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] px-4 py-3 text-sm text-wv-green">
-                      <span className="font-semibold">
-                        ✓ {extractedMemoryCount} memor{extractedMemoryCount !== 1 ? 'ies' : 'y'} extracted
-                      </span>
-                      <span className="ml-2">
-                        <Link href="/sessions/extracted" className="underline hover:text-wv-text">
-                          Review in Extracted →
-                        </Link>
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      {extractedSessions.length > 0 && (
+        <section className="rounded-xl border border-wv-line bg-wv-panel p-4">
+          <h2 className="mb-3 text-sm font-semibold text-wv-text">
+            Extracted ({extractedSessions.length})
+          </h2>
+          <div className="space-y-3">
+            {extractedSessions.map((session) => renderSessionCard(session))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

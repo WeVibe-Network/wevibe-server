@@ -420,6 +420,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: errorMessage }, { status: response.status });
   }
 
+  const mcpEmptyReason =
+    isRecord(responseBody) && isRecord(responseBody.meta) && typeof responseBody.meta.emptyReason === 'string'
+      ? responseBody.meta.emptyReason
+      : undefined;
+
   if (!isRecord(responseBody) || !Array.isArray(responseBody.memories)) {
     await recordExtractionError(
       'invalid_payload',
@@ -460,7 +465,9 @@ export async function POST(request: NextRequest) {
       is_local: !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
       prompt_fingerprint: computePromptFingerprint(mcpExtractRequestBody.prompt),
-      ...(normalizedMemories.length === 0 ? { empty_reason: 'no_durable_memories' } : {}),
+      ...(normalizedMemories.length === 0
+        ? { empty_reason: mcpEmptyReason ?? 'no_durable_memories' }
+        : {}),
     },
   });
 }
