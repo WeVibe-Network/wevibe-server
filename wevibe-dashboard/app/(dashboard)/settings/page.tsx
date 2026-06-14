@@ -1304,6 +1304,8 @@ function OrgLlamaConfig() {
   const [saveMsg, setSaveMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaModelsError, setOllamaModelsError] = useState(false);
+  const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
+  const [lmStudioModelsError, setLmStudioModelsError] = useState(false);
   const [openRouterModels, setOpenRouterModels] = useState<SearchableModelOption[]>([]);
   const [openRouterModelsError, setOpenRouterModelsError] = useState(false);
 
@@ -1315,6 +1317,8 @@ function OrgLlamaConfig() {
           llm_provider: data.llm_provider ?? 'ollama',
           ollama_url: data.ollama_url ?? 'http://localhost:11434',
           ollama_model: data.ollama_model ?? 'qwen2.5:14b',
+          lmstudio_url: data.lmstudio_url ?? 'http://127.0.0.1:1234/v1',
+          lmstudio_model: data.lmstudio_model ?? '',
           openrouter_api_key: data.openrouter_api_key ?? '',
           openrouter_model: data.openrouter_model ?? 'anthropic/claude-sonnet-4',
           org_id: data.org_id ?? '',
@@ -1360,6 +1364,42 @@ function OrgLlamaConfig() {
       cancelled = true;
     };
   }, [settings?.llm_provider, settings?.ollama_url]);
+
+  useEffect(() => {
+    if (!settings || settings.llm_provider !== 'lm_studio') {
+      setLmStudioModels([]);
+      setLmStudioModelsError(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/lmstudio-models')
+      .then(response => response.json() as Promise<{ models?: unknown; error?: unknown }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models.filter((model): model is string => typeof model === 'string')
+          : [];
+
+        setLmStudioModels(models);
+        setLmStudioModelsError(Boolean(data.error) || models.length === 0);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setLmStudioModels([]);
+        setLmStudioModelsError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.llm_provider, settings?.lmstudio_url]);
 
   useEffect(() => {
     if (!settings || settings.llm_provider !== 'openrouter') {
@@ -1478,10 +1518,11 @@ function OrgLlamaConfig() {
         <select
           id="llm-provider"
           value={settings.llm_provider}
-          onChange={e => setSettings(s => s ? { ...s, llm_provider: e.target.value as 'ollama' | 'openrouter' } : s)}
+          onChange={e => setSettings(s => s ? { ...s, llm_provider: e.target.value as 'ollama' | 'openrouter' | 'lm_studio' } : s)}
           className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
         >
           <option value="ollama">Ollama</option>
+          <option value="lm_studio">LM Studio</option>
           <option value="openrouter">OpenRouter</option>
         </select>
       </div>
@@ -1534,6 +1575,61 @@ function OrgLlamaConfig() {
                 />
                 {ollamaModelsError && (
                   <p className="mt-1 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {settings.llm_provider === 'lm_studio' && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="lmstudio-url" className="block text-sm font-medium text-wv-text">
+              LM Studio URL
+            </label>
+            <input
+              id="lmstudio-url"
+              type="url"
+              value={settings.lmstudio_url}
+              onChange={e => setSettings(s => s ? { ...s, lmstudio_url: e.target.value } : s)}
+              placeholder="http://127.0.0.1:1234/v1"
+              className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+            />
+          </div>
+          <div>
+            <label htmlFor="lmstudio-model" className="block text-sm font-medium text-wv-text">
+              LM Studio Model
+            </label>
+            {lmStudioModels.length > 0 ? (
+              <>
+                <select
+                  id="lmstudio-model"
+                  value={settings.lmstudio_model}
+                  onChange={e => setSettings(s => s ? { ...s, lmstudio_model: e.target.value } : s)}
+                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                >
+                  {settings.lmstudio_model && !lmStudioModels.includes(settings.lmstudio_model) && (
+                    <option value={settings.lmstudio_model}>{settings.lmstudio_model}</option>
+                  )}
+                  {lmStudioModels.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-wv-dim">Detected from your local LM Studio.</p>
+              </>
+            ) : (
+              <>
+                <input
+                  id="lmstudio-model"
+                  type="text"
+                  value={settings.lmstudio_model}
+                  onChange={e => setSettings(s => s ? { ...s, lmstudio_model: e.target.value } : s)}
+                  placeholder="qwen2.5:14b"
+                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                />
+                {lmStudioModelsError && (
+                  <p className="mt-1 text-xs text-wv-dim">Could not reach LM Studio at {settings.lmstudio_url} — enter a model name manually.</p>
                 )}
               </>
             )}

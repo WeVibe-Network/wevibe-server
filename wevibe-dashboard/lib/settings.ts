@@ -3,11 +3,13 @@ import { join } from 'path';
 import { homedir } from 'os';
 
 export interface DashboardSettings {
-  llm_provider: 'ollama' | 'openrouter';
+  llm_provider: 'ollama' | 'openrouter' | 'lm_studio';
   ollama_url: string;
   ollama_model: string;
   openrouter_api_key: string;
   openrouter_model: string;
+  lmstudio_url: string;
+  lmstudio_model: string;
   org_id: string;
   mod_pubkey: string;
 }
@@ -18,6 +20,8 @@ const DEFAULTS: DashboardSettings = {
   ollama_model: '',
   openrouter_api_key: '',
   openrouter_model: '',
+  lmstudio_url: process.env.WEVIBE_LMSTUDIO_URL ?? 'http://127.0.0.1:1234/v1',
+  lmstudio_model: '',
   org_id: '',
   mod_pubkey: '',
 };
@@ -37,6 +41,17 @@ export function getProviderReadiness(
       return {
         ready: false,
         reason: 'OpenRouter model is not set — choose a model in Profile → App & Model settings and click Save.',
+      };
+    }
+
+    return { ready: true, reason: null };
+  }
+
+  if (s.llm_provider === 'lm_studio') {
+    if (s.lmstudio_model.trim().length === 0) {
+      return {
+        ready: false,
+        reason: 'LM Studio model is not set — choose a model in Profile → App & Model settings and click Save.',
       };
     }
 

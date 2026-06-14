@@ -26,15 +26,17 @@ type SortDirection = 'asc' | 'desc';
 const SESSION_SORT_STORAGE_KEY = 'wevibe.sessions.sort.v1';
 
 interface LlmSettingsSnapshot {
-  llm_provider: 'ollama' | 'openrouter';
+  llm_provider: 'ollama' | 'openrouter' | 'lm_studio';
   ollama_model: string;
   openrouter_model: string;
+  lmstudio_url: string;
+  lmstudio_model: string;
 }
 
 interface CertifiedReadiness {
   ready: boolean;
   reason: string | null;
-  provider: 'ollama' | 'openrouter';
+  provider: 'ollama' | 'openrouter' | 'lm_studio';
   model: string;
   stage: 'config' | 'live';
   checkedAt: number;
@@ -45,6 +47,8 @@ const DEFAULT_LLM_SETTINGS: LlmSettingsSnapshot = {
   llm_provider: 'ollama',
   ollama_model: 'qwen2.5:14b',
   openrouter_model: '',
+  lmstudio_url: 'http://127.0.0.1:1234/v1',
+  lmstudio_model: '',
 };
 
 export default function SessionsPage() {
@@ -95,11 +99,16 @@ export default function SessionsPage() {
 
   const openRouterModel = llmSettings.openrouter_model.trim();
   const ollamaModel = llmSettings.ollama_model.trim() || DEFAULT_LLM_SETTINGS.ollama_model;
+  const lmStudioModel = llmSettings.lmstudio_model.trim();
   const useOpenRouter = llmSettings.llm_provider === 'openrouter'
     && openRouterModel.length > 0;
+  const useLmStudio = llmSettings.llm_provider === 'lm_studio'
+    && lmStudioModel.length > 0;
   const providerLabel = useOpenRouter
     ? `OpenRouter (cloud) · ${openRouterModel}`
-    : `Ollama (local) · ${ollamaModel}`;
+    : useLmStudio
+      ? `LM Studio (local) · ${lmStudioModel}`
+      : `Ollama (local) · ${ollamaModel}`;
   const etaText = useOpenRouter ? '~5–20s' : '~30–90s';
   const queueCtaLabel = queueSnapshot.activeCount > 0 ? 'Add to queue' : 'Extract';
   const canEnqueueExtraction = Boolean(pubkeyHex) && providerReady === true;
@@ -209,19 +218,35 @@ export default function SessionsPage() {
 
         const nextModel = readiness.model.trim();
 
-        setLlmSettings((previous) => (
-          readiness.provider === 'openrouter'
-            ? {
+        setLlmSettings((previous) => {
+          if (readiness.provider === 'openrouter') {
+            return {
               llm_provider: 'openrouter',
               ollama_model: previous.ollama_model || DEFAULT_LLM_SETTINGS.ollama_model,
               openrouter_model: nextModel || previous.openrouter_model,
-            }
-            : {
-              llm_provider: 'ollama',
-              ollama_model: nextModel || DEFAULT_LLM_SETTINGS.ollama_model,
+              lmstudio_url: previous.lmstudio_url,
+              lmstudio_model: previous.lmstudio_model,
+            };
+          }
+
+          if (readiness.provider === 'lm_studio') {
+            return {
+              llm_provider: 'lm_studio',
+              ollama_model: previous.ollama_model || DEFAULT_LLM_SETTINGS.ollama_model,
               openrouter_model: previous.openrouter_model,
-            }
-        ));
+              lmstudio_url: previous.lmstudio_url || DEFAULT_LLM_SETTINGS.lmstudio_url,
+              lmstudio_model: nextModel || previous.lmstudio_model,
+            };
+          }
+
+          return {
+            llm_provider: 'ollama',
+            ollama_model: nextModel || DEFAULT_LLM_SETTINGS.ollama_model,
+            openrouter_model: previous.openrouter_model,
+            lmstudio_url: previous.lmstudio_url,
+            lmstudio_model: previous.lmstudio_model,
+          };
+        });
 
         const normalizedReason = readiness.reason?.trim().length
           ? readiness.reason.trim()

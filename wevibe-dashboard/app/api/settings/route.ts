@@ -35,6 +35,8 @@ export async function PUT(request: NextRequest) {
         ? body.openrouter_api_key
         : current.openrouter_api_key,
     openrouter_model: body.openrouter_model ?? current.openrouter_model,
+    lmstudio_url: body.lmstudio_url ?? current.lmstudio_url,
+    lmstudio_model: body.lmstudio_model ?? current.lmstudio_model,
     org_id: body.org_id ?? current.org_id,
     mod_pubkey: body.mod_pubkey ?? current.mod_pubkey,
   };

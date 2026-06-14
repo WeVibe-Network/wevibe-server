@@ -3,7 +3,7 @@ import { type DashboardSettings, getProviderReadiness } from './settings';
 export interface CertifiedReadiness {
   ready: boolean;
   reason: string | null;
-  provider: 'ollama' | 'openrouter';
+  provider: 'ollama' | 'openrouter' | 'lm_studio';
   model: string;
   stage: 'config' | 'live';
   checkedAt: number;
@@ -43,7 +43,7 @@ function buildSignature(
   provider: CertifiedReadiness['provider'],
   model: string,
 ): string {
-  return `${provider}|${model}|${settings.ollama_url}|${settings.openrouter_api_key.length > 0}`;
+  return `${provider}|${model}|${settings.ollama_url}|${settings.lmstudio_url}|${settings.openrouter_api_key.length > 0}`;
 }
 
 function toCertifiedReadiness(
@@ -79,7 +79,11 @@ export function invalidateReadinessCache(): void {
 
 export async function getCertifiedReadiness(s: DashboardSettings): Promise<CertifiedReadiness> {
   const provider = s.llm_provider;
-  const model = provider === 'openrouter' ? s.openrouter_model.trim() : s.ollama_model.trim();
+  const model = provider === 'openrouter'
+    ? s.openrouter_model.trim()
+    : provider === 'lm_studio'
+      ? s.lmstudio_model.trim()
+      : s.ollama_model.trim();
 
   const cfg = getProviderReadiness(s);
   if (!cfg.ready) {
@@ -139,6 +143,38 @@ export async function getCertifiedReadiness(s: DashboardSettings): Promise<Certi
             model,
             false,
             `Model "${model}" is not available on OpenRouter for this key. Pick a valid model in Profile -> App & Model settings.`,
+            'live',
+            false,
+          );
+      }
+    } else if (provider === 'lm_studio') {
+      const lmStudioUrl = s.lmstudio_url.trim().replace(/\/$/, '');
+      const url = `${lmStudioUrl}/models`;
+      const response = await fetch(url, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5_000),
+      });
+
+      if (!response.ok) {
+        result = toCertifiedReadiness(
+          provider,
+          model,
+          false,
+          `LM Studio is unreachable at ${url} (HTTP ${response.status}). Is it running?`,
+          'live',
+          true,
+        );
+      } else {
+        const modelIds = readOpenRouterModelIds((await response.json()) as unknown);
+
+        result = modelIds.includes(model)
+          ? toCertifiedReadiness(provider, model, true, null, 'live', false)
+          : toCertifiedReadiness(
+            provider,
+            model,
+            false,
+            `LM Studio is reachable but model "${model}" is not loaded/available. Load it in LM Studio or pick another in Profile → App & Model settings.`,
             'live',
             false,
           );

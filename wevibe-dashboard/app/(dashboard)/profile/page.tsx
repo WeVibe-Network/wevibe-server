@@ -21,17 +21,24 @@ const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
   ollama_model: 'qwen2.5:14b',
   openrouter_api_key: '',
   openrouter_model: 'anthropic/claude-sonnet-4',
+  lmstudio_url: 'http://127.0.0.1:1234/v1',
+  lmstudio_model: '',
   org_id: '',
   mod_pubkey: '',
 };
 
 function normalizeDashboardSettings(value: Partial<DashboardSettings>): DashboardSettings {
   return {
-    llm_provider: value.llm_provider === 'openrouter' ? 'openrouter' : 'ollama',
+    llm_provider:
+      value.llm_provider === 'openrouter' || value.llm_provider === 'lm_studio'
+        ? value.llm_provider
+        : 'ollama',
     ollama_url: value.ollama_url ?? DEFAULT_DASHBOARD_SETTINGS.ollama_url,
     ollama_model: value.ollama_model ?? DEFAULT_DASHBOARD_SETTINGS.ollama_model,
     openrouter_api_key: value.openrouter_api_key ?? DEFAULT_DASHBOARD_SETTINGS.openrouter_api_key,
     openrouter_model: value.openrouter_model ?? DEFAULT_DASHBOARD_SETTINGS.openrouter_model,
+    lmstudio_url: value.lmstudio_url ?? DEFAULT_DASHBOARD_SETTINGS.lmstudio_url,
+    lmstudio_model: value.lmstudio_model ?? DEFAULT_DASHBOARD_SETTINGS.lmstudio_model,
     org_id: value.org_id ?? DEFAULT_DASHBOARD_SETTINGS.org_id,
     mod_pubkey: value.mod_pubkey ?? DEFAULT_DASHBOARD_SETTINGS.mod_pubkey,
   };
@@ -40,7 +47,7 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
 interface CertifiedReadiness {
   ready: boolean;
   reason: string | null;
-  provider: 'ollama' | 'openrouter';
+  provider: 'ollama' | 'openrouter' | 'lm_studio';
   model: string;
   stage: 'config' | 'live';
   checkedAt: number;
@@ -69,6 +76,8 @@ export default function ProfilePage() {
   const [readinessChecking, setReadinessChecking] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [ollamaModelsError, setOllamaModelsError] = useState(false);
+  const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
+  const [lmStudioModelsError, setLmStudioModelsError] = useState(false);
   const [openRouterModels, setOpenRouterModels] = useState<SearchableModelOption[]>([]);
   const [openRouterModelsError, setOpenRouterModelsError] = useState(false);
   const readinessCheckInFlightRef = useRef(false);
@@ -243,6 +252,42 @@ export default function ProfilePage() {
       cancelled = true;
     };
   }, [settings?.llm_provider, settings?.ollama_url]);
+
+  useEffect(() => {
+    if (!settings || settings.llm_provider !== 'lm_studio') {
+      setLmStudioModels([]);
+      setLmStudioModelsError(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetch('/api/lmstudio-models')
+      .then(response => response.json() as Promise<{ models?: unknown; error?: unknown }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models.filter((model): model is string => typeof model === 'string')
+          : [];
+
+        setLmStudioModels(models);
+        setLmStudioModelsError(Boolean(data.error) || models.length === 0);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setLmStudioModels([]);
+        setLmStudioModelsError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [settings?.llm_provider, settings?.lmstudio_url]);
 
   useEffect(() => {
     if (!settings || settings.llm_provider !== 'openrouter') {
@@ -440,6 +485,8 @@ export default function ProfilePage() {
       settings.llm_provider !== persistedSettings.llm_provider
       || settings.ollama_url !== persistedSettings.ollama_url
       || settings.ollama_model !== persistedSettings.ollama_model
+      || settings.lmstudio_url !== persistedSettings.lmstudio_url
+      || settings.lmstudio_model !== persistedSettings.lmstudio_model
       || settings.openrouter_model !== persistedSettings.openrouter_model
       || openRouterApiKeyChanged
     ),
@@ -686,7 +733,7 @@ export default function ProfilePage() {
                       current
                         ? {
                           ...current,
-                          llm_provider: event.target.value as 'ollama' | 'openrouter',
+                          llm_provider: event.target.value as 'ollama' | 'openrouter' | 'lm_studio',
                         }
                         : current
                     ))}
@@ -694,6 +741,7 @@ export default function ProfilePage() {
                   >
                     <option value="ollama">Ollama</option>
                     <option value="openrouter">OpenRouter</option>
+                    <option value="lm_studio">LM Studio</option>
                   </select>
                 </div>
 
@@ -764,6 +812,78 @@ export default function ProfilePage() {
                           />
                           {ollamaModelsError ? (
                             <p className="mt-2 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : settings.llm_provider === 'lm_studio' ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="profile-lmstudio-url" className="block text-sm font-medium text-wv-text">
+                        LM Studio URL
+                      </label>
+                      <input
+                        id="profile-lmstudio-url"
+                        type="url"
+                        value={settings.lmstudio_url}
+                        onChange={event => setSettings(current => (
+                          current
+                            ? {
+                              ...current,
+                              lmstudio_url: event.target.value,
+                            }
+                            : current
+                        ))}
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="profile-lmstudio-model" className="block text-sm font-medium text-wv-text">
+                        LM Studio Model
+                      </label>
+                      {lmStudioModels.length > 0 ? (
+                        <>
+                          <select
+                            id="profile-lmstudio-model"
+                            value={settings.lmstudio_model}
+                            onChange={event => setSettings(current => (
+                              current
+                                ? {
+                                  ...current,
+                                  lmstudio_model: event.target.value,
+                                }
+                                : current
+                            ))}
+                            className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                          >
+                            {settings.lmstudio_model && !lmStudioModels.includes(settings.lmstudio_model) && (
+                              <option value={settings.lmstudio_model}>{settings.lmstudio_model}</option>
+                            )}
+                            {lmStudioModels.map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                          </select>
+                          <p className="mt-2 text-xs text-wv-dim">Detected from your local LM Studio.</p>
+                        </>
+                      ) : (
+                        <>
+                          <input
+                            id="profile-lmstudio-model"
+                            type="text"
+                            value={settings.lmstudio_model}
+                            onChange={event => setSettings(current => (
+                              current
+                                ? {
+                                  ...current,
+                                  lmstudio_model: event.target.value,
+                                }
+                                : current
+                            ))}
+                            className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                          />
+                          {lmStudioModelsError ? (
+                            <p className="mt-2 text-xs text-wv-dim">Could not reach LM Studio at {settings.lmstudio_url} — enter a model name manually.</p>
                           ) : null}
                         </>
                       )}

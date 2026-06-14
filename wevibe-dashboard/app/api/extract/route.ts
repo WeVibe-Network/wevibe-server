@@ -336,13 +336,16 @@ export async function POST(request: NextRequest) {
 
   const activeOrgId = settings.org_id.trim();
   const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId);
-  const modelFromSettings = settings.ollama_model.trim();
-  const resolvedOllamaModel = profileOverrides?.model ?? modelFromSettings;
+  const useLmStudio = settings.llm_provider === 'lm_studio';
+  const modelFromSettings = useLmStudio
+    ? settings.lmstudio_model.trim()
+    : settings.ollama_model.trim();
+  const resolvedLocalModel = profileOverrides?.model ?? modelFromSettings;
   const openRouterModel = settings.openrouter_model.trim();
   const useOpenRouter =
     settings.llm_provider === 'openrouter'
     && openRouterModel.length > 0;
-  const resolvedModel = useOpenRouter ? openRouterModel : resolvedOllamaModel;
+  const resolvedModel = useOpenRouter ? openRouterModel : resolvedLocalModel;
   const mcpExtractRequestBody: {
     transcript: string;
     project_context: {
@@ -383,6 +386,10 @@ export async function POST(request: NextRequest) {
     mcpExtractRequestBody.provider = 'openrouter';
     mcpExtractRequestBody.api_key = settings.openrouter_api_key;
     mcpExtractRequestBody.base_url = 'https://openrouter.ai/api/v1';
+  } else if (useLmStudio) {
+    mcpExtractRequestBody.provider = 'lm_studio';
+    mcpExtractRequestBody.api_key = 'lm-studio';
+    mcpExtractRequestBody.base_url = settings.lmstudio_url;
   } else if (settings.ollama_url.trim().length > 0) {
     mcpExtractRequestBody.ollama_url = settings.ollama_url;
   }
@@ -462,7 +469,7 @@ export async function POST(request: NextRequest) {
       source: profileOverrides ? 'org-profile' : 'wevibe-default',
       preset_id: profileOverrides?.presetId ?? null,
       model: resolvedModel,
-      provider: useOpenRouter ? 'openrouter' : 'ollama',
+      provider: useOpenRouter ? 'openrouter' : useLmStudio ? 'lm_studio' : 'ollama',
       is_local: !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
       prompt_fingerprint: computePromptFingerprint(mcpExtractRequestBody.prompt),
