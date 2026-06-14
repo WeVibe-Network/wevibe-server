@@ -509,33 +509,6 @@ export async function getKeywordCandidates(orgId: string): Promise<KeywordCandid
   return result ?? [];
 }
 
-export async function addKeyword(orgId: string, keyword: string): Promise<{ status: string; keyword: string }> {
-  return hubFetch<{ status: string; keyword: string }>(`/v1/orgs/${orgId}/keywords`, {
-    method: 'POST',
-    body: JSON.stringify({ keyword }),
-  });
-}
-
-export async function mergeKeywords(orgId: string, source: string, target: string): Promise<{ status: string; source: string; target: string }> {
-  return hubFetch<{ status: string; source: string; target: string }>(`/v1/orgs/${orgId}/keywords/merge`, {
-    method: 'PUT',
-    body: JSON.stringify({ source, target }),
-  });
-}
-
-export async function renameKeyword(orgId: string, oldName: string, newName: string): Promise<{ status: string; old_name: string; new_name: string }> {
-  return hubFetch<{ status: string; old_name: string; new_name: string }>(`/v1/orgs/${orgId}/keywords/${encodeURIComponent(oldName)}/rename`, {
-    method: 'PUT',
-    body: JSON.stringify({ new_name: newName }),
-  });
-}
-
-export async function deprecateKeyword(orgId: string, keyword: string): Promise<{ status: string; keyword: string }> {
-  return hubFetch<{ status: string; keyword: string }>(`/v1/orgs/${orgId}/keywords/${encodeURIComponent(keyword)}`, {
-    method: 'DELETE',
-  });
-}
-
 export interface RecoveryShareEntry {
   share_index: number;
   holder_pubkey: string;

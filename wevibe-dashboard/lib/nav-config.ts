@@ -39,13 +39,6 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'History', href: '/moderation/history' },
       ],
     },
-    {
-      label: 'Memories',
-      key: 'memories',
-      sub: [
-        { label: 'Keywords', href: '/keywords' },
-      ],
-    },
   ],
   CONNECTED_MODERATOR: [
     {

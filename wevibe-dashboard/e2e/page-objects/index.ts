@@ -70,11 +70,6 @@ export class KeywordsPage {
   async getKeywordList() {
     return this.page.getByTestId('keyword-list');
   }
-
-  async addKeyword(keyword: string) {
-    await this.page.getByTestId('keyword-add-input').fill(keyword);
-    await this.page.getByTestId('keyword-add-button').click();
-  }
 }
 
 export class RecoveryPage {

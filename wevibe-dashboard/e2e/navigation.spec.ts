@@ -14,7 +14,6 @@ test.describe('Dashboard Navigation', () => {
     await expect(sidebar.getByTestId('nav-reports')).toBeVisible();
     await expect(sidebar.getByTestId('nav-billing')).toBeVisible();
     await expect(sidebar.getByTestId('nav-settings')).toBeVisible();
-    await expect(sidebar.getByTestId('nav-keywords')).toBeVisible();
     await expect(sidebar.getByTestId('nav-recovery')).toBeVisible();
     await expect(sidebar.getByTestId('nav-epoch')).toBeVisible();
   });
@@ -26,7 +25,6 @@ test.describe('Dashboard Navigation', () => {
       { testId: 'nav-reports', url: '/moderation/reported', heading: /report/i },
       { testId: 'nav-billing', url: '/billing', heading: /billing|credit/i },
       { testId: 'nav-settings', url: '/settings', heading: /settings/i },
-      { testId: 'nav-keywords', url: '/keywords', heading: /keyword/i },
       { testId: 'nav-recovery', url: '/recovery', heading: /recovery/i },
       { testId: 'nav-epoch', url: '/epoch', heading: /epoch/i },
     ];
