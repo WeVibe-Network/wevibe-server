@@ -984,8 +984,6 @@ Removed route:
 - **Banned memories filtered:** Results exclude memories where `pending_submissions.banned = TRUE`.
 - **No quarantine system:** Memories are never auto-removed based on rejection counts.
 - Report votes are advisory only; there is no org-level auto-ban threshold.
-- `GET /v1/orgs/{orgID}/memories` (`ScrollApprovedMemories`) sources keyword/lifecycle metadata from Qdrant payload (chain mirror), not PostgreSQL keyword joins.
-
 ### PRE Retrieval Pipeline (CO-218, CO-221)
 
 **Query request changes (CO-218):**

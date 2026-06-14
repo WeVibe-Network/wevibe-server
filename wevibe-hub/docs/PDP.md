@@ -50,7 +50,6 @@ Ingest is pull-based via gRPC query clients, not push-based Tendermint WS:
 | POST | `/v1/orgs/{orgID}/moderation/batch-submit` | Batch queue submissions for moderation (hub-internal; NOT chain) |
 | POST | `/v1/orgs/{orgID}/serves` | Record a serve event (plugin → hub) |
 | POST | `/v1/orgs/{orgID}/query` | Vector + keyword memory query |
-| GET | `/v1/orgs/{orgID}/memories` | Paginated memory list |
 | GET | `/v1/orgs/{orgID}/memories/{cid}` | Get single memory by CID |
 | GET | `/v1/orgs/{orgID}/keywords` | List org keywords |
 | POST | `/v1/orgs/{orgID}/keywords` | Add keyword (leader-only) |

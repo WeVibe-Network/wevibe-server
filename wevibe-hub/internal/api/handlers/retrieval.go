@@ -4,21 +4,18 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/receipts"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -311,67 +308,6 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		Contested:            contested,
 		ReceiptID:            receipt.ReceiptID,
 		RequiresReencryption: requiresReencryption,
-	})
-}
-
-func ListMemories(w http.ResponseWriter, r *http.Request) {
-	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	orgID := chi.URLParam(r, "orgID")
-	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
-		return
-	}
-
-	limit := 50
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 200 {
-			limit = parsed
-		}
-	}
-
-	offsetToken := r.URL.Query().Get("offset")
-
-	signed, err := auth.ParseWeVibeSigned(r)
-	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
-	if err != nil || time.Since(ts).Abs() > 5*time.Minute {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	if _, err := members.GetMember(r.Context(), pool, orgID, signed.Pubkey); err != nil {
-		http.Error(w, `{"error":"not a member of this org"}`, http.StatusForbidden)
-		return
-	}
-
-	results, nextOffset, err := retrieval.ScrollApprovedMemories(r.Context(), qdrantClient, orgID, uint64(limit), offsetToken)
-	if err != nil {
-		if errors.Is(err, retrieval.ErrInvalidOffset) {
-			http.Error(w, `{"error":"invalid offset"}`, http.StatusBadRequest)
-			return
-		}
-		http.Error(w, `{"error":"list failed"}`, http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"memories":    results,
-		"count":       len(results),
-		"next_offset": nextOffset,
 	})
 }
 

@@ -10,6 +10,7 @@ import {
   type SanitizationFinding,
 } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
+import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
 import { useOrgContext } from '@/lib/org-context';
 import { normalizeKeywordWeights, displayWeight } from '@/lib/keyword-weights';
 
@@ -311,6 +312,7 @@ export default function ModerationPage() {
       <div className="space-y-4">
         {items.map(item => (
           <article key={item.submission_hash} className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+            <PreferenceScoreCard confidence={item.preference_confidence} className="mb-4" />
             {(() => {
               const recommendation = parseModerationRecommendation(item);
               const suggestions = parseSuggestedKeywords(item);
@@ -342,16 +344,6 @@ export default function ModerationPage() {
                         {item.sanitization_findings && item.sanitization_findings.length > 0 && (
                           <span className="rounded-full bg-[rgba(255,107,107,0.12)] px-2 py-0.5 text-xs font-medium text-wv-red">
                             Content scan detected {item.sanitization_findings.length} issue(s)
-                          </span>
-                        )}
-                        {item.preference_confidence !== undefined && item.preference_confidence > 0.8 && (
-                          <span className="rounded-full bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-xs font-medium text-wv-red">
-                            Likely preference ({(item.preference_confidence * 100).toFixed(0)}%)
-                          </span>
-                        )}
-                        {item.preference_confidence !== undefined && item.preference_confidence > 0.5 && item.preference_confidence <= 0.8 && (
-                          <span className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber">
-                            Possible preference ({(item.preference_confidence * 100).toFixed(0)}%)
                           </span>
                         )}
                         {item.created_at && (

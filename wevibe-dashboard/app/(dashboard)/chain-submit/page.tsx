@@ -31,6 +31,7 @@ import {
 } from '@/lib/chain-client';
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
+import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
 import { useOrgContext } from '@/lib/org-context';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { toast } from 'sonner';
@@ -93,27 +94,6 @@ function mergeExtractionKeywords(extraction: ExtractionResultPayload): CuratedKe
   extraction.suggestions.forEach((kw) => appendKeyword(kw, false));
 
   return Array.from(merged.values()).sort((left, right) => left.keyword.localeCompare(right.keyword));
-}
-
-function getPreferenceConfidenceChip(confidence: number): { className: string; title: string } {
-  if (confidence > 0.8) {
-    return {
-      className: 'rounded-full border border-[rgba(255,107,107,0.45)] bg-[rgba(255,107,107,0.16)] px-2 py-0.5 text-xs font-medium text-wv-red',
-      title: 'Likely taste',
-    };
-  }
-
-  if (confidence > 0.5) {
-    return {
-      className: 'rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber',
-      title: 'Possible preference',
-    };
-  }
-
-  return {
-    className: 'rounded-full border border-wv-line bg-wv-panel-2 px-2 py-0.5 text-xs font-medium text-wv-dim',
-    title: 'Fact / convention',
-  };
 }
 
 function shortenPubkey(pubkey: string, visibleChars = 12): string {
@@ -908,15 +888,10 @@ export default function ChainSubmitPage() {
               const renormByKeyword = new Map(
                 renorm.map((kw) => [normalizeKeywordKey(kw.keyword), kw.weight] as const),
               );
-              const preferenceConfidence = typeof item.preference_confidence === 'number' && Number.isFinite(item.preference_confidence)
-                ? item.preference_confidence
-                : null;
-              const preferenceChip = preferenceConfidence === null
-                ? null
-                : getPreferenceConfidenceChip(preferenceConfidence);
 
               return (
                 <div key={item.submission_hash} className="rounded-lg border border-[rgba(124,92,255,0.4)] bg-wv-panel p-4">
+                  <PreferenceScoreCard confidence={item.preference_confidence} className="mb-3" />
                   <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
                     <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
                     <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
@@ -925,11 +900,6 @@ export default function ChainSubmitPage() {
                     <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
                       Memory
                     </span>
-                    {preferenceConfidence !== null && preferenceChip && (
-                      <span className={preferenceChip.className} title={preferenceChip.title}>
-                        Preference {preferenceConfidence.toFixed(2)}
-                      </span>
-                    )}
                     <button
                       type="button"
                       onClick={() => toggleModeratorVotes(item.submission_hash)}
@@ -1102,15 +1072,10 @@ export default function ChainSubmitPage() {
               <div className="space-y-3">
                 {pendingChain.map((item) => {
                   const extraction = parseExtractionResult(item.extraction_result);
-                  const preferenceConfidence = typeof item.preference_confidence === 'number' && Number.isFinite(item.preference_confidence)
-                    ? item.preference_confidence
-                    : null;
-                  const preferenceChip = preferenceConfidence === null
-                    ? null
-                    : getPreferenceConfidenceChip(preferenceConfidence);
 
                   return (
                     <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
+                      <PreferenceScoreCard confidence={item.preference_confidence} className="mb-3" />
                       <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
                         <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
                         <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
@@ -1119,11 +1084,6 @@ export default function ChainSubmitPage() {
                         <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
                           Memory
                         </span>
-                        {preferenceConfidence !== null && preferenceChip && (
-                          <span className={preferenceChip.className} title={preferenceChip.title}>
-                            Preference {preferenceConfidence.toFixed(2)}
-                          </span>
-                        )}
                         {item.verified_by && (
                           <span className="font-mono text-wv-dim">Verified by {item.verified_by.slice(0, 8)}…</span>
                         )}

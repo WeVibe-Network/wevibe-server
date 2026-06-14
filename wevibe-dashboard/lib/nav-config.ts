@@ -44,7 +44,6 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       key: 'memories',
       sub: [
         { label: 'Pipeline', href: '/chain-submit' },
-        { label: 'Browse', href: '/memories' },
         { label: 'Keywords', href: '/keywords' },
       ],
     },
@@ -76,11 +75,6 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'Extracted', href: '/sessions/extracted' },
       ],
     },
-    {
-      label: 'Memories',
-      key: 'memories',
-      sub: [{ label: 'Browse', href: '/memories' }],
-    },
   ],
   CONNECTED_CONTRIBUTOR: [
     {
@@ -99,22 +93,12 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'Extracted', href: '/sessions/extracted' },
       ],
     },
-    {
-      label: 'Memories',
-      key: 'memories',
-      sub: [{ label: 'Browse', href: '/memories' }],
-    },
   ],
   CONNECTED_MEMBER: [
     {
       label: 'My Org',
       key: 'my-org',
       sub: [{ label: 'Overview', href: '/my-org' }],
-    },
-    {
-      label: 'Memories',
-      key: 'memories',
-      sub: [{ label: 'Browse', href: '/memories' }],
     },
     {
       label: 'Discover',

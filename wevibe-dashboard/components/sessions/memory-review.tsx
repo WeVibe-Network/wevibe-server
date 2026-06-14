@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
 import type { SanitizationFinding } from '@/lib/hub-client';
 import type { MemoryCandidate } from '@/lib/session-types';
 import { getConfig } from '@/lib/config';
@@ -13,6 +14,7 @@ import {
 } from '@/lib/wevibe-submit';
 
 type MemoryDerivation = 'verbatim' | 'edited-after-extraction';
+type MemorySortMode = 'original' | 'durable-first' | 'subjective-first';
 
 const EMPTY_MEMORY_KEYWORDS: NonNullable<MemoryCandidate['keywords']> = {
   classified: [],
@@ -122,6 +124,7 @@ export default function MemoryReview({
   const [submitProgress, setSubmitProgress] = useState<string | null>(null);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [submitFindings, setSubmitFindings] = useState<SanitizationFinding[] | null>(null);
+  const [sortMode, setSortMode] = useState<MemorySortMode>('original');
 
   useEffect(() => {
     setReviewMemories(memories);
@@ -319,6 +322,24 @@ export default function MemoryReview({
 
   const extractedWith = useMemo(() => extractedWithLabel(extractionMeta), [extractionMeta]);
 
+  const sortedReviewMemories = useMemo(() => {
+    const indexedMemories = reviewMemories.map((memory, originalIndex) => ({ memory, originalIndex }));
+
+    if (sortMode === 'original') {
+      return indexedMemories;
+    }
+
+    const sortDirection = sortMode === 'durable-first' ? 1 : -1;
+
+    return [...indexedMemories].sort((a, b) => {
+      const confidenceDelta = a.memory.preference_confidence - b.memory.preference_confidence;
+      if (confidenceDelta !== 0) {
+        return confidenceDelta * sortDirection;
+      }
+      return a.originalIndex - b.originalIndex;
+    });
+  }, [reviewMemories, sortMode]);
+
   return (
     <div className="space-y-4">
       <div className="space-y-1 rounded-xl border border-wv-line bg-wv-panel p-4">
@@ -380,23 +401,40 @@ export default function MemoryReview({
         </span>
       </div>
 
-      {reviewMemories.map((memory, idx) => {
-        const isSelected = selected.has(idx);
-        const currentOrgId = memoryOrgs.get(idx) ?? activeOrg?.org_id ?? (orgs.length > 0 ? orgs[0].org_id : '');
+      {reviewMemories.length > 0 && (
+        <div className="flex items-center justify-end">
+          <select
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as MemorySortMode)}
+            className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text focus:border-wv-violet focus:outline-none"
+            aria-label="Sort memories by preference"
+          >
+            <option value="original">Original order</option>
+            <option value="durable-first">Most durable first</option>
+            <option value="subjective-first">Most subjective first</option>
+          </select>
+        </div>
+      )}
+
+      {sortedReviewMemories.map(({ memory, originalIndex }) => {
+        const isSelected = selected.has(originalIndex);
+        const currentOrgId = memoryOrgs.get(originalIndex) ?? activeOrg?.org_id ?? (orgs.length > 0 ? orgs[0].org_id : '');
         const currentOrgEntry = orgs.find((org) => org.org_id === currentOrgId);
         const showOrgDropdown = orgs.length > 1;
         return (
           <div
-            key={idx}
+            key={`${memory.extraction_hash}-${originalIndex}`}
             className={`rounded-xl border p-4 transition
               ${isSelected
                 ? 'border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.1)] ring-1 ring-[rgba(124,92,255,0.28)]'
                 : 'border-wv-line bg-wv-panel hover:border-wv-line-2'
               }`}
           >
+            <PreferenceScoreCard confidence={memory.preference_confidence} className="mb-3" />
+
             <div className="flex items-start gap-3">
               <button
-                onClick={() => toggleMemory(idx)}
+                onClick={() => toggleMemory(originalIndex)}
                 className={`mt-0.5 h-5 w-5 shrink-0 rounded border-2 flex items-center justify-center transition
                   ${isSelected
                     ? 'border-wv-violet bg-wv-violet'
@@ -425,7 +463,7 @@ export default function MemoryReview({
                       value={currentOrgId}
                       onChange={(event) => {
                         event.stopPropagation();
-                        setMemoryOrg(idx, event.target.value);
+                        setMemoryOrg(originalIndex, event.target.value);
                       }}
                       onClick={(event) => event.stopPropagation()}
                       className="rounded-md border border-wv-line-2 bg-wv-panel-2 px-2 py-1 text-xs text-wv-text hover:border-wv-violet focus:border-wv-violet focus:outline-none"

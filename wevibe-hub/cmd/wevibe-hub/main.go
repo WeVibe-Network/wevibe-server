@@ -265,7 +265,6 @@ func main() {
 			r.Get("/denials/pending", handlers.GetPendingDenials)
 
 			r.Post("/query", handlers.QueryMemories)
-			r.Get("/memories", handlers.ListMemories)
 			r.Get("/memories/{cid}", handlers.GetMemory)
 
 			r.Get("/keywords", handlers.ListKeywords)
