@@ -83,9 +83,8 @@ WeVibe Hub is the managed Go API server that bridges wevibe-chain state, Postgre
 - **Removed `/reject` endpoint:** The old `POST /v1/orgs/{orgID}/reject` endpoint that submitted to chain is removed. Consumer feedback now goes through the report system only.
 - **Report resolution model:** Reports are resolved as `upheld`, `dismissed`, or `dismissed_malicious` (replacing dismiss/archive/set_validity/escalate).
 - **Chain calls on reports removed:** Individual report creation and resolution no longer contact the chain. Reports stay hub-only.
-- **Ban-on-quorum:** When a memory accumulates `report_ban_threshold` upheld reports (configurable per org, default 3), the hub sets `pending_submissions.banned = TRUE` and submits `MsgReportMemory` to chain with reason `"community_ban"`.
+- **No auto-ban quorum:** Reports are advisory only. The leader decides report resolution/commit; there is no org-level auto-ban threshold.
 - **Schema changes:**
-  - `orgs.report_ban_threshold INTEGER NOT NULL DEFAULT 3` — per-org configurable ban quorum
   - `pending_submissions.banned BOOLEAN NOT NULL DEFAULT FALSE` — memory ban flag
   - `reports.resolution TEXT CHECK (upheld, dismissed, dismissed_malicious)` — report resolution tracking
 - **Trust panel:** `internal/retrieval/stats.go` provides `GetAcceptanceCount` and `GetContributorStats` helpers for enriching retrieval responses.

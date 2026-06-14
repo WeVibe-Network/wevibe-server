@@ -157,7 +157,7 @@ func TestListReports_FilterAndPagination(t *testing.T) {
 		ids = append(ids, rec.ID)
 	}
 
-	if _, err := reports.Update(ctx, env.pool, env.orgID, ids[1], env.moderator.pubkeyHex, "moderator", protocol.UpdateReportRequest{Resolution: "dismissed"}, 0); err != nil {
+	if _, err := reports.Update(ctx, env.pool, env.orgID, ids[1], env.moderator.pubkeyHex, "moderator", protocol.UpdateReportRequest{Resolution: "dismissed"}); err != nil {
 		t.Fatalf("update report: %v", err)
 	}
 
@@ -338,7 +338,7 @@ func TestUpdateReport_ResolveActions(t *testing.T) {
 				t.Fatalf("create report: %v", err)
 			}
 
-			if _, err := reports.Update(ctx, env.pool, env.orgID, rec.ID, env.moderator.pubkeyHex, "moderator", protocol.UpdateReportRequest{Resolution: "upheld"}, 0); err != nil {
+			if _, err := reports.Update(ctx, env.pool, env.orgID, rec.ID, env.moderator.pubkeyHex, "moderator", protocol.UpdateReportRequest{Resolution: "upheld"}); err != nil {
 				t.Fatalf("escalate before %s: %v", tc.action, err)
 			}
 

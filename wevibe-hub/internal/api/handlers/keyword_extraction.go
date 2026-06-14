@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -321,28 +320,6 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		placeholders := make([]string, len(storedExtraction.Classified))
-		args := make([]interface{}, len(storedExtraction.Classified))
-		for i, kw := range storedExtraction.Classified {
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-			args[i] = kw.Keyword
-		}
-
-		validKeywords := 0
-		queryArgs := append(args, orgID)
-		err = pool.QueryRow(r.Context(), fmt.Sprintf(`
-			SELECT COUNT(*) FROM org_keywords
-			WHERE org_id = $%d AND keyword IN (%s) AND deprecated = false
-		`, len(args)+1, strings.Join(placeholders, ",")), queryArgs...).Scan(&validKeywords)
-		if err != nil {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "internal error checking keywords"})
-			continue
-		}
-		if validKeywords != len(storedExtraction.Classified) {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "one or more keywords not found in org_keywords or are deprecated"})
-			continue
-		}
-
 		if len(storedExtraction.Suggestions) > 0 {
 			hasPendingSuggestions := false
 			for _, s := range storedExtraction.Suggestions {
@@ -407,85 +384,6 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"verified": verifiedCount,
 		"results":  results,
-	})
-}
-
-func RerunKeywords(w http.ResponseWriter, r *http.Request) {
-	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	orgID := chi.URLParam(r, "orgID")
-	submissionHash := chi.URLParam(r, "hash")
-	if orgID == "" || submissionHash == "" {
-		http.Error(w, `{"error":"org_id and hash required"}`, http.StatusBadRequest)
-		return
-	}
-
-	signed, err := auth.ParseWeVibeSigned(r)
-	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
-	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
-		return
-	}
-	now := time.Now()
-	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
-		return
-	}
-	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
-		return
-	}
-
-	var currentStatus string
-	err = pool.QueryRow(r.Context(), `
-		SELECT status FROM pending_submissions WHERE org_id = $1 AND submission_hash = $2
-	`, orgID, submissionHash).Scan(&currentStatus)
-	if err != nil {
-		http.Error(w, `{"error":"submission not found"}`, http.StatusNotFound)
-		return
-	}
-
-	if currentStatus != "pending_keyword" && currentStatus != "pending_chain" {
-		http.Error(w, fmt.Sprintf(`{"error":"cannot rerun: submission status is %s (must be pending_keyword or pending_chain)"}`, currentStatus), http.StatusBadRequest)
-		return
-	}
-
-	res, err := pool.Exec(r.Context(), `
-		UPDATE pending_submissions
-		SET status = 'pending_keyword',
-		    extraction_result = NULL,
-		    extraction_feedback = NULL,
-		    verified_at = NULL,
-		    updated_at = NOW()
-		WHERE org_id = $1 AND submission_hash = $2
-	`, orgID, submissionHash)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-	if res.RowsAffected() == 0 {
-		http.Error(w, `{"error":"submission not found"}`, http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":          "rerun",
-		"submission_hash": submissionHash,
 	})
 }
 
@@ -571,33 +469,6 @@ func UpdateKeywords(w http.ResponseWriter, r *http.Request) {
 
 	if abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
 		http.Error(w, fmt.Sprintf(`{"error":"keyword weights sum to %.4f, must be 1.0 (±%.2f)"}`, weightSum, protocol.KeywordWeightTolerance), http.StatusBadRequest)
-		return
-	}
-
-	keywordSet := make(map[string]bool)
-	for _, kw := range req.Classified {
-		keywordSet[kw.Keyword] = true
-	}
-
-	placeholders := make([]string, len(req.Classified))
-	args := make([]interface{}, len(req.Classified))
-	for i, kw := range req.Classified {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = kw.Keyword
-	}
-
-	validKeywords := 0
-	queryArgs := append(args, orgID)
-	err = pool.QueryRow(r.Context(), fmt.Sprintf(`
-		SELECT COUNT(*) FROM org_keywords
-		WHERE org_id = $%d AND keyword IN (%s) AND deprecated = false
-	`, len(args)+1, strings.Join(placeholders, ",")), queryArgs...).Scan(&validKeywords)
-	if err != nil {
-		http.Error(w, `{"error":"internal error checking keywords"}`, http.StatusInternalServerError)
-		return
-	}
-	if validKeywords != len(req.Classified) {
-		http.Error(w, `{"error":"one or more keywords not found in org_keywords or are deprecated"}`, http.StatusBadRequest)
 		return
 	}
 

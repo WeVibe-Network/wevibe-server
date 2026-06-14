@@ -495,7 +495,8 @@ export interface KeywordRecord {
 export interface KeywordCandidate {
   keyword: string;
   distinct_contributors: number;
-  earned: boolean;
+  distinct_occasions: number;
+  commonly_suggested: boolean;
 }
 
 export async function listKeywords(orgId: string): Promise<KeywordRecord[]> {
@@ -742,13 +743,6 @@ export async function verifyKeywords(orgId: string, entries: VerifyEntry[]): Pro
   return resp.results ?? [];
 }
 
-export async function rerunKeywords(orgId: string, hash: string, feedback: string): Promise<{ status: string }> {
-  return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/rerun-keywords`, {
-    method: 'POST',
-    body: JSON.stringify({ hash, feedback }),
-  });
-}
-
 export async function updateKeywords(
   orgId: string,
   hash: string,
@@ -787,6 +781,7 @@ export interface PreparedBatchMemory {
   committing_leader: string;
   keywords: string[];
   memory_type: MemoryType;
+  preference_confidence: number;
   plaintext_hash: string;
   salt: string;
   ciphertext_hash: string;

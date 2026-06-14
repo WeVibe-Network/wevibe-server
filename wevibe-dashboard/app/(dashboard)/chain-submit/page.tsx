@@ -9,7 +9,6 @@ import {
   denySubmission,
   getOrgHealth,
   prepareBatchSubmit,
-  addKeyword,
   type Submission,
   type KeywordWeight,
   type KeywordCandidate,
@@ -42,16 +41,79 @@ type DecryptBatchItem = {
   error?: string;
 };
 
-type KeywordPillVariant = 'classified' | 'excluded';
+type KeywordProvenance = 'green' | 'blue' | 'yellow';
+type CuratedKeyword = KeywordWeight & { keywordLc: string };
 
 const CLASSIFIED_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green transition-colors transition-opacity duration-200';
+const BLUE_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(96,165,250,0.4)] bg-[rgba(96,165,250,0.14)] px-2.5 py-0.5 text-xs font-medium text-[rgba(147,197,253,0.95)] transition-colors transition-opacity duration-200';
+const YELLOW_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.14)] px-2.5 py-0.5 text-xs font-medium text-wv-amber transition-colors transition-opacity duration-200';
 const EXCLUDED_PILL_CLASS = 'inline-flex items-center rounded-full border border-[rgba(148,163,184,0.4)] bg-[rgba(148,163,184,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-dim opacity-65 transition-colors transition-opacity duration-200';
 
-function getKeywordPillClass(variant: KeywordPillVariant): string {
-  if (variant === 'classified') {
+function keywordPillClass(provenance: KeywordProvenance, selected: boolean): string {
+  if (!selected) {
+    return EXCLUDED_PILL_CLASS;
+  }
+  if (provenance === 'green') {
     return CLASSIFIED_PILL_CLASS;
   }
-  return EXCLUDED_PILL_CLASS;
+  if (provenance === 'blue') {
+    return BLUE_PILL_CLASS;
+  }
+  return YELLOW_PILL_CLASS;
+}
+
+function normalizeKeywordKey(keyword: string): string {
+  return keyword.trim().toLowerCase();
+}
+
+function mergeExtractionKeywords(extraction: ExtractionResultPayload): CuratedKeyword[] {
+  const merged = new Map<string, CuratedKeyword>();
+
+  const appendKeyword = (kw: KeywordWeight, allowOverwrite: boolean) => {
+    const keywordLc = normalizeKeywordKey(kw.keyword);
+    if (!keywordLc) {
+      return;
+    }
+    if (!allowOverwrite && merged.has(keywordLc)) {
+      return;
+    }
+
+    const baseWeight = typeof kw.base_weight === 'number' && Number.isFinite(kw.base_weight)
+      ? kw.base_weight
+      : kw.weight;
+
+    merged.set(keywordLc, {
+      ...kw,
+      keywordLc,
+      base_weight: baseWeight,
+    });
+  };
+
+  extraction.classified.forEach((kw) => appendKeyword(kw, true));
+  extraction.suggestions.forEach((kw) => appendKeyword(kw, false));
+
+  return Array.from(merged.values()).sort((left, right) => left.keyword.localeCompare(right.keyword));
+}
+
+function getPreferenceConfidenceChip(confidence: number): { className: string; title: string } {
+  if (confidence > 0.8) {
+    return {
+      className: 'rounded-full border border-[rgba(255,107,107,0.45)] bg-[rgba(255,107,107,0.16)] px-2 py-0.5 text-xs font-medium text-wv-red',
+      title: 'Likely taste',
+    };
+  }
+
+  if (confidence > 0.5) {
+    return {
+      className: 'rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber',
+      title: 'Possible preference',
+    };
+  }
+
+  return {
+    className: 'rounded-full border border-wv-line bg-wv-panel-2 px-2 py-0.5 text-xs font-medium text-wv-dim',
+    title: 'Fact / convention',
+  };
 }
 
 function shortenPubkey(pubkey: string, visibleChars = 12): string {
@@ -165,29 +227,6 @@ function parseModerationRecommendation(
   };
 }
 
-function parseKeywordVoteTally(
-  keywordVotes: Submission['keyword_votes'],
-  keyword: string,
-): { include: number; exclude: number } | null {
-  if (!keywordVotes) {
-    return null;
-  }
-
-  const direct = keywordVotes[keyword];
-  const fallback = direct ?? Object.entries(keywordVotes).find(
-    ([candidate]) => candidate.toLowerCase() === keyword.toLowerCase(),
-  )?.[1];
-
-  if (!fallback) {
-    return null;
-  }
-
-  return {
-    include: Number.isFinite(fallback.include) ? Math.max(0, Math.trunc(fallback.include)) : 0,
-    exclude: Number.isFinite(fallback.exclude) ? Math.max(0, Math.trunc(fallback.exclude)) : 0,
-  };
-}
-
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.trim();
   if (clean.length % 2 !== 0) {
@@ -216,6 +255,7 @@ export default function ChainSubmitPage() {
   const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
   const [expandedModeratorVotes, setExpandedModeratorVotes] = useState<Record<string, boolean>>({});
   const [denyModalSubmissionHash, setDenyModalSubmissionHash] = useState<string | null>(null);
+  const [deselectedKeywords, setDeselectedKeywords] = useState<Record<string, Set<string>>>({});
 
   const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
     if (!orgId) {
@@ -238,6 +278,47 @@ export default function ChainSubmitPage() {
       ...prev,
       [submissionHash]: !(prev[submissionHash] ?? false),
     }));
+  }, []);
+
+  const keywordProvenance = useCallback((keyword: string): KeywordProvenance => {
+    const keywordLc = normalizeKeywordKey(keyword);
+    if (!keywordLc) {
+      return 'yellow';
+    }
+    if (orgVocabulary.has(keywordLc)) {
+      return 'green';
+    }
+    if (keywordCandidates.get(keywordLc)?.commonly_suggested === true) {
+      return 'blue';
+    }
+    return 'yellow';
+  }, [orgVocabulary, keywordCandidates]);
+
+  const toggleKeyword = useCallback((hash: string, keywordLc: string) => {
+    const normalizedKeyword = normalizeKeywordKey(keywordLc);
+    if (!normalizedKeyword) {
+      return;
+    }
+
+    setDeselectedKeywords((prev) => {
+      const next = { ...prev };
+      const existing = next[hash] ?? new Set<string>();
+      const updated = new Set(existing);
+
+      if (updated.has(normalizedKeyword)) {
+        updated.delete(normalizedKeyword);
+      } else {
+        updated.add(normalizedKeyword);
+      }
+
+      if (updated.size === 0) {
+        delete next[hash];
+      } else {
+        next[hash] = updated;
+      }
+
+      return next;
+    });
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -413,11 +494,39 @@ export default function ChainSubmitPage() {
       error?: string;
     };
 
-    // Progress lives in the toaster (a single sonner toast updated in place across
-    // both stages), not on the page.
-    const progressToastId = toast.loading(`Embedding retrieval cards… 0 / ${total}`);
+    let progressToastId: string | number | undefined;
 
     try {
+      for (const submission of reviewKeywords) {
+        const extraction = parseExtractionResult(submission.extraction_result);
+        const allKeywords = mergeExtractionKeywords(extraction);
+        const deselectedSet = deselectedKeywords[submission.submission_hash];
+
+        const selectedList = allKeywords
+          .filter((kw) => !(deselectedSet?.has(kw.keywordLc) ?? false))
+          .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
+
+        if (selectedList.length === 0) {
+          toast.error(`At least one keyword must stay selected for ${submission.submission_hash.slice(0, 12)}…`);
+          return;
+        }
+
+        const deselectedItems = allKeywords
+          .filter((kw) => deselectedSet?.has(kw.keywordLc) ?? false)
+          .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
+
+        await updateKeywords(
+          orgId,
+          submission.submission_hash,
+          renormalizeFromBase(selectedList),
+          toExcludedSuggestionPayload(deselectedItems),
+        );
+      }
+
+      // Progress lives in the toaster (a single sonner toast updated in place across
+      // both stages), not on the page.
+      progressToastId = toast.loading(`Embedding retrieval cards… 0 / ${total}`);
+
       // Stage 1 — embed retrieval cards ONE memory at a time so we can report real
       // "X of N" progress. Decrypting + embedding each card through the local LLM
       // provider is the slow step.
@@ -444,13 +553,21 @@ export default function ChainSubmitPage() {
         (submission) => !embedById.has(submission.submission_hash),
       );
       if (embedResults.length !== reviewKeywords.length || missingHashes.length > 0) {
-        toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`, { id: progressToastId });
+        if (progressToastId === undefined) {
+          toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`);
+        } else {
+          toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`, { id: progressToastId });
+        }
         return;
       }
 
       const failed = embedResults.filter((r) => !r.vector || r.error);
       if (failed.length > 0) {
-        toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`, { id: progressToastId });
+        if (progressToastId === undefined) {
+          toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`);
+        } else {
+          toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`, { id: progressToastId });
+        }
         return;
       }
 
@@ -462,115 +579,41 @@ export default function ChainSubmitPage() {
       }));
 
       // Stage 2 — hub verifies canonical messages + signatures for all entries.
-      toast.loading(`Verifying ${total} ${total === 1 ? 'memory' : 'memories'} on the hub…`, { id: progressToastId });
+      if (progressToastId === undefined) {
+        toast.loading(`Verifying ${total} ${total === 1 ? 'memory' : 'memories'} on the hub…`);
+      } else {
+        toast.loading(`Verifying ${total} ${total === 1 ? 'memory' : 'memories'} on the hub…`, { id: progressToastId });
+      }
       const results = await verifyKeywords(orgId, entries);
       setVerifyResults(results);
       const allPassed = results.every(r => r.passed);
       if (allPassed) {
-        toast.success('All keywords verified successfully.', { id: progressToastId });
+        if (progressToastId === undefined) {
+          toast.success('All keywords verified successfully.');
+        } else {
+          toast.success('All keywords verified successfully.', { id: progressToastId });
+        }
       } else {
         const firstError = results.find((result) => !result.passed && result.error)?.error;
-        toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.', { id: progressToastId });
+        if (progressToastId === undefined) {
+          toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.');
+        } else {
+          toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.', { id: progressToastId });
+        }
       }
       await loadAll();
     } catch (err) {
-      toast.error((err as Error).message, { id: progressToastId });
+      if (progressToastId === undefined) {
+        toast.error((err as Error).message);
+      } else {
+        toast.error((err as Error).message, { id: progressToastId });
+      }
     } finally {
       setBusy(null);
       setVerifyingHashes(new Set());
       setVerifyingItems([]);
     }
-  }, [reviewKeywords, loadAll, orgId]);
-
-  const handleExcludeClassifiedKeyword = useCallback(async (
-    hash: string,
-    classified: KeywordWeight[],
-    suggestions: KeywordWeight[],
-    excludeIndex: number,
-  ) => {
-    if (!orgId) return;
-
-    const excluded = classified[excludeIndex];
-    if (!excluded) {
-      toast.error('Included keyword no longer available. Refresh and try again.');
-      return;
-    }
-
-    const remainingClassified = classified.filter((_, idx) => idx !== excludeIndex);
-    const nextClassified = renormalizeFromBase(remainingClassified);
-    if (nextClassified.length === 0) {
-      toast.error('Cannot remove the last included keyword.');
-      return;
-    }
-
-    const nextSuggestionsWithRationale = toExcludedSuggestionPayload([
-      ...suggestions,
-      { keyword: excluded.keyword, weight: excluded.weight, base_weight: excluded.base_weight },
-    ]);
-
-    setBusy(hash);
-    setNotice(null);
-
-    try {
-      await updateKeywords(orgId, hash, nextClassified, nextSuggestionsWithRationale);
-      setNotice(`Excluded “${excluded.keyword}” for ${hash.slice(0, 12)}…`);
-      await loadAll();
-    } catch (err) {
-      toast.error((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [loadAll, orgId]);
-
-  const handleIncludeSuggestionKeyword = useCallback(async (
-    hash: string,
-    classified: KeywordWeight[],
-    suggestions: KeywordWeight[],
-    includeIndex: number,
-  ) => {
-    if (!orgId) return;
-
-    const included = suggestions[includeIndex];
-    if (!included) {
-      toast.error('Suggestion no longer available. Refresh and try again.');
-      return;
-    }
-
-    setBusy(hash);
-    setNotice(null);
-
-    try {
-      try {
-        await addKeyword(orgId, included.keyword);
-      } catch (addKeywordError) {
-        const addKeywordMessage = normalizeErrorMessage(addKeywordError).toLowerCase();
-        if (!addKeywordMessage.includes('already exists')) {
-          throw addKeywordError;
-        }
-      }
-
-      const nextClassified = renormalizeFromBase([
-        ...classified,
-        { keyword: included.keyword, weight: included.weight, base_weight: included.base_weight },
-      ]);
-      if (nextClassified.length === 0) {
-        toast.error('Failed to include keyword. Refresh and try again.');
-        return;
-      }
-
-      const nextSuggestionsWithRationale = toExcludedSuggestionPayload(
-        suggestions.filter((_, idx) => idx !== includeIndex),
-      );
-
-      await updateKeywords(orgId, hash, nextClassified, nextSuggestionsWithRationale);
-      setNotice(`Included “${included.keyword}” for ${hash.slice(0, 12)}…`);
-      await loadAll();
-    } catch (err) {
-      toast.error((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  }, [loadAll, orgId]);
+  }, [reviewKeywords, deselectedKeywords, loadAll, orgId]);
 
   const handleDenyFinal = useCallback(async (hash: string) => {
     if (!orgId) return;
@@ -833,7 +876,7 @@ export default function ChainSubmitPage() {
               {awaiting.length} memories awaiting verification
             </p>
             <p className="mt-1 text-xs text-wv-amber">
-              <span className="text-wv-green">Green</span> = included (click to exclude) · <span className="text-wv-dim">Gray</span> = excluded (click to include; adds to vocabulary). Click any keyword pill once to toggle its state. Only included keywords are attached and submitted.
+              Green = already in your keyword set · Blue = commonly suggested by contributors · Yellow = new (joins the set on commit) · Click any keyword to deselect (gray = won’t commit).
             </p>
           </div>
           <button
@@ -856,18 +899,21 @@ export default function ChainSubmitPage() {
               const recommendation = parseModerationRecommendation(item.mod_votes);
               const moderatorRecommendations = item.moderator_recommendations ?? [];
               const moderatorVotesExpanded = expandedModeratorVotes[item.submission_hash] ?? false;
-              const mergedKeywords = [
-                ...extraction.classified.map((kw, classifiedIndex) => ({
-                  ...kw,
-                  included: true as const,
-                  sourceIndex: classifiedIndex,
-                })),
-                ...extraction.suggestions.map((kw, suggestionIndex) => ({
-                  ...kw,
-                  included: false as const,
-                  sourceIndex: suggestionIndex,
-                })),
-              ].sort((left, right) => left.keyword.localeCompare(right.keyword));
+              const allKeywords = mergeExtractionKeywords(extraction);
+              const deselectedSet = deselectedKeywords[item.submission_hash];
+              const selectedList = allKeywords
+                .filter((kw) => !(deselectedSet?.has(kw.keywordLc) ?? false))
+                .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
+              const renorm = renormalizeFromBase(selectedList);
+              const renormByKeyword = new Map(
+                renorm.map((kw) => [normalizeKeywordKey(kw.keyword), kw.weight] as const),
+              );
+              const preferenceConfidence = typeof item.preference_confidence === 'number' && Number.isFinite(item.preference_confidence)
+                ? item.preference_confidence
+                : null;
+              const preferenceChip = preferenceConfidence === null
+                ? null
+                : getPreferenceConfidenceChip(preferenceConfidence);
 
               return (
                 <div key={item.submission_hash} className="rounded-lg border border-[rgba(124,92,255,0.4)] bg-wv-panel p-4">
@@ -879,6 +925,11 @@ export default function ChainSubmitPage() {
                     <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
                       Memory
                     </span>
+                    {preferenceConfidence !== null && preferenceChip && (
+                      <span className={preferenceChip.className} title={preferenceChip.title}>
+                        Preference {preferenceConfidence.toFixed(2)}
+                      </span>
+                    )}
                     <button
                       type="button"
                       onClick={() => toggleModeratorVotes(item.submission_hash)}
@@ -948,71 +999,50 @@ export default function ChainSubmitPage() {
                     </div>
                   )}
 
-                  <p className="mt-2 text-sm text-wv-text line-clamp-2">
-                    {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
+                  <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
+                    {item.plaintext ?? 'No plaintext'}
                   </p>
 
                   <div className="mt-3">
                     <p className="text-xs font-medium text-wv-dim">Keywords</p>
                     <p className="mt-1 text-[11px] text-wv-dim">
-                      <span className="text-wv-green">Green</span> = included (click to exclude) · <span className="text-wv-dim">Gray</span> = excluded (click to include)
+                      Green = already in your keyword set · Blue = commonly suggested by contributors · Yellow = new (joins the set on commit) · Click any keyword to deselect (gray = won’t commit).
                     </p>
-                    {mergedKeywords.length === 0 ? (
+                    {allKeywords.length === 0 ? (
                       <p className="mt-1 text-xs text-wv-dim">No extracted keywords yet.</p>
                     ) : (
                       <div className="mt-1 flex flex-wrap gap-2">
-                        {mergedKeywords.map((kw) => {
-                          const weightLabel = `${(displayWeight(kw, kw.included) * 100).toFixed(0)}%`;
-                          const keywordCandidate = kw.included
+                        {allKeywords.map((kw) => {
+                          const selected = !(deselectedSet?.has(kw.keywordLc) ?? false);
+                          const provenance = keywordProvenance(kw.keyword);
+                          const selectedWeight = renormByKeyword.get(kw.keywordLc);
+                          const weightLabel = selectedWeight === undefined
                             ? null
-                            : keywordCandidates.get(kw.keyword.trim().toLowerCase());
-                          const earned = keywordCandidate?.earned === true;
-                          const tally = kw.included
-                            ? null
-                            : parseKeywordVoteTally(item.keyword_votes, kw.keyword);
+                            : `${(selectedWeight * 100).toFixed(0)}%`;
+                          const selectedHoverClass = provenance === 'green'
+                            ? 'cursor-pointer hover:border-[rgba(54,211,153,0.45)] hover:bg-[rgba(54,211,153,0.2)]'
+                            : provenance === 'blue'
+                              ? 'cursor-pointer hover:border-[rgba(96,165,250,0.55)] hover:bg-[rgba(96,165,250,0.22)]'
+                              : 'cursor-pointer hover:border-[rgba(255,178,85,0.55)] hover:bg-[rgba(255,178,85,0.22)]';
 
                           return (
                             <button
                               type="button"
                               key={kw.keyword}
-                              onClick={() => (
-                                kw.included
-                                  ? handleExcludeClassifiedKeyword(
-                                    item.submission_hash,
-                                    extraction.classified,
-                                    extraction.suggestions,
-                                    kw.sourceIndex,
-                                  )
-                                  : handleIncludeSuggestionKeyword(
-                                    item.submission_hash,
-                                    extraction.classified,
-                                    extraction.suggestions,
-                                    kw.sourceIndex,
-                                  )
-                              )}
+                              onClick={() => toggleKeyword(item.submission_hash, kw.keywordLc)}
                               disabled={itemBusy || loading}
-                              className={`${getKeywordPillClass(kw.included ? 'classified' : 'excluded')} ${itemBusy || loading
+                              className={`${keywordPillClass(provenance, selected)} ${itemBusy || loading
                                 ? 'cursor-not-allowed'
-                                : kw.included
-                                  ? 'cursor-pointer hover:border-[rgba(54,211,153,0.45)] hover:bg-[rgba(54,211,153,0.2)]'
+                                : selected
+                                  ? selectedHoverClass
                                   : 'cursor-pointer hover:border-[rgba(148,163,184,0.6)] hover:bg-[rgba(148,163,184,0.18)] hover:opacity-90'}`}
-                              title={kw.included
-                                ? `Included · Weight ${weightLabel} · Click to exclude`
-                                : earned
-                                  ? `Excluded · Weight ${weightLabel} · Earned · ${keywordCandidate?.distinct_contributors ?? 0} contributors · Click to include`
-                                  : `Excluded · Weight ${weightLabel} · Click to include`}
+                              title={selected
+                                ? `Selected · Weight ${weightLabel ?? '0%'} · Click to deselect`
+                                : 'Deselected · Click to select'}
                             >
                               {kw.keyword}
-                              <span className="ml-1 text-wv-dim">{weightLabel}</span>
-                              {!kw.included && earned && keywordCandidate && (
-                                <span className="ml-2 text-[10px] font-semibold text-[rgba(147,197,253,0.95)]">
-                                  earned · {keywordCandidate.distinct_contributors} contributors
-                                </span>
-                              )}
-                              {!kw.included && tally && (
-                                <span className="ml-2 text-[10px] font-normal text-wv-dim">
-                                  include {tally.include} / exclude {tally.exclude}
-                                </span>
+                              {selected && weightLabel && (
+                                <span className="ml-1 text-wv-dim">{weightLabel}</span>
                               )}
                             </button>
                           );
@@ -1072,6 +1102,12 @@ export default function ChainSubmitPage() {
               <div className="space-y-3">
                 {pendingChain.map((item) => {
                   const extraction = parseExtractionResult(item.extraction_result);
+                  const preferenceConfidence = typeof item.preference_confidence === 'number' && Number.isFinite(item.preference_confidence)
+                    ? item.preference_confidence
+                    : null;
+                  const preferenceChip = preferenceConfidence === null
+                    ? null
+                    : getPreferenceConfidenceChip(preferenceConfidence);
 
                   return (
                     <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
@@ -1083,6 +1119,11 @@ export default function ChainSubmitPage() {
                         <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
                           Memory
                         </span>
+                        {preferenceConfidence !== null && preferenceChip && (
+                          <span className={preferenceChip.className} title={preferenceChip.title}>
+                            Preference {preferenceConfidence.toFixed(2)}
+                          </span>
+                        )}
                         {item.verified_by && (
                           <span className="font-mono text-wv-dim">Verified by {item.verified_by.slice(0, 8)}…</span>
                         )}
@@ -1090,8 +1131,8 @@ export default function ChainSubmitPage() {
                           <ClientTime value={item.verified_at} mode="datetime" />
                         )}
                       </div>
-                      <p className="mt-2 text-sm text-wv-text line-clamp-2">
-                        {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
+                      <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
+                        {item.plaintext ?? 'No plaintext'}
                       </p>
 
                       {extraction.classified.length > 0 && (
@@ -1099,13 +1140,10 @@ export default function ChainSubmitPage() {
                           <p className="text-xs font-medium text-wv-dim">Keywords:</p>
                           <div className="mt-1 flex flex-wrap gap-2">
                             {extraction.classified.map((kw, idx) => {
-                              const inVocabulary = orgVocabulary.has(kw.keyword.toLowerCase());
                               return (
                                 <span
                                   key={`${kw.keyword}-${idx}`}
-                                  className={inVocabulary
-                                    ? 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green'
-                                    : 'inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red'}
+                                  className={keywordPillClass(keywordProvenance(kw.keyword), true)}
                                 >
                                   {kw.keyword} {(displayWeight(kw, true) * 100).toFixed(0)}%
                                 </span>
@@ -1128,16 +1166,15 @@ export default function ChainSubmitPage() {
                 <div className="space-y-3">
                   {pendingVerification.map((item) => {
                     const extraction = parseExtractionResult(item.extraction_result);
-                    const mergedKeywords = [
-                      ...extraction.classified.map((kw) => ({
-                        ...kw,
-                        included: true as const,
-                      })),
-                      ...extraction.suggestions.map((kw) => ({
-                        ...kw,
-                        included: false as const,
-                      })),
-                    ].sort((left, right) => left.keyword.localeCompare(right.keyword));
+                    const allKeywords = mergeExtractionKeywords(extraction);
+                    const deselectedSet = deselectedKeywords[item.submission_hash];
+                    const selectedList = allKeywords
+                      .filter((kw) => !(deselectedSet?.has(kw.keywordLc) ?? false))
+                      .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
+                    const renorm = renormalizeFromBase(selectedList);
+                    const renormByKeyword = new Map(
+                      renorm.map((kw) => [normalizeKeywordKey(kw.keyword), kw.weight] as const),
+                    );
 
                     return (
                       <div
@@ -1154,29 +1191,35 @@ export default function ChainSubmitPage() {
                           </span>
                         </div>
 
-                        <p className="mt-2 text-sm text-wv-text line-clamp-2">
-                          {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
+                        <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
+                          {item.plaintext ?? 'No plaintext'}
                         </p>
 
                         <div className="mt-3">
                           <p className="text-xs font-medium text-wv-dim">Keywords</p>
-                          {mergedKeywords.length === 0 ? (
+                          {allKeywords.length === 0 ? (
                             <p className="mt-1 text-xs text-wv-dim">No extracted keywords yet.</p>
                           ) : (
                             <div className="mt-1 flex flex-wrap gap-2">
-                              {mergedKeywords.map((kw, idx) => {
-                                const weightLabel = `${(displayWeight(kw, kw.included) * 100).toFixed(0)}%`;
+                              {allKeywords.map((kw, idx) => {
+                                const selected = !(deselectedSet?.has(kw.keywordLc) ?? false);
+                                const selectedWeight = renormByKeyword.get(kw.keywordLc);
+                                const weightLabel = selectedWeight === undefined
+                                  ? null
+                                  : `${(selectedWeight * 100).toFixed(0)}%`;
 
                                 return (
                                   <span
-                                    key={`${item.submission_hash}-${kw.keyword}-${kw.included ? 'included' : 'excluded'}-${idx}`}
-                                    className={`${getKeywordPillClass(kw.included ? 'classified' : 'excluded')} cursor-not-allowed opacity-80`}
-                                    title={kw.included
-                                      ? `Included · Weight ${weightLabel}`
-                                      : `Excluded · Weight ${weightLabel}`}
+                                    key={`${item.submission_hash}-${kw.keyword}-${idx}`}
+                                    className={`${keywordPillClass(keywordProvenance(kw.keyword), selected)} cursor-not-allowed opacity-80`}
+                                    title={selected
+                                      ? `Selected · Weight ${weightLabel ?? '0%'}`
+                                      : 'Deselected'}
                                   >
                                     {kw.keyword}
-                                    <span className="ml-1 text-wv-dim">{weightLabel}</span>
+                                    {selected && weightLabel && (
+                                      <span className="ml-1 text-wv-dim">{weightLabel}</span>
+                                    )}
                                   </span>
                                 );
                               })}

@@ -457,7 +457,7 @@ The hub implements a multi-stage memory lifecycle that decouples approval from k
 1. **Contributor submits** (`pending`) — memory enters moderation queue
 2. **Moderator approves** (`pending_keyword`) — moderator stamps quality, records `moderator_pubkey` and `approved_at`
 3. **Leader triggers batch keyword extraction** (`pending_chain`) — LLM classifies per-memory against org vocabulary, hub verifies
-4. **Leader reviews results** — can rerun/edit/remove before chain commitment
+4. **Leader reviews/curates results** — selects/deselects keywords (default all-selected; selected = will commit), edits, or removes before chain commitment (re-run extraction was removed in CANONICALUX v1.2)
 5. **Leader triggers batch chain submission** (`pending_chain`) — chain tx is broadcast; status stays `pending_chain` until confirmation
 6. **ChainWatcher confirms tx** (`committed`) — `processApproveMemoryBookkeeping` performs Qdrant upsert/keyword writes and flips status to `committed`
 7. **Memory rejected at any stage** (`denied`) — terminal state; leader deny or report upheld
@@ -472,7 +472,7 @@ status TEXT NOT NULL DEFAULT 'pending'
 moderator_pubkey TEXT           -- moderator who approved
 approved_at TIMESTAMPTZ          -- when approved
 extraction_result JSONB         -- hub-verified keywords + scores
-extraction_feedback TEXT         -- leader feedback for rerun
+extraction_feedback TEXT         -- leader feedback on extraction (legacy; re-run removed)
 verified_at TIMESTAMPTZ          -- when keywords were verified
 ```
 
@@ -490,11 +490,8 @@ POST /v1/orgs/{orgID}/verify-keywords
   → Hub-side verification: keyword format, count ≤ 20, weights sum to 1.0, char limits
   → Transitions status from pending_keyword → pending_chain
 
-POST /v1/orgs/{orgID}/submissions/{hash}/rerun-keywords
-  → Clears extraction_result, resets to pending_keyword, stores feedback
-
 PUT /v1/orgs/{orgID}/submissions/{hash}/update-keywords
-  → Manual keyword override, resets to pending_keyword
+  → Persists the leader's curated keyword selection (resets to pending_keyword)
 
 DELETE /v1/orgs/{orgID}/submissions/{hash}
   → Remove submission (only pending_keyword or pending_chain)
@@ -503,9 +500,9 @@ GET /v1/orgs/{orgID}/submissions?status={status}
   → List submissions filtered by status (leader-only)
 ```
 
-**Verification rules (in verify-keywords):**
+**Verification rules (in verify-keywords and update-keywords):**
 - Each classified keyword matches `^[a-z][a-z0-9_]{1,39}$`
-- Each classified keyword exists in org_keywords (not deprecated)
+- **No vocabulary gate.** The leader may commit any well-formed keyword — there is NO check that a keyword already exists in `org_keywords`. New keywords (and re-used previously-deprecated ones) join/re-activate the org vocabulary at commit time (vocab-join-at-commit: the ChainWatcher's `processApproveMemoryBookkeeping` upserts `org_keywords ON CONFLICT DO UPDATE SET deprecated=false` immediately before the `memory_keywords` write, satisfying the FK). The leader is the sole sovereign curator; keyword UX is one-direction (select = add).
 - Count of classified keywords ≤ 20
 - Sum of classified keyword weights ≈ 1.0 (tolerance: |sum - 1.0| < 0.02)
 - Memory plaintext length ≤ 2000 chars
@@ -986,7 +983,7 @@ Removed route:
 - Trust panel formatting is handled client-side by wevibe-mcp via `trust-panel.ts`.
 - **Banned memories filtered:** Results exclude memories where `pending_submissions.banned = TRUE`.
 - **No quarantine system:** Memories are never auto-removed based on rejection counts.
-- Chain is only contacted when a memory accumulates enough upheld reports to trigger a ban (quorum via `report_ban_threshold` per org).
+- Report votes are advisory only; there is no org-level auto-ban threshold.
 - `GET /v1/orgs/{orgID}/memories` (`ScrollApprovedMemories`) sources keyword/lifecycle metadata from Qdrant payload (chain mirror), not PostgreSQL keyword joins.
 
 ### PRE Retrieval Pipeline (CO-218, CO-221)

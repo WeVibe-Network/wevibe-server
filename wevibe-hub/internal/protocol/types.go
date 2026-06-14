@@ -213,7 +213,8 @@ type KeywordWithWeight struct {
 type KeywordCandidate struct {
 	Keyword              string `json:"keyword"`
 	DistinctContributors int    `json:"distinct_contributors"`
-	Earned               bool   `json:"earned"`
+	DistinctOccasions    int    `json:"distinct_occasions"`
+	CommonlySuggested    bool   `json:"commonly_suggested"`
 }
 
 type KeywordMatchDetail struct {

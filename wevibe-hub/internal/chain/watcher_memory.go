@@ -133,11 +133,21 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 	}
 
 	for _, kw := range keywords {
+		normalizedKeyword := strings.ToLower(strings.TrimSpace(kw))
 		_, err := w.db.Exec(ctx, `
+			INSERT INTO org_keywords (org_id, keyword)
+			VALUES ($1, $2)
+			ON CONFLICT (org_id, keyword) DO UPDATE SET deprecated = false
+		`, orgID, normalizedKeyword)
+		if err != nil {
+			logger.Warn("failed to upsert org_keyword", "keyword", kw, "error", err)
+		}
+
+		_, err = w.db.Exec(ctx, `
 			INSERT INTO memory_keywords (memory_cid, org_id, keyword, weight)
 			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (memory_cid, keyword) DO UPDATE SET weight = $4
-		`, contentHashHex, orgID, strings.ToLower(kw), keywordWeights[strings.ToLower(kw)])
+		`, contentHashHex, orgID, normalizedKeyword, keywordWeights[strings.ToLower(kw)])
 		if err != nil {
 			logger.Warn("failed to insert memory_keyword", "keyword", kw, "error", err)
 		}

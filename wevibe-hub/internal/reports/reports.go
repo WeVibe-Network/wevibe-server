@@ -22,7 +22,6 @@ var (
 		"security_risk": true,
 		"malicious":     true,
 	}
-	defaultEscalationQuorum = 2
 )
 
 type ReportRecommendation = protocol.ReportRecommendation
@@ -35,11 +34,21 @@ func normalizeReason(reason string) (string, error) {
 	return reason, nil
 }
 
+func normalizeReporterRole(role string) string {
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "leader" {
+		return "leader"
+	}
+	return "member"
+}
+
 func Create(ctx context.Context, pool *pgxpool.Pool, orgID string, req protocol.CreateReportRequest, reporterPubkey, reporterRole string) (*protocol.ReportRecord, error) {
 	reason, err := normalizeReason(req.Reason)
 	if err != nil {
 		return nil, err
 	}
+
+	reporterRole = normalizeReporterRole(reporterRole)
 
 	var note *string
 	if trimmed := strings.TrimSpace(req.Note); trimmed != "" {
@@ -176,16 +185,12 @@ func GetReportRecommendations(ctx context.Context, pool *pgxpool.Pool, orgID str
 	return recommendations, nil
 }
 
-func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, actorPubkey, actorRole string, req protocol.UpdateReportRequest, quorum int) (*protocol.ReportRecord, error) {
+func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, actorPubkey, actorRole string, req protocol.UpdateReportRequest) (*protocol.ReportRecord, error) {
 	vote := strings.ToLower(strings.TrimSpace(req.Vote))
 	resolution := strings.ToLower(strings.TrimSpace(req.Resolution))
 
 	if vote == "" && resolution == "" {
 		return nil, errors.New("either vote or resolution is required")
-	}
-
-	if quorum <= 0 {
-		quorum = defaultEscalationQuorum
 	}
 
 	tx, err := pool.Begin(ctx)

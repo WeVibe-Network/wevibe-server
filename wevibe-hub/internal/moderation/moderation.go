@@ -149,7 +149,7 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 			if _, err := pool.Exec(ctx, `
 				INSERT INTO keyword_candidates (org_id, keyword, contributor_pubkey, submission_hash)
 				VALUES ($1, $2, $3, $4)
-				ON CONFLICT (org_id, keyword, contributor_pubkey) DO NOTHING
+				ON CONFLICT (org_id, keyword, contributor_pubkey, submission_hash) DO NOTHING
 			`, req.OrgID, keyword, req.ContributorPubkey, req.SubmissionHash); err != nil {
 				log.Printf("warn: failed recording keyword candidate org=%s keyword=%s contributor=%s submission=%s: %v", req.OrgID, keyword, req.ContributorPubkey, req.SubmissionHash, err)
 			}

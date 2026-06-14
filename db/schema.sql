@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS orgs (
     fee_model                   JSONB       NOT NULL DEFAULT '{}',
     egress_mode                 TEXT        NOT NULL DEFAULT 'unrestricted'
                                         CHECK (egress_mode IN ('local_only', 'allowlist', 'unrestricted')),
-    report_ban_threshold        INTEGER     NOT NULL DEFAULT 3 CHECK (report_ban_threshold >= 1),
     allowed_providers           TEXT[]      NOT NULL DEFAULT '{}',
     status                      TEXT        NOT NULL DEFAULT 'active'
                                         CHECK (status IN ('active', 'suspended', 'closed')),
@@ -202,7 +201,7 @@ CREATE TABLE IF NOT EXISTS reports (
     reporter_pubkey      TEXT        NOT NULL,
     reporter_wallet      TEXT,
     reporter_role        TEXT        NOT NULL DEFAULT 'member'
-                                     CHECK (reporter_role IN ('leader', 'moderator', 'member', 'contributor')),
+                                     CHECK (reporter_role IN ('leader', 'member')),
     reason               TEXT        NOT NULL CHECK (reason IN ('incorrect', 'outdated', 'security_risk', 'malicious')),
     note                 TEXT,
     status               TEXT        NOT NULL DEFAULT 'pending'
@@ -459,7 +458,7 @@ CREATE TABLE IF NOT EXISTS keyword_candidates (
     contributor_pubkey TEXT        NOT NULL,
     submission_hash    TEXT        NOT NULL,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, keyword, contributor_pubkey)
+    PRIMARY KEY (org_id, keyword, contributor_pubkey, submission_hash)
 );
 
 CREATE INDEX IF NOT EXISTS idx_keyword_candidates_org_kw ON keyword_candidates(org_id, keyword);

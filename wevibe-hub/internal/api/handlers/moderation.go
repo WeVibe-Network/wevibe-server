@@ -808,7 +808,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 	rows, err := pool.Query(r.Context(), `
 		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.wrapped_dek_mod,
 		       ps.plaintext_hash, ps.salt, ps.ciphertext_hash, ps.contributor_sig,
-		       ps.memory_type, ps.extraction_result,
+		       ps.memory_type, ps.extraction_result, ps.preference_confidence,
 		       COALESCE(m.wallet_address, '') AS contributor_wallet
 		FROM pending_submissions ps
 		JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
@@ -822,18 +822,19 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type preparedBatchMemory struct {
-		SubmissionHash    string   `json:"submission_hash"`
-		ContributorPubkey string   `json:"contributor_pubkey"`
-		ContributorWallet string   `json:"contributor_wallet"`
-		CommittingLeader  string   `json:"committing_leader"`
-		Keywords          []string `json:"keywords"`
-		MemoryType        string   `json:"memory_type"`
-		PlaintextHash     string   `json:"plaintext_hash"`
-		Salt              string   `json:"salt"`
-		CiphertextHash    string   `json:"ciphertext_hash"`
-		ContributorSig    string   `json:"contributor_sig"`
-		EncryptedBlob     string   `json:"encrypted_blob"`
-		WrappedDekEnc     string   `json:"wrapped_dek_enc"`
+		SubmissionHash       string   `json:"submission_hash"`
+		ContributorPubkey    string   `json:"contributor_pubkey"`
+		ContributorWallet    string   `json:"contributor_wallet"`
+		CommittingLeader     string   `json:"committing_leader"`
+		Keywords             []string `json:"keywords"`
+		MemoryType           string   `json:"memory_type"`
+		PreferenceConfidence float64  `json:"preference_confidence"`
+		PlaintextHash        string   `json:"plaintext_hash"`
+		Salt                 string   `json:"salt"`
+		CiphertextHash       string   `json:"ciphertext_hash"`
+		ContributorSig       string   `json:"contributor_sig"`
+		EncryptedBlob        string   `json:"encrypted_blob"`
+		WrappedDekEnc        string   `json:"wrapped_dek_enc"`
 	}
 	type prepareBatchResponse struct {
 		Batch        []preparedBatchMemory `json:"batch"`
@@ -862,6 +863,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 		var hash, contributor, ciphertext, wrappedDekMod, plaintextHash string
 		var salt, ciphertextHash, contributorSig, memoryType, walletAddress string
 		var extractionResult []byte
+		var preferenceConfidence float64
 		if err := rows.Scan(
 			&hash,
 			&contributor,
@@ -873,6 +875,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 			&contributorSig,
 			&memoryType,
 			&extractionResult,
+			&preferenceConfidence,
 			&walletAddress,
 		); err != nil {
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -996,18 +999,19 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 		}
 
 		batch = append(batch, preparedBatchMemory{
-			SubmissionHash:    hash,
-			ContributorPubkey: contributor,
-			ContributorWallet: walletAddress,
-			CommittingLeader:  signed.Pubkey,
-			Keywords:          keywords,
-			MemoryType:        memoryType,
-			PlaintextHash:     plaintextHash,
-			Salt:              salt,
-			CiphertextHash:    ciphertextHash,
-			ContributorSig:    contributorSig,
-			EncryptedBlob:     ciphertext,
-			WrappedDekEnc:     wrappedDekMod,
+			SubmissionHash:       hash,
+			ContributorPubkey:    contributor,
+			ContributorWallet:    walletAddress,
+			CommittingLeader:     signed.Pubkey,
+			Keywords:             keywords,
+			MemoryType:           memoryType,
+			PreferenceConfidence: preferenceConfidence,
+			PlaintextHash:        plaintextHash,
+			Salt:                 salt,
+			CiphertextHash:       ciphertextHash,
+			ContributorSig:       contributorSig,
+			EncryptedBlob:        ciphertext,
+			WrappedDekEnc:        wrappedDekMod,
 		})
 	}
 

@@ -306,7 +306,7 @@ func UpdateReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rec, err := reports.Update(r.Context(), pool, orgID, reportID, actorPubkey, actorRole, req, 0)
+	rec, err := reports.Update(r.Context(), pool, orgID, reportID, actorPubkey, actorRole, req)
 	if err != nil {
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
@@ -481,8 +481,15 @@ func authorizeReportActor(r *http.Request, orgID string, moderatorOnly bool) (st
 		return "", "", fmt.Errorf("forbidden: %v", err)
 	}
 
-	if moderatorOnly && !isModeratorRole(role) {
-		return "", "", fmt.Errorf("forbidden: moderators only")
+	if moderatorOnly {
+		_, canModerate, err := members.GetMemberCapabilities(r.Context(), pool, orgID, signed.Pubkey)
+		if err != nil {
+			return "", "", fmt.Errorf("forbidden: %v", err)
+		}
+
+		if role != "leader" && !canModerate {
+			return "", "", fmt.Errorf("forbidden: moderators only")
+		}
 	}
 
 	return signed.Pubkey, role, nil
@@ -531,10 +538,6 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(payload)
-}
-
-func isModeratorRole(role string) bool {
-	return role == "leader" || role == "moderator"
 }
 
 func isMemberOnTrial(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (bool, error) {

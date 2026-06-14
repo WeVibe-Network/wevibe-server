@@ -177,7 +177,9 @@ func ListJoinRequests(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || (role != "leader" && role != "moderator") {
+	canContribute, canModerate, capErr := members.GetMemberCapabilities(r.Context(), pool, orgID, signed.Pubkey)
+	_ = canContribute
+	if err != nil || capErr != nil || (role != "leader" && !canModerate) {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
@@ -253,7 +255,9 @@ func ApproveJoinRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || (role != "leader" && role != "moderator") {
+	canContribute, canModerate, capErr := members.GetMemberCapabilities(r.Context(), pool, orgID, signed.Pubkey)
+	_ = canContribute
+	if err != nil || capErr != nil || (role != "leader" && !canModerate) {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
@@ -341,7 +345,9 @@ func CancelJoinApproval(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || (role != "leader" && role != "moderator") {
+	canContribute, canModerate, capErr := members.GetMemberCapabilities(r.Context(), pool, orgID, signed.Pubkey)
+	_ = canContribute
+	if err != nil || capErr != nil || (role != "leader" && !canModerate) {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
@@ -390,7 +396,9 @@ func DenyJoinRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || (role != "leader" && role != "moderator") {
+	canContribute, canModerate, capErr := members.GetMemberCapabilities(r.Context(), pool, orgID, signed.Pubkey)
+	_ = canContribute
+	if err != nil || capErr != nil || (role != "leader" && !canModerate) {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}

@@ -277,7 +277,6 @@ func main() {
 
 			r.Post("/submit-keyword-results", handlers.SubmitKeywordResults)
 			r.Post("/verify-keywords", handlers.VerifyKeywords)
-			r.Post("/submissions/{hash}/rerun-keywords", handlers.RerunKeywords)
 			r.Put("/submissions/{hash}/update-keywords", handlers.UpdateKeywords)
 			r.Delete("/submissions/{hash}", handlers.RemoveSubmission)
 			r.Get("/submissions", handlers.ListSubmissions)

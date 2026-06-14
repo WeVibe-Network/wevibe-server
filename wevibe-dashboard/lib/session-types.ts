@@ -43,10 +43,3 @@ export interface MemoryCandidate {
   extraction_hash: string;
   keywords?: MemoryCandidateKeywords;
 }
-
-export type ExtractionStatus =
-  | 'idle'
-  | 'loading-transcript'
-  | 'extracting'
-  | 'done'
-  | 'error';

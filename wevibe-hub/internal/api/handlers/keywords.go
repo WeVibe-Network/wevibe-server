@@ -13,7 +13,10 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 )
 
-const EARNED_MIN_CONTRIBUTORS = 2
+const (
+	COMMONLY_SUGGESTED_MIN_CONTRIBUTORS = 3
+	COMMONLY_SUGGESTED_MIN_OCCASIONS    = 3
+)
 
 type KeywordInfo struct {
 	Keyword    string `json:"keyword"`
@@ -107,9 +110,12 @@ func ListKeywordCandidates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := pool.Query(r.Context(), `
-		SELECT kc.keyword, COUNT(DISTINCT kc.contributor_pubkey) AS distinct_contributors
+		SELECT kc.keyword,
+		       COUNT(DISTINCT kc.contributor_pubkey) AS distinct_contributors,
+		       COUNT(DISTINCT kc.submission_hash) AS distinct_occasions
 		FROM keyword_candidates kc
 		WHERE kc.org_id = $1
+		  AND kc.created_at >= NOW() - INTERVAL '7 days'
 		  AND NOT EXISTS (
 			SELECT 1 FROM org_keywords ok
 			WHERE ok.org_id = kc.org_id
@@ -129,12 +135,14 @@ func ListKeywordCandidates(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var candidate protocol.KeywordCandidate
 		var distinctContributors int64
-		if err := rows.Scan(&candidate.Keyword, &distinctContributors); err != nil {
+		var distinctOccasions int64
+		if err := rows.Scan(&candidate.Keyword, &distinctContributors, &distinctOccasions); err != nil {
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 			return
 		}
 		candidate.DistinctContributors = int(distinctContributors)
-		candidate.Earned = candidate.DistinctContributors >= EARNED_MIN_CONTRIBUTORS
+		candidate.DistinctOccasions = int(distinctOccasions)
+		candidate.CommonlySuggested = candidate.DistinctContributors >= COMMONLY_SUGGESTED_MIN_CONTRIBUTORS && candidate.DistinctOccasions >= COMMONLY_SUGGESTED_MIN_OCCASIONS
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {

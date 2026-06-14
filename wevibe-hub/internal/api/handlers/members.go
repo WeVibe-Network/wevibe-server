@@ -411,7 +411,7 @@ func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || (role != "leader" && role != "moderator") {
+	if err != nil || role != "leader" {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
@@ -470,7 +470,7 @@ func DisableMemberRecall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
-	if err != nil || (role != "leader" && role != "moderator") {
+	if err != nil || role != "leader" {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
 	}
