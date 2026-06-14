@@ -19,7 +19,7 @@
 | Route | Description |
 |-------|-------------|
 | `/` | Org landing + recent activity. |
-| `/orgs/{id}/moderation` | Pending approvals with guard findings, relationship suggestions, lifecycle actions. |
+| `/moderation/new` | Memory approval surface: moderator advisory voting + leader curate/verify/commit pipeline (role-aware panels). |
 | `/orgs/{id}/members` | Invite/remove members, role management, rotation state. |
 | `/orgs/{id}/epoch` | Anchor manifest upload, rotation status, contest window controls. |
 | `/orgs/{id}/stats` | Serve counts, confidence distribution, treasury burn. |
@@ -58,6 +58,6 @@
 
 ## Sprint 24 Updates
 
-- Added `/reports` queue page, including escalation votes sourced from hub `approval_votes` and report lifecycle actions.
+- Added the reports queue page (now `/moderation/reported`), including advisory recommendations sourced from hub `approval_votes` and report lifecycle actions.
 - Settings page now persists `required_approvals` via the new hub configuration endpoint, requiring additional react-query mutations and optimistic state handling.
 - Dashboard consumes the Accept / Deny / Report actions emitted by OpenCode, updating local cache and invalidating report queries on resolution.

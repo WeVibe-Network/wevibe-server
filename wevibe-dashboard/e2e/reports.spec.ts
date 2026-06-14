@@ -6,13 +6,13 @@ test.describe('Reports Page', () => {
   });
 
   test('displays reports list or empty state', async ({ page }) => {
-    await page.goto('/reports');
+    await page.goto('/moderation/reported');
     const reportsOrEmpty = page.getByText(/report|no.*report/i);
     await expect(reportsOrEmpty.first()).toBeVisible();
   });
 
   test('status filter tabs exist', async ({ page }) => {
-    await page.goto('/reports');
+    await page.goto('/moderation/reported');
     await expect(page.getByRole('button', { name: /pending/i })).toBeVisible();
   });
 });

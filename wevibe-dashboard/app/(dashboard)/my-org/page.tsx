@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useIdentity } from '@/lib/identity-context';
 import { useOrgContext } from '@/lib/org-context';
+import { useDashboardState } from '@/lib/use-dashboard-state';
 import { formatVibeWithDenom } from '@/lib/format';
 import { getOrg, getOrgFinances, type OrgFinances, type OrgSummary } from '@/lib/hub-client';
 import type { OrgRole } from '@/lib/org-role';
@@ -54,6 +55,7 @@ function LeaderTile({ label, value, loading }: { label: string; value: string; l
 export default function MyOrgPage() {
   const router = useRouter();
   const { activeOrg, loading: orgLoading } = useOrgContext();
+  const { isLeader } = useDashboardState();
   const { identity, loading: identityLoading } = useIdentity();
 
   const [stats, setStats] = useState<ContributorStats | null>(null);
@@ -73,10 +75,9 @@ export default function MyOrgPage() {
 
   const identityPubkey = identity?.pubkeyHex ?? null;
   const activeOrgId = activeOrg?.org_id ?? null;
-  const activeOrgRole = activeOrg?.role ?? null;
 
   useEffect(() => {
-    if (!identityPubkey || orgLoading || !activeOrgId || !activeOrgRole) {
+    if (!identityPubkey || orgLoading || !activeOrgId) {
       return;
     }
 
@@ -114,7 +115,7 @@ export default function MyOrgPage() {
         setOrgSummaryLoading(false);
       });
 
-    if (activeOrgRole === 'leader') {
+    if (isLeader) {
       setOrgFinancesLoading(true);
       setOrgFinances(null);
       void getOrgFinances(activeOrgId)
@@ -138,7 +139,7 @@ export default function MyOrgPage() {
     return () => {
       active = false;
     };
-  }, [identityPubkey, orgLoading, activeOrgId, activeOrgRole]);
+  }, [identityPubkey, orgLoading, activeOrgId, isLeader]);
 
   if (identityLoading) {
     return (
@@ -334,7 +335,7 @@ export default function MyOrgPage() {
         )}
       </section>
 
-      {activeOrg.role === 'leader' && (
+      {isLeader && (
         <section className="rounded-xl border border-wv-line bg-wv-panel p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-wv-faint">ORG</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

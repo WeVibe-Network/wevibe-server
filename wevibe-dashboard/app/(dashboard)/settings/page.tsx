@@ -25,6 +25,7 @@ import {
 } from '@/lib/chain-client';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useOrgContext } from '@/lib/org-context';
+import { useDashboardState } from '@/lib/use-dashboard-state';
 import { GuardCard } from '@/components/ui/states';
 import InfoTooltip from '@/components/ui/tooltip';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
@@ -69,8 +70,8 @@ function truncateMiddle(value: string, start = 12, end = 8): string {
 
 export default function SettingsPage() {
   const { activeOrg } = useOrgContext();
+  const { isLeader } = useDashboardState();
   const orgLoaded = activeOrg !== null;
-  const isLeader = activeOrg?.role === 'leader';
   const [chainConfigLoading, setChainConfigLoading] = useState(false);
   const [chainConfigError, setChainConfigError] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);

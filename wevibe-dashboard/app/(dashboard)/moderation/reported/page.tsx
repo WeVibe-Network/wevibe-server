@@ -15,6 +15,7 @@ import { buildReportMemoryMsg, directBroadcast, getOrgAccountAddress } from '@/l
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { connectWallet } from '@/lib/wallet-connect';
 import { useOrgContext } from '@/lib/org-context';
+import { useDashboardState } from '@/lib/use-dashboard-state';
 import ClientTime from '@/components/ui/client-time';
 
 type TabValue = 'all' | 'pending' | 'upheld_pending_tx' | 'upheld' | 'dismissed';
@@ -97,10 +98,8 @@ function recommendationLabel(vote: ReportRecommendationVote): string {
 export default function ReportsPage() {
   const router = useRouter();
   const { activeOrg } = useOrgContext();
+  const { isLeader, canModerate } = useDashboardState();
   const orgId = activeOrg?.org_id ?? '';
-  const viewerRole = activeOrg?.role ?? null;
-  const isLeader = viewerRole === 'leader';
-  const isModerator = viewerRole === 'moderator';
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(false);
@@ -365,7 +364,7 @@ export default function ReportsPage() {
                   const showPending = report.status === 'pending';
                   const showPendingTX = report.status === 'upheld_pending_tx';
                   const canResolve = showPending && isLeader;
-                  const canRecommend = showPending && isModerator;
+                  const canRecommend = showPending && canModerate && !isLeader;
                   const canSubmitToChain = showPendingTX && isLeader;
                   const reporterDismissed = report.reporter_dismissed_count ?? 0;
                   const resolution = report.resolution ?? null;
@@ -532,7 +531,7 @@ export default function ReportsPage() {
               const showPending = report.status === 'pending';
               const showPendingTX = report.status === 'upheld_pending_tx';
               const canResolve = showPending && isLeader;
-              const canRecommend = showPending && isModerator;
+              const canRecommend = showPending && canModerate && !isLeader;
               const canSubmitToChain = showPendingTX && isLeader;
               const reporterDismissed = report.reporter_dismissed_count ?? 0;
               const resolution = report.resolution ?? null;

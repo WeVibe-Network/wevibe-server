@@ -34,8 +34,8 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       label: 'Moderation',
       key: 'moderation',
       sub: [
-        { label: 'New', href: '/moderation' },
-        { label: 'Reported', href: '/reports' },
+        { label: 'New', href: '/moderation/new' },
+        { label: 'Reported', href: '/moderation/reported' },
         { label: 'History', href: '/moderation/history' },
       ],
     },
@@ -43,7 +43,6 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       label: 'Memories',
       key: 'memories',
       sub: [
-        { label: 'Pipeline', href: '/chain-submit' },
         { label: 'Keywords', href: '/keywords' },
       ],
     },
@@ -62,8 +61,8 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       label: 'Moderation',
       key: 'moderation',
       sub: [
-        { label: 'New', href: '/moderation' },
-        { label: 'Reported', href: '/reports' },
+        { label: 'New', href: '/moderation/new' },
+        { label: 'Reported', href: '/moderation/reported' },
         { label: 'History', href: '/moderation/history' },
       ],
     },

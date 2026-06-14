@@ -215,7 +215,7 @@ function hexToBytes(hex: string): Uint8Array {
   return Uint8Array.from(Buffer.from(clean, 'hex'));
 }
 
-export default function ChainSubmitPage() {
+export function LeaderPipelinePanel() {
   const { activeOrg } = useOrgContext();
   const orgId = activeOrg?.org_id ?? '';
 

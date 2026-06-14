@@ -1,5 +1,23 @@
 # WeVibe Dashboard Topology (Updated: CO-011a.4)
 
+> **CURRENT STATE — Moderation consolidation + RBAC SoT (2026-06-14).** The
+> moderation area is now three role-aware routes; the older separate routes were
+> removed. Sprint sections below are historical provenance and may describe the
+> superseded layout.
+>
+> - **`/moderation/new`** — memory APPROVAL surface. Renders `<ModeratorReviewPanel>`
+>   when `canModerate` (advisory voting + steg/sanitization/decrypt badges) and
+>   `<LeaderPipelinePanel>` when `isLeader` (curate keywords → embed/verify → deny →
+>   prepare + commit to chain, org-health header). Replaces the old
+>   `app/(dashboard)/moderation/page.tsx` **and** `app/(dashboard)/chain-submit/page.tsx` (both DELETED).
+> - **`/moderation/reported`** — memory REPORTS surface (recommend vs resolve).
+>   Replaces the old `/reports` route (DELETED).
+> - **`/moderation/history`** — unchanged.
+> - **Permission SoT:** `useDashboardState()` exposes `isLeader` / `canModerate` /
+>   `canContribute` (capability-derived; leader implies both). All role gating uses
+>   these booleans — never `role === 'moderator'|'contributor'` (dead post-capability-overhaul).
+>   Frontend gating is UX-only; the hub + chain remain the authorization gates.
+
 ## Runtime Diagram
 
 ```
@@ -84,13 +102,17 @@ There is no delegate/authz relay fallback.
 
 ### Role-Gated Sidebar Navigation
 
-`components/layout/sidebar.tsx` now gates navigation visibility using `activeOrg.role` from `useOrgContext()`:
+`components/layout/sidebar.tsx` gates navigation visibility off the view-state
+derived in `useDashboardState()` (capability-derived; see the current-state note
+at the top of this file). Nav arrays live in `lib/nav-config.ts`, keyed by view-state:
 
-- **All roles:** Pipeline Health, Activity, Sessions, My Submissions, Memories, Discover Orgs, Billing, Profile
-- **Moderator + leader:** Moderation, Reports, Join Requests
-- **Leader only:** Batch Pipeline, Members, Keywords, Recovery, Epochs, Settings
+- **All roles:** Pipeline Health, Activity, Sessions, My Submissions, Discover Orgs, Billing, Profile
+- **Moderator + leader:** Moderation (New `/moderation/new`, Reported `/moderation/reported`, History `/moderation/history`), Join Requests
+- **Leader only:** Members, Keywords, Recovery, Epochs, Settings
 
 This removes dead-end pages for members while preserving moderator and leader workflows.
+(Historical note: the leader "Batch Pipeline" `/chain-submit` route was folded into
+`/moderation/new` and the standalone Reports `/reports` route into `/moderation/reported`.)
 
 ### Contributor Denial Feedback
 

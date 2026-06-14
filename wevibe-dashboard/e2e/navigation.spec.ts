@@ -22,8 +22,8 @@ test.describe('Dashboard Navigation', () => {
   test('each nav link navigates to correct page', async ({ page }) => {
     const pages = [
       { testId: 'nav-members', url: '/members', heading: /member/i },
-      { testId: 'nav-moderation', url: '/moderation', heading: /moderation/i },
-      { testId: 'nav-reports', url: '/reports', heading: /report/i },
+      { testId: 'nav-moderation', url: '/moderation/new', heading: /moderation/i },
+      { testId: 'nav-reports', url: '/moderation/reported', heading: /report/i },
       { testId: 'nav-billing', url: '/billing', heading: /billing|credit/i },
       { testId: 'nav-settings', url: '/settings', heading: /settings/i },
       { testId: 'nav-keywords', url: '/keywords', heading: /keyword/i },

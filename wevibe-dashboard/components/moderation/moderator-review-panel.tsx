@@ -125,7 +125,7 @@ function parseKeywordVoteTally(item: QueueItem, keyword: string): KeywordVoteTal
   };
 }
 
-export default function ModerationPage() {
+export function ModeratorReviewPanel() {
   const { activeOrg } = useOrgContext();
   const orgId = activeOrg?.org_id ?? '';
 
@@ -286,7 +286,7 @@ export default function ModerationPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
           <p className="mt-1 text-sm text-wv-dim">
-            Moderators provide advisory recommendations only. The leader finalizes outcomes in chain-submit.
+            Moderators provide advisory recommendations only; the leader finalizes outcomes.
           </p>
         </div>
         <button

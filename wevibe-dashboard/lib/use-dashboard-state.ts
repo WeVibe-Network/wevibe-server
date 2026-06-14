@@ -23,6 +23,9 @@ export interface DashboardState {
   identity: IdentityMetadata | null;
   activeOrg: MemberOrgEntry | null;
   role: OrgRole | null;
+  isLeader: boolean;
+  canModerate: boolean;
+  canContribute: boolean;
   refresh: () => void;
 }
 
@@ -64,6 +67,16 @@ export function useDashboardState(): DashboardState {
     return 'CONNECTED_MEMBER';
   }, [activeOrg, identity, identityLoading, orgsLoading]);
 
+  const { isLeader, canModerate, canContribute } = useMemo(() => {
+    const isLeaderRole = activeOrg?.role === 'leader';
+
+    return {
+      isLeader: isLeaderRole,
+      canModerate: isLeaderRole || activeOrg?.can_moderate === true,
+      canContribute: isLeaderRole || activeOrg?.can_contribute === true,
+    };
+  }, [activeOrg]);
+
   return {
     state,
     loading: state === 'INITIALIZING',
@@ -72,6 +85,9 @@ export function useDashboardState(): DashboardState {
     identity,
     activeOrg,
     role: activeOrg?.role ?? null,
+    isLeader,
+    canModerate,
+    canContribute,
     refresh,
   };
 }

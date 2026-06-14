@@ -13,23 +13,21 @@ import {
   directBroadcast,
   getOrgAccountAddress,
 } from '@/lib/chain-client'
-import type { OrgRole } from '@/lib/org-role'
 import { useOrgContext } from '@/lib/org-context'
+import { useDashboardState } from '@/lib/use-dashboard-state'
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast'
 import Button from '@/components/ui/button'
 import Card from '@/components/ui/card'
 import ClientTime from '@/components/ui/client-time'
 
 type MemberCapabilities = { can_contribute: boolean; can_moderate: boolean }
-type ViewerRole = OrgRole
 
 export default function MembersPage() {
   const router = useRouter()
   const { activeOrg } = useOrgContext()
+  const { isLeader } = useDashboardState()
   const orgId = activeOrg?.org_id ?? ''
   const [members, setMembers] = useState<MemberRecord[]>([])
-  const [viewerPubkey, setViewerPubkey] = useState<string>('')
-  const [viewerRole, setViewerRole] = useState<ViewerRole>('member')
   const [loading, setLoading] = useState(true)
   const [error, setError]   = useState('')
 
@@ -86,22 +84,12 @@ export default function MembersPage() {
         router.push('/login')
         return
       }
-      setViewerPubkey(id.pubkeyHex)
       await refreshMembers()
     })().catch((err) => {
       setError((err as Error).message)
       setLoading(false)
     })
   }, [orgId, router])
-
-  useEffect(() => {
-    if (members.length > 0 && viewerPubkey) {
-      const viewer = members.find(m => m.pubkey === viewerPubkey)
-      if (viewer) {
-        setViewerRole(viewer.role)
-      }
-    }
-  }, [members, viewerPubkey])
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault()
@@ -333,7 +321,7 @@ export default function MembersPage() {
       <h1 className="text-2xl font-semibold">Members</h1>
       {error && <p className="text-wv-red text-sm mb-4">{error}</p>}
 
-      {viewerRole === 'leader' && (
+      {isLeader && (
         <Card className="p-6">
           <h2 className="text-lg font-medium mb-4">Invite Member</h2>
           <form onSubmit={handleInvite} className="flex flex-col gap-4">
@@ -410,7 +398,7 @@ export default function MembersPage() {
                 <th className="text-left px-4 py-3 font-medium text-wv-dim">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-wv-dim">Dismissed</th>
                 <th className="text-left px-4 py-3 font-medium text-wv-dim">Joined</th>
-                {viewerRole === 'leader' && <th className="text-left px-4 py-3 font-medium text-wv-dim">Actions</th>}
+                {isLeader && <th className="text-left px-4 py-3 font-medium text-wv-dim">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -418,14 +406,14 @@ export default function MembersPage() {
                 const effectiveCaps = getEffectiveCapabilities(m)
                 const capsDirty = isCapabilityRowDirty(m)
                 const isLeaderRow = m.role === 'leader'
-                const canManageCaps = viewerRole === 'leader' && !isLeaderRow
+                const canManageCaps = isLeader && !isLeaderRow
                 const isSavingCaps = capSavingTarget === m.pubkey
 
                 return (
                   <tr key={m.pubkey} className="border-b border-wv-line last:border-0">
                     <td className="px-4 py-3 text-xs">
                       <div className="flex items-start gap-2">
-                        {viewerRole === 'leader' && !isLeaderRow && (
+                        {isLeader && !isLeaderRow && (
                           <button
                             type="button"
                             data-testid="remove-member-trigger"
@@ -519,7 +507,7 @@ export default function MembersPage() {
                     <td className="px-4 py-3 text-wv-faint text-xs">
                       <ClientTime value={m.joined_at} mode="date" />
                     </td>
-                    {viewerRole === 'leader' && (
+                    {isLeader && (
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           {m.membership_active ? (
@@ -591,7 +579,7 @@ export default function MembersPage() {
         </div>
       )}
 
-      {viewerRole === 'leader' && (
+      {isLeader && (
         <Card className="p-6 border-[rgba(255,107,107,0.4)]">
           <h2 className="text-lg font-medium mb-2 text-wv-red">Danger Zone</h2>
           <p className="text-sm text-wv-dim mb-4">
