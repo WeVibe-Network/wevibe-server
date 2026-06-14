@@ -840,8 +840,9 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 		Verification string                `json:"verification"`
 	}
 	type classifiedKeyword struct {
-		Keyword string  `json:"keyword"`
-		Weight  float64 `json:"weight"`
+		Keyword    string  `json:"keyword"`
+		Weight     float64 `json:"weight"`
+		BaseWeight float64 `json:"base_weight"`
 	}
 	type extractionPayload struct {
 		Classified []classifiedKeyword `json:"classified"`

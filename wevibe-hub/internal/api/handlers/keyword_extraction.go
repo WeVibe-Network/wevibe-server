@@ -40,14 +40,16 @@ type VerifyKeywordsRequest struct {
 }
 
 type KeywordWeight struct {
-	Keyword string  `json:"keyword"`
-	Weight  float64 `json:"weight"`
+	Keyword    string  `json:"keyword"`
+	Weight     float64 `json:"weight"`
+	BaseWeight float64 `json:"base_weight"`
 }
 
 type KeywordSuggestion struct {
-	Keyword   string  `json:"keyword"`
-	Weight    float64 `json:"weight"`
-	Rationale string  `json:"rationale"`
+	Keyword    string  `json:"keyword"`
+	Weight     float64 `json:"weight"`
+	BaseWeight float64 `json:"base_weight"`
+	Rationale  string  `json:"rationale"`
 }
 
 type UpdateKeywordsRequest struct {

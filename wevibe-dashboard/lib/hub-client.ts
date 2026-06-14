@@ -600,11 +600,13 @@ export type SubmissionStatus =
 export interface KeywordWeight {
   keyword: string;
   weight: number;
+  base_weight?: number;
 }
 
 export interface KeywordSuggestionPayload {
   keyword: string;
   weight: number;
+  base_weight?: number;
   rationale: string;
 }
 

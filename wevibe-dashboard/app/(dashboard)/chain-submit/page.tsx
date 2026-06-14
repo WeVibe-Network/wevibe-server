@@ -12,12 +12,17 @@ import {
   addKeyword,
   type Submission,
   type KeywordWeight,
-  type KeywordSuggestionPayload,
   type KeywordCandidate,
   type OrgHealth,
   type VerificationResult,
   type VerifyEntry,
 } from '@/lib/hub-client';
+import {
+  normalizeKeywordWeights,
+  renormalizeFromBase,
+  toExcludedSuggestionPayload,
+  displayWeight,
+} from '@/lib/keyword-weights';
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
 import {
   buildApproveMemoryMsg,
@@ -128,26 +133,6 @@ function createLoadDiagnostic(source: LoadSource, error: unknown): LoadDiagnosti
   };
 }
 
-function normalizeKeywordWeights(input: unknown): KeywordWeight[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-
-  return input
-    .map((entry) => {
-      const candidate = entry as { keyword?: unknown; weight?: unknown };
-      const keyword = typeof candidate.keyword === 'string' ? candidate.keyword.trim() : '';
-      const weight = typeof candidate.weight === 'number' ? candidate.weight : Number(candidate.weight);
-
-      if (!keyword || !Number.isFinite(weight) || weight < 0) {
-        return null;
-      }
-
-      return { keyword, weight };
-    })
-    .filter((entry): entry is KeywordWeight => entry !== null);
-}
-
 function parseExtractionResult(extractionResult: Submission['extraction_result']): ExtractionResultPayload {
   const raw = extractionResult as unknown;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -203,45 +188,6 @@ function parseKeywordVoteTally(
   };
 }
 
-function renormalizeClassifiedWeights(classified: KeywordWeight[]): KeywordWeight[] {
-  const cleaned = normalizeKeywordWeights(classified);
-  if (cleaned.length === 0) {
-    return [];
-  }
-
-  const totalWeight = cleaned.reduce((sum, keyword) => sum + keyword.weight, 0);
-  if (totalWeight <= 0) {
-    const uniform = 1 / cleaned.length;
-    return cleaned.map((keyword, idx) => ({
-      keyword: keyword.keyword,
-      weight: idx === cleaned.length - 1 ? 1 - uniform * (cleaned.length - 1) : uniform,
-    }));
-  }
-
-  const normalized = cleaned.map((keyword) => ({
-    keyword: keyword.keyword,
-    weight: keyword.weight / totalWeight,
-  }));
-
-  const normalizedTotal = normalized.reduce((sum, keyword) => sum + keyword.weight, 0);
-  const correction = 1 - normalizedTotal;
-  const lastIndex = normalized.length - 1;
-  normalized[lastIndex] = {
-    ...normalized[lastIndex],
-    weight: Math.max(0, normalized[lastIndex].weight + correction),
-  };
-
-  return normalized;
-}
-
-function toExcludedSuggestionPayload(suggestions: KeywordWeight[]): KeywordSuggestionPayload[] {
-  return normalizeKeywordWeights(suggestions).map((suggestion) => ({
-    keyword: suggestion.keyword,
-    weight: suggestion.weight,
-    rationale: 'excluded',
-  }));
-}
-
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.trim();
   if (clean.length % 2 !== 0) {
@@ -257,6 +203,8 @@ export default function ChainSubmitPage() {
   const [orgHealth, setOrgHealth] = useState<OrgHealth | null>(null);
   const [reviewKeywords, setReviewKeywords] = useState<Submission[]>([]);
   const [pendingChain, setPendingChain] = useState<Submission[]>([]);
+  const [verifyingHashes, setVerifyingHashes] = useState<Set<string>>(new Set());
+  const [verifyingItems, setVerifyingItems] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadDiagnostics, setLoadDiagnostics] = useState<LoadDiagnostic[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -418,18 +366,23 @@ export default function ChainSubmitPage() {
     }
   }, [clientState, loadAll, orgId]);
 
+  useEffect(() => {
+    if (!orgId || clientState !== 'connected') return;
+    const id = setInterval(() => {
+      if (busy === null) {
+        void loadAll();
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [orgId, clientState, busy, loadAll]);
+
   const handleVerifyAll = useCallback(async () => {
     if (!orgId) return;
     if (reviewKeywords.length === 0) return;
 
-    setBusy('verify');
-    setVerifyResults(null);
-    setNotice(null);
-
     const client = getMcpClient();
     if (client.state !== 'connected') {
       toast.error('Connect to the MCP server to verify keywords.');
-      setBusy(null);
       return;
     }
 
@@ -441,9 +394,14 @@ export default function ChainSubmitPage() {
     ));
     if (missingPayload) {
       toast.error(`Missing encrypted payload for ${missingPayload.submission_hash.slice(0, 12)}…; cannot verify.`);
-      setBusy(null);
       return;
     }
+
+    setVerifyingItems(reviewKeywords);
+    setVerifyingHashes(new Set(reviewKeywords.map((submission) => submission.submission_hash)));
+    setBusy('verify');
+    setVerifyResults(null);
+    setNotice(null);
 
     const total = reviewKeywords.length;
 
@@ -519,6 +477,8 @@ export default function ChainSubmitPage() {
       toast.error((err as Error).message, { id: progressToastId });
     } finally {
       setBusy(null);
+      setVerifyingHashes(new Set());
+      setVerifyingItems([]);
     }
   }, [reviewKeywords, loadAll, orgId]);
 
@@ -537,7 +497,7 @@ export default function ChainSubmitPage() {
     }
 
     const remainingClassified = classified.filter((_, idx) => idx !== excludeIndex);
-    const nextClassified = renormalizeClassifiedWeights(remainingClassified);
+    const nextClassified = renormalizeFromBase(remainingClassified);
     if (nextClassified.length === 0) {
       toast.error('Cannot remove the last included keyword.');
       return;
@@ -545,7 +505,7 @@ export default function ChainSubmitPage() {
 
     const nextSuggestionsWithRationale = toExcludedSuggestionPayload([
       ...suggestions,
-      { keyword: excluded.keyword, weight: excluded.weight },
+      { keyword: excluded.keyword, weight: excluded.weight, base_weight: excluded.base_weight },
     ]);
 
     setBusy(hash);
@@ -589,9 +549,9 @@ export default function ChainSubmitPage() {
         }
       }
 
-      const nextClassified = renormalizeClassifiedWeights([
+      const nextClassified = renormalizeFromBase([
         ...classified,
-        { keyword: included.keyword, weight: included.weight },
+        { keyword: included.keyword, weight: included.weight, base_weight: included.base_weight },
       ]);
       if (nextClassified.length === 0) {
         toast.error('Failed to include keyword. Refresh and try again.');
@@ -720,6 +680,11 @@ export default function ChainSubmitPage() {
       setBusy(null);
     }
   }, [orgId, pendingChain, resolveOrgAccountForGas, loadAll]);
+
+  const awaiting = reviewKeywords.filter((submission) => !verifyingHashes.has(submission.submission_hash));
+  const pendingVerification = verifyingItems.filter(
+    (submission) => !pendingChain.some((pending) => pending.submission_hash === submission.submission_hash),
+  );
 
   if (!orgId) {
     return (
@@ -863,9 +828,9 @@ export default function ChainSubmitPage() {
       <section className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.12)] p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-wv-text">Curate Keywords</h2>
+            <h2 className="text-lg font-semibold text-wv-text">Awaiting verification</h2>
             <p className="mt-1 text-sm text-wv-dim">
-              {reviewKeywords.length} memories awaiting curation
+              {awaiting.length} memories awaiting verification
             </p>
             <p className="mt-1 text-xs text-wv-amber">
               <span className="text-wv-green">Green</span> = included (click to exclude) · <span className="text-wv-dim">Gray</span> = excluded (click to include; adds to vocabulary). Click any keyword pill once to toggle its state. Only included keywords are attached and submitted.
@@ -874,20 +839,20 @@ export default function ChainSubmitPage() {
           <button
             type="button"
             onClick={() => handleVerifyAll()}
-            disabled={busy === 'verify' || loading || reviewKeywords.length === 0}
-            className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+            disabled={busy === 'verify' || loading || awaiting.length === 0}
+            className="inline-flex items-center whitespace-nowrap rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
             {busy === 'verify' ? 'Verifying…' : 'Verify All'}
           </button>
         </div>
 
-        {reviewKeywords.length === 0 ? (
-          <p className="mt-4 text-sm text-wv-dim">No memories awaiting keyword curation.</p>
+        {awaiting.length === 0 ? (
+          <p className="mt-4 text-sm text-wv-dim">No memories awaiting verification.</p>
         ) : (
           <div className="mt-4 space-y-4">
-            {reviewKeywords.map((item) => {
+            {awaiting.map((item) => {
               const extraction = parseExtractionResult(item.extraction_result);
-              const itemBusy = busy === item.submission_hash;
+              const itemBusy = busy === item.submission_hash || busy === 'verify';
               const recommendation = parseModerationRecommendation(item.mod_votes);
               const moderatorRecommendations = item.moderator_recommendations ?? [];
               const moderatorVotesExpanded = expandedModeratorVotes[item.submission_hash] ?? false;
@@ -997,7 +962,7 @@ export default function ChainSubmitPage() {
                     ) : (
                       <div className="mt-1 flex flex-wrap gap-2">
                         {mergedKeywords.map((kw) => {
-                          const weightLabel = `${(kw.weight * 100).toFixed(0)}%`;
+                          const weightLabel = `${(displayWeight(kw, kw.included) * 100).toFixed(0)}%`;
                           const keywordCandidate = kw.included
                             ? null
                             : keywordCandidates.get(kw.keyword.trim().toLowerCase());
@@ -1097,57 +1062,133 @@ export default function ChainSubmitPage() {
           </button>
         </div>
 
-        {pendingChain.length === 0 ? (
+        {pendingChain.length === 0 && pendingVerification.length === 0 ? (
           <p className="mt-4 text-sm text-wv-dim">No memories ready for chain submission.</p>
         ) : (
-          <div className="mt-4 space-y-3">
-            {pendingChain.map((item) => {
-              const extraction = parseExtractionResult(item.extraction_result);
+          <div className="mt-4 space-y-4">
+            {pendingChain.length === 0 ? (
+              <p className="text-sm text-wv-dim">No memories ready for chain submission.</p>
+            ) : (
+              <div className="space-y-3">
+                {pendingChain.map((item) => {
+                  const extraction = parseExtractionResult(item.extraction_result);
 
-              return (
-                <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
-                    <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
-                    <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
-                      Epoch {item.epoch_id}
-                    </span>
-                    <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
-                      Memory
-                    </span>
-                    {item.verified_by && (
-                      <span className="font-mono text-wv-dim">Verified by {item.verified_by.slice(0, 8)}…</span>
-                    )}
-                    {item.verified_at && (
-                      <ClientTime value={item.verified_at} mode="datetime" />
-                    )}
-                  </div>
-                  <p className="mt-2 text-sm text-wv-text line-clamp-2">
-                    {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
-                  </p>
-
-                  {extraction.classified.length > 0 && (
-                    <div className="mt-3">
-                      <p className="text-xs font-medium text-wv-dim">Keywords:</p>
-                      <div className="mt-1 flex flex-wrap gap-2">
-                        {extraction.classified.map((kw, idx) => {
-                          const inVocabulary = orgVocabulary.has(kw.keyword.toLowerCase());
-                          return (
-                            <span
-                              key={`${kw.keyword}-${idx}`}
-                              className={inVocabulary
-                                ? 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green'
-                                : 'inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red'}
-                            >
-                              {kw.keyword} {(kw.weight * 100).toFixed(0)}%
-                            </span>
-                          );
-                        })}
+                  return (
+                    <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
+                        <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
+                        <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
+                          Epoch {item.epoch_id}
+                        </span>
+                        <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
+                          Memory
+                        </span>
+                        {item.verified_by && (
+                          <span className="font-mono text-wv-dim">Verified by {item.verified_by.slice(0, 8)}…</span>
+                        )}
+                        {item.verified_at && (
+                          <ClientTime value={item.verified_at} mode="datetime" />
+                        )}
                       </div>
+                      <p className="mt-2 text-sm text-wv-text line-clamp-2">
+                        {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
+                      </p>
+
+                      {extraction.classified.length > 0 && (
+                        <div className="mt-3">
+                          <p className="text-xs font-medium text-wv-dim">Keywords:</p>
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            {extraction.classified.map((kw, idx) => {
+                              const inVocabulary = orgVocabulary.has(kw.keyword.toLowerCase());
+                              return (
+                                <span
+                                  key={`${kw.keyword}-${idx}`}
+                                  className={inVocabulary
+                                    ? 'inline-flex items-center rounded-full border border-[rgba(54,211,153,0.28)] bg-[rgba(54,211,153,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-green'
+                                    : 'inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red'}
+                                >
+                                  {kw.keyword} {(displayWeight(kw, true) * 100).toFixed(0)}%
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
+                  );
+                })}
+              </div>
+            )}
+
+            {pendingVerification.length > 0 && (
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium text-wv-dim">
+                  Pending verification ({pendingVerification.length})
+                </h3>
+                <div className="space-y-3">
+                  {pendingVerification.map((item) => {
+                    const extraction = parseExtractionResult(item.extraction_result);
+                    const mergedKeywords = [
+                      ...extraction.classified.map((kw) => ({
+                        ...kw,
+                        included: true as const,
+                      })),
+                      ...extraction.suggestions.map((kw) => ({
+                        ...kw,
+                        included: false as const,
+                      })),
+                    ].sort((left, right) => left.keyword.localeCompare(right.keyword));
+
+                    return (
+                      <div
+                        key={`pending-verification-${item.submission_hash}`}
+                        className="rounded-lg border border-[rgba(255,178,85,0.35)] bg-wv-panel p-4 opacity-70"
+                      >
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
+                          <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
+                          <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
+                            Epoch {item.epoch_id}
+                          </span>
+                          <span className="rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber">
+                            Pending verification
+                          </span>
+                        </div>
+
+                        <p className="mt-2 text-sm text-wv-text line-clamp-2">
+                          {item.plaintext?.slice(0, 200) ?? 'No plaintext'}{item.plaintext && item.plaintext.length > 200 ? '…' : ''}
+                        </p>
+
+                        <div className="mt-3">
+                          <p className="text-xs font-medium text-wv-dim">Keywords</p>
+                          {mergedKeywords.length === 0 ? (
+                            <p className="mt-1 text-xs text-wv-dim">No extracted keywords yet.</p>
+                          ) : (
+                            <div className="mt-1 flex flex-wrap gap-2">
+                              {mergedKeywords.map((kw, idx) => {
+                                const weightLabel = `${(displayWeight(kw, kw.included) * 100).toFixed(0)}%`;
+
+                                return (
+                                  <span
+                                    key={`${item.submission_hash}-${kw.keyword}-${kw.included ? 'included' : 'excluded'}-${idx}`}
+                                    className={`${getKeywordPillClass(kw.included ? 'classified' : 'excluded')} cursor-not-allowed opacity-80`}
+                                    title={kw.included
+                                      ? `Included · Weight ${weightLabel}`
+                                      : `Excluded · Weight ${weightLabel}`}
+                                  >
+                                    {kw.keyword}
+                                    <span className="ml-1 text-wv-dim">{weightLabel}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
+            )}
           </div>
         )}
       </section>

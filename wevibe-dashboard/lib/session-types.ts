@@ -21,6 +21,7 @@ export interface SessionDetail {
 export interface ClassifiedKeyword {
   keyword: string;
   weight: number;
+  base_weight?: number;
 }
 
 export interface SuggestedKeyword extends ClassifiedKeyword {

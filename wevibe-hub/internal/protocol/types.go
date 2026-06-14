@@ -205,8 +205,9 @@ type PendingQueueItem struct {
 }
 
 type KeywordWithWeight struct {
-	Keyword string  `json:"keyword"`
-	Weight  float64 `json:"weight"`
+	Keyword    string  `json:"keyword"`
+	Weight     float64 `json:"weight"`
+	BaseWeight float64 `json:"base_weight"`
 }
 
 type KeywordCandidate struct {

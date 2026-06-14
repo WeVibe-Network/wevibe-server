@@ -11,6 +11,7 @@ import {
 } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
 import { useOrgContext } from '@/lib/org-context';
+import { normalizeKeywordWeights, displayWeight } from '@/lib/keyword-weights';
 
 type MemoryType = 'memory';
 
@@ -58,29 +59,6 @@ function toCount(value: unknown): number {
     return 0;
   }
   return Math.trunc(parsed);
-}
-
-function normalizeKeywordWeights(input: unknown): KeywordWeight[] {
-  if (!Array.isArray(input)) {
-    return [];
-  }
-
-  return input
-    .map((entry) => {
-      const candidate = entry as { keyword?: unknown; weight?: unknown };
-      const keyword = typeof candidate.keyword === 'string' ? candidate.keyword.trim() : '';
-      const rawWeight = typeof candidate.weight === 'number' ? candidate.weight : Number(candidate.weight);
-
-      if (!keyword || !Number.isFinite(rawWeight) || rawWeight < 0) {
-        return null;
-      }
-
-      return {
-        keyword,
-        weight: rawWeight,
-      };
-    })
-    .filter((entry): entry is KeywordWeight => entry !== null);
 }
 
 function parseSuggestedKeywords(item: QueueItem): KeywordWeight[] {
@@ -431,7 +409,7 @@ export default function ModerationPage() {
                               className="inline-flex items-center rounded-full border border-[rgba(255,107,107,0.28)] bg-[rgba(255,107,107,0.12)] px-2.5 py-0.5 text-xs font-medium text-wv-red"
                             >
                               {suggestion.keyword}
-                              <span className="ml-1 text-wv-dim">{(suggestion.weight * 100).toFixed(0)}%</span>
+                              <span className="ml-1 text-wv-dim">{(displayWeight(suggestion, false) * 100).toFixed(0)}%</span>
                               {tally && (
                                 <span className="ml-2 text-[10px] font-normal text-wv-dim">
                                   include {tally.include} / exclude {tally.exclude}
