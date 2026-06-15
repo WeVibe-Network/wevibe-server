@@ -37,6 +37,13 @@ export async function PUT(request: NextRequest) {
     openrouter_model: body.openrouter_model ?? current.openrouter_model,
     lmstudio_url: body.lmstudio_url ?? current.lmstudio_url,
     lmstudio_model: body.lmstudio_model ?? current.lmstudio_model,
+    embedding_provider: body.embedding_provider ?? current.embedding_provider,
+    embedding_ollama_model:
+      body.embedding_ollama_model ?? current.embedding_ollama_model,
+    embedding_lmstudio_model:
+      body.embedding_lmstudio_model ?? current.embedding_lmstudio_model,
+    embedding_openrouter_model:
+      body.embedding_openrouter_model ?? current.embedding_openrouter_model,
     org_id: body.org_id ?? current.org_id,
     mod_pubkey: body.mod_pubkey ?? current.mod_pubkey,
   };

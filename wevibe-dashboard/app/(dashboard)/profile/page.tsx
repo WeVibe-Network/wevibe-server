@@ -23,6 +23,10 @@ const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
   openrouter_model: 'anthropic/claude-sonnet-4',
   lmstudio_url: 'http://127.0.0.1:1234/v1',
   lmstudio_model: '',
+  embedding_provider: 'lm_studio',
+  embedding_ollama_model: 'nomic-embed-text',
+  embedding_lmstudio_model: 'text-embedding-nomic-embed-text-v1.5',
+  embedding_openrouter_model: 'openai/text-embedding-3-large',
   org_id: '',
   mod_pubkey: '',
 };
@@ -39,6 +43,18 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
     openrouter_model: value.openrouter_model ?? DEFAULT_DASHBOARD_SETTINGS.openrouter_model,
     lmstudio_url: value.lmstudio_url ?? DEFAULT_DASHBOARD_SETTINGS.lmstudio_url,
     lmstudio_model: value.lmstudio_model ?? DEFAULT_DASHBOARD_SETTINGS.lmstudio_model,
+    embedding_provider:
+      value.embedding_provider === 'ollama'
+      || value.embedding_provider === 'openrouter'
+      || value.embedding_provider === 'lm_studio'
+        ? value.embedding_provider
+        : DEFAULT_DASHBOARD_SETTINGS.embedding_provider,
+    embedding_ollama_model:
+      value.embedding_ollama_model ?? DEFAULT_DASHBOARD_SETTINGS.embedding_ollama_model,
+    embedding_lmstudio_model:
+      value.embedding_lmstudio_model ?? DEFAULT_DASHBOARD_SETTINGS.embedding_lmstudio_model,
+    embedding_openrouter_model:
+      value.embedding_openrouter_model ?? DEFAULT_DASHBOARD_SETTINGS.embedding_openrouter_model,
     org_id: value.org_id ?? DEFAULT_DASHBOARD_SETTINGS.org_id,
     mod_pubkey: value.mod_pubkey ?? DEFAULT_DASHBOARD_SETTINGS.mod_pubkey,
   };

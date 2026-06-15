@@ -1282,13 +1282,13 @@ export default function SettingsPage() {
 
           <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
             <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-wv-text">Org &amp; LLM Configuration</h2>
-              <InfoTooltip label="About org and LLM configuration">
-                Default language-model provider and credentials used for this org.
+              <h2 className="text-lg font-semibold text-wv-text">Org &amp; Embedding Configuration</h2>
+              <InfoTooltip label="About org and embedding configuration">
+                Organization identity and vector embedding provider settings for this org.
               </InfoTooltip>
             </div>
             <p className="mt-1 text-sm text-wv-dim">
-              Configure your organization ID, moderator pubkey, and LLM provider for memory extraction.
+              Configure your organization ID, moderator pubkey, and vector embedding provider/model.
             </p>
 
             <OrgLlamaConfig />
@@ -1307,8 +1307,16 @@ function OrgLlamaConfig() {
   const [ollamaModelsError, setOllamaModelsError] = useState(false);
   const [lmStudioModels, setLmStudioModels] = useState<string[]>([]);
   const [lmStudioModelsError, setLmStudioModelsError] = useState(false);
-  const [openRouterModels, setOpenRouterModels] = useState<SearchableModelOption[]>([]);
-  const [openRouterModelsError, setOpenRouterModelsError] = useState(false);
+  const [embeddingOpenRouterModels, setEmbeddingOpenRouterModels] = useState<SearchableModelOption[]>([]);
+  const [embeddingOpenRouterModelsError, setEmbeddingOpenRouterModelsError] = useState(false);
+  const [embeddingReadiness, setEmbeddingReadiness] = useState<{
+    ready: boolean;
+    dim: number | null;
+    provider: 'ollama' | 'openrouter' | 'lm_studio';
+    model: string;
+    reason: string | null;
+  } | null>(null);
+  const [embeddingReadinessChecking, setEmbeddingReadinessChecking] = useState(false);
 
   useEffect(() => {
     fetch('/api/settings')
@@ -1322,6 +1330,10 @@ function OrgLlamaConfig() {
           lmstudio_model: data.lmstudio_model ?? '',
           openrouter_api_key: data.openrouter_api_key ?? '',
           openrouter_model: data.openrouter_model ?? 'anthropic/claude-sonnet-4',
+          embedding_provider: data.embedding_provider ?? 'lm_studio',
+          embedding_ollama_model: data.embedding_ollama_model ?? 'nomic-embed-text',
+          embedding_lmstudio_model: data.embedding_lmstudio_model ?? 'text-embedding-nomic-embed-text-v1.5',
+          embedding_openrouter_model: data.embedding_openrouter_model ?? 'openai/text-embedding-3-large',
           org_id: data.org_id ?? '',
           mod_pubkey: data.mod_pubkey ?? '',
         } as DashboardSettings;
@@ -1331,7 +1343,7 @@ function OrgLlamaConfig() {
   }, []);
 
   useEffect(() => {
-    if (!settings || settings.llm_provider !== 'ollama') {
+    if (!settings || settings.embedding_provider !== 'ollama') {
       setOllamaModels([]);
       setOllamaModelsError(false);
       return;
@@ -1364,10 +1376,10 @@ function OrgLlamaConfig() {
     return () => {
       cancelled = true;
     };
-  }, [settings?.llm_provider, settings?.ollama_url]);
+  }, [settings?.embedding_provider, settings?.ollama_url]);
 
   useEffect(() => {
-    if (!settings || settings.llm_provider !== 'lm_studio') {
+    if (!settings || settings.embedding_provider !== 'lm_studio') {
       setLmStudioModels([]);
       setLmStudioModelsError(false);
       return;
@@ -1400,18 +1412,18 @@ function OrgLlamaConfig() {
     return () => {
       cancelled = true;
     };
-  }, [settings?.llm_provider, settings?.lmstudio_url]);
+  }, [settings?.embedding_provider, settings?.lmstudio_url]);
 
   useEffect(() => {
-    if (!settings || settings.llm_provider !== 'openrouter') {
-      setOpenRouterModels([]);
-      setOpenRouterModelsError(false);
+    if (!settings || settings.embedding_provider !== 'openrouter') {
+      setEmbeddingOpenRouterModels([]);
+      setEmbeddingOpenRouterModelsError(false);
       return;
     }
 
     let cancelled = false;
 
-    fetch('/api/openrouter-models')
+    fetch('/api/openrouter-embedding-models')
       .then(response => response.json() as Promise<{ models?: unknown; error?: unknown }>)
       .then((data) => {
         if (cancelled) {
@@ -1438,22 +1450,22 @@ function OrgLlamaConfig() {
             .filter((entry): entry is SearchableModelOption => entry !== null)
           : [];
 
-        setOpenRouterModels(models);
-        setOpenRouterModelsError(Boolean(data.error) || models.length === 0);
+        setEmbeddingOpenRouterModels(models);
+        setEmbeddingOpenRouterModelsError(Boolean(data.error) || models.length === 0);
       })
       .catch(() => {
         if (cancelled) {
           return;
         }
 
-        setOpenRouterModels([]);
-        setOpenRouterModelsError(true);
+        setEmbeddingOpenRouterModels([]);
+        setEmbeddingOpenRouterModelsError(true);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [settings?.llm_provider]);
+  }, [settings?.embedding_provider]);
 
   const handleSave = useCallback(async () => {
     if (!settings) return;
@@ -1476,6 +1488,51 @@ function OrgLlamaConfig() {
       setSaving(false);
     }
   }, [settings]);
+
+  const handleTestEmbedding = useCallback(async () => {
+    const fallbackProvider = settings?.embedding_provider ?? 'lm_studio';
+    setEmbeddingReadinessChecking(true);
+    setEmbeddingReadiness(null);
+
+    try {
+      const response = await fetch('/api/settings/embedding-readiness', { cache: 'no-store' });
+      const data = await response.json() as {
+        ready?: unknown;
+        dim?: unknown;
+        provider?: unknown;
+        model?: unknown;
+        reason?: unknown;
+      };
+
+      const provider = data.provider === 'ollama' || data.provider === 'openrouter' || data.provider === 'lm_studio'
+        ? data.provider
+        : fallbackProvider;
+      const ready = data.ready === true;
+      const reason = typeof data.reason === 'string' && data.reason.trim().length > 0
+        ? data.reason
+        : !response.ok
+          ? `Failed to test embedding readiness (${response.status}).`
+          : null;
+
+      setEmbeddingReadiness({
+        ready,
+        dim: typeof data.dim === 'number' ? data.dim : null,
+        provider,
+        model: typeof data.model === 'string' ? data.model : '',
+        reason,
+      });
+    } catch (err) {
+      setEmbeddingReadiness({
+        ready: false,
+        dim: null,
+        provider: fallbackProvider,
+        model: '',
+        reason: err instanceof Error ? err.message : 'Failed to test embedding readiness.',
+      });
+    } finally {
+      setEmbeddingReadinessChecking(false);
+    }
+  }, [settings?.embedding_provider]);
 
   if (!settings) {
     return <p className="mt-4 text-xs text-wv-dim">Loading settings…</p>;
@@ -1512,167 +1569,199 @@ function OrgLlamaConfig() {
         </div>
       </div>
 
-      <div>
-        <label htmlFor="llm-provider" className="block text-sm font-medium text-wv-text">
-          LLM Provider
-        </label>
-        <select
-          id="llm-provider"
-          value={settings.llm_provider}
-          onChange={e => setSettings(s => s ? { ...s, llm_provider: e.target.value as 'ollama' | 'openrouter' | 'lm_studio' } : s)}
-          className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-        >
-          <option value="ollama">Ollama</option>
-          <option value="lm_studio">LM Studio</option>
-          <option value="openrouter">OpenRouter</option>
-        </select>
+      <div className="rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+        <h3 className="text-sm font-semibold text-wv-text">Vector Embedding</h3>
+        <p className="mt-1 text-xs text-wv-dim">
+          Choose the provider and model used for vector embeddings.
+        </p>
+
+        <div className="mt-4">
+          <label htmlFor="embedding-provider" className="block text-sm font-medium text-wv-text">
+            Embedding Provider
+          </label>
+          <select
+            id="embedding-provider"
+            value={settings.embedding_provider}
+            onChange={e => setSettings(s => s ? { ...s, embedding_provider: e.target.value as 'ollama' | 'openrouter' | 'lm_studio' } : s)}
+            className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+          >
+            <option value="ollama">Ollama</option>
+            <option value="lm_studio">LM Studio</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+        </div>
+
+        {settings.embedding_provider === 'ollama' && (
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="embedding-ollama-url" className="block text-sm font-medium text-wv-text">
+                Ollama URL
+              </label>
+              <input
+                id="embedding-ollama-url"
+                type="url"
+                value={settings.ollama_url}
+                readOnly
+                className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-3 px-3 py-2 text-sm text-wv-dim shadow-wv-sm"
+              />
+            </div>
+            <div>
+              <label htmlFor="embedding-ollama-model" className="block text-sm font-medium text-wv-text">
+                Ollama Embedding Model
+              </label>
+              {ollamaModels.length > 0 ? (
+                <>
+                  <select
+                    id="embedding-ollama-model"
+                    value={settings.embedding_ollama_model}
+                    onChange={e => setSettings(s => s ? { ...s, embedding_ollama_model: e.target.value } : s)}
+                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                  >
+                    {settings.embedding_ollama_model && !ollamaModels.includes(settings.embedding_ollama_model) && (
+                      <option value={settings.embedding_ollama_model}>{settings.embedding_ollama_model}</option>
+                    )}
+                    {ollamaModels.map((model) => (
+                      <option key={`embedding-${model}`} value={model}>{model}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-wv-dim">Detected from your local Ollama.</p>
+                </>
+              ) : (
+                <>
+                  <input
+                    id="embedding-ollama-model"
+                    type="text"
+                    value={settings.embedding_ollama_model}
+                    onChange={e => setSettings(s => s ? { ...s, embedding_ollama_model: e.target.value } : s)}
+                    placeholder="nomic-embed-text"
+                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                  />
+                  {ollamaModelsError && (
+                    <p className="mt-1 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {settings.embedding_provider === 'lm_studio' && (
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="embedding-lmstudio-url" className="block text-sm font-medium text-wv-text">
+                LM Studio URL
+              </label>
+              <input
+                id="embedding-lmstudio-url"
+                type="url"
+                value={settings.lmstudio_url}
+                readOnly
+                className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-3 px-3 py-2 text-sm text-wv-dim shadow-wv-sm"
+              />
+            </div>
+            <div>
+              <label htmlFor="embedding-lmstudio-model" className="block text-sm font-medium text-wv-text">
+                LM Studio Embedding Model
+              </label>
+              {lmStudioModels.length > 0 ? (
+                <>
+                  <select
+                    id="embedding-lmstudio-model"
+                    value={settings.embedding_lmstudio_model}
+                    onChange={e => setSettings(s => s ? { ...s, embedding_lmstudio_model: e.target.value } : s)}
+                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                  >
+                    {settings.embedding_lmstudio_model && !lmStudioModels.includes(settings.embedding_lmstudio_model) && (
+                      <option value={settings.embedding_lmstudio_model}>{settings.embedding_lmstudio_model}</option>
+                    )}
+                    {lmStudioModels.map((model) => (
+                      <option key={`embedding-${model}`} value={model}>{model}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-wv-dim">Detected from your local LM Studio.</p>
+                </>
+              ) : (
+                <>
+                  <input
+                    id="embedding-lmstudio-model"
+                    type="text"
+                    value={settings.embedding_lmstudio_model}
+                    onChange={e => setSettings(s => s ? { ...s, embedding_lmstudio_model: e.target.value } : s)}
+                    placeholder="text-embedding-nomic-embed-text-v1.5"
+                    className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                  />
+                  {lmStudioModelsError && (
+                    <p className="mt-1 text-xs text-wv-dim">Could not reach LM Studio at {settings.lmstudio_url} — enter a model name manually.</p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {settings.embedding_provider === 'openrouter' && (
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="embedding-openrouter-api-key" className="block text-sm font-medium text-wv-text">
+                OpenRouter API Key
+              </label>
+              <input
+                id="embedding-openrouter-api-key"
+                type="password"
+                value={settings.openrouter_api_key}
+                onChange={e => setSettings(s => s ? { ...s, openrouter_api_key: e.target.value } : s)}
+                placeholder="sk-..."
+                className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+              />
+              <p className="mt-1 text-xs text-wv-dim">Used for OpenRouter embedding requests.</p>
+            </div>
+            <div>
+              <label htmlFor="embedding-openrouter-model" className="block text-sm font-medium text-wv-text">
+                OpenRouter Embedding Model
+              </label>
+              <SearchableModelCombobox
+                id="embedding-openrouter-model"
+                value={settings.embedding_openrouter_model}
+                onChange={nextValue => setSettings(s => s ? { ...s, embedding_openrouter_model: nextValue } : s)}
+                options={embeddingOpenRouterModels}
+                placeholder="openai/text-embedding-3-large"
+                className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+              />
+              {embeddingOpenRouterModels.length > 0 ? (
+                <p className="mt-1 text-xs text-wv-dim">Search OpenRouter embedding models or type any model id manually.</p>
+              ) : embeddingOpenRouterModelsError ? (
+                <p className="mt-1 text-xs text-wv-dim">Could not load OpenRouter embedding models — enter a model id manually.</p>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              void handleTestEmbedding();
+            }}
+            disabled={embeddingReadinessChecking}
+            className="inline-flex items-center rounded-md border border-wv-line-2 px-3 py-1.5 text-xs font-medium text-wv-text transition hover:border-[rgba(124,92,255,0.35)] hover:text-wv-violet disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {embeddingReadinessChecking ? 'Testing…' : 'Test embedding'}
+          </button>
+          <span className="text-xs text-wv-dim">Checks saved settings from disk.</span>
+        </div>
+
+        {embeddingReadiness?.ready ? (
+          <div className="mt-3 rounded-lg border border-[rgba(51,214,166,0.4)] bg-[rgba(51,214,166,0.12)] px-3 py-2 text-sm text-wv-green">
+            ✓ {embeddingReadiness.model || settings.embedding_openrouter_model} ready ({embeddingReadiness.dim ?? 'unknown'}-dim)
+          </div>
+        ) : null}
+
+        {embeddingReadiness && !embeddingReadiness.ready ? (
+          <div className="mt-3 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-3 py-2 text-sm text-wv-amber">
+            {embeddingReadiness.reason || 'Embedding readiness check failed.'}
+          </div>
+        ) : null}
       </div>
-
-      {settings.llm_provider === 'ollama' && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor="ollama-url" className="block text-sm font-medium text-wv-text">
-              Ollama URL
-            </label>
-            <input
-              id="ollama-url"
-              type="url"
-              value={settings.ollama_url}
-              onChange={e => setSettings(s => s ? { ...s, ollama_url: e.target.value } : s)}
-              placeholder="http://localhost:11434"
-              className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-            />
-          </div>
-          <div>
-            <label htmlFor="ollama-model" className="block text-sm font-medium text-wv-text">
-              Ollama Model
-            </label>
-            {ollamaModels.length > 0 ? (
-              <>
-                <select
-                  id="ollama-model"
-                  value={settings.ollama_model}
-                  onChange={e => setSettings(s => s ? { ...s, ollama_model: e.target.value } : s)}
-                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-                >
-                  {settings.ollama_model && !ollamaModels.includes(settings.ollama_model) && (
-                    <option value={settings.ollama_model}>{settings.ollama_model}</option>
-                  )}
-                  {ollamaModels.map((model) => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-wv-dim">Detected from your local Ollama.</p>
-              </>
-            ) : (
-              <>
-                <input
-                  id="ollama-model"
-                  type="text"
-                  value={settings.ollama_model}
-                  onChange={e => setSettings(s => s ? { ...s, ollama_model: e.target.value } : s)}
-                  placeholder="qwen2.5:14b"
-                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-                />
-                {ollamaModelsError && (
-                  <p className="mt-1 text-xs text-wv-dim">Could not reach Ollama at {settings.ollama_url} — enter a model name manually.</p>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {settings.llm_provider === 'lm_studio' && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor="lmstudio-url" className="block text-sm font-medium text-wv-text">
-              LM Studio URL
-            </label>
-            <input
-              id="lmstudio-url"
-              type="url"
-              value={settings.lmstudio_url}
-              onChange={e => setSettings(s => s ? { ...s, lmstudio_url: e.target.value } : s)}
-              placeholder="http://127.0.0.1:1234/v1"
-              className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-            />
-          </div>
-          <div>
-            <label htmlFor="lmstudio-model" className="block text-sm font-medium text-wv-text">
-              LM Studio Model
-            </label>
-            {lmStudioModels.length > 0 ? (
-              <>
-                <select
-                  id="lmstudio-model"
-                  value={settings.lmstudio_model}
-                  onChange={e => setSettings(s => s ? { ...s, lmstudio_model: e.target.value } : s)}
-                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-                >
-                  {settings.lmstudio_model && !lmStudioModels.includes(settings.lmstudio_model) && (
-                    <option value={settings.lmstudio_model}>{settings.lmstudio_model}</option>
-                  )}
-                  {lmStudioModels.map((model) => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-wv-dim">Detected from your local LM Studio.</p>
-              </>
-            ) : (
-              <>
-                <input
-                  id="lmstudio-model"
-                  type="text"
-                  value={settings.lmstudio_model}
-                  onChange={e => setSettings(s => s ? { ...s, lmstudio_model: e.target.value } : s)}
-                  placeholder="qwen2.5:14b"
-                  className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-                />
-                {lmStudioModelsError && (
-                  <p className="mt-1 text-xs text-wv-dim">Could not reach LM Studio at {settings.lmstudio_url} — enter a model name manually.</p>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {settings.llm_provider === 'openrouter' && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor="openrouter-api-key" className="block text-sm font-medium text-wv-text">
-              OpenRouter API Key
-            </label>
-            <input
-              id="openrouter-api-key"
-              type="password"
-              value={settings.openrouter_api_key}
-              onChange={e => setSettings(s => s ? { ...s, openrouter_api_key: e.target.value } : s)}
-              placeholder="sk-..."
-              className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-            />
-          </div>
-          <div>
-            <label htmlFor="openrouter-model" className="block text-sm font-medium text-wv-text">
-              OpenRouter Model
-            </label>
-            <SearchableModelCombobox
-              id="openrouter-model"
-              value={settings.openrouter_model}
-              onChange={nextValue => setSettings(s => s ? { ...s, openrouter_model: nextValue } : s)}
-              options={openRouterModels}
-              placeholder="anthropic/claude-sonnet-4"
-              className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-            />
-            {openRouterModels.length > 0 ? (
-              <p className="mt-1 text-xs text-wv-dim">Search OpenRouter public models or type any model id manually.</p>
-            ) : openRouterModelsError ? (
-              <p className="mt-1 text-xs text-wv-dim">Could not load OpenRouter models — enter a model id manually.</p>
-            ) : null}
-          </div>
-        </div>
-      )}
 
       {saveMsg && (
         <div className={`rounded-lg border px-3 py-2 text-sm ${saveMsg.type === 'success' ? 'border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] text-wv-green' : 'border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] text-wv-red'}`}>

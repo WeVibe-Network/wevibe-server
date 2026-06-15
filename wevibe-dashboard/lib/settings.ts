@@ -10,6 +10,10 @@ export interface DashboardSettings {
   openrouter_model: string;
   lmstudio_url: string;
   lmstudio_model: string;
+  embedding_provider: 'ollama' | 'openrouter' | 'lm_studio';
+  embedding_ollama_model: string;
+  embedding_lmstudio_model: string;
+  embedding_openrouter_model: string;
   org_id: string;
   mod_pubkey: string;
 }
@@ -22,6 +26,10 @@ const DEFAULTS: DashboardSettings = {
   openrouter_model: '',
   lmstudio_url: process.env.WEVIBE_LMSTUDIO_URL ?? 'http://127.0.0.1:1234/v1',
   lmstudio_model: '',
+  embedding_provider: 'lm_studio',
+  embedding_ollama_model: 'nomic-embed-text',
+  embedding_lmstudio_model: 'text-embedding-nomic-embed-text-v1.5',
+  embedding_openrouter_model: 'openai/text-embedding-3-large',
   org_id: '',
   mod_pubkey: '',
 };
