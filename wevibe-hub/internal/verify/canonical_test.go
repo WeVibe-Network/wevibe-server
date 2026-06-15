@@ -489,6 +489,31 @@ func TestDenySubmissionMessage_DeterministicRepeated(t *testing.T) {
 	}
 }
 
+func TestBanContributorMessage_Deterministic(t *testing.T) {
+	msg := BanContributorMessage(
+		"org-test-1",
+		"contributor_pubkey_hex",
+		"leader_pubkey_hex",
+	)
+
+	lines := splitLines(string(msg))
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines, got %d: %v", len(lines), lines)
+	}
+	if lines[0] != "wevibe.ban_contributor.v1" {
+		t.Errorf("line 0: %q", lines[0])
+	}
+	if lines[1] != "org_id:org-test-1" {
+		t.Errorf("line 1: %q", lines[1])
+	}
+	if lines[2] != "contributor_pubkey:contributor_pubkey_hex" {
+		t.Errorf("line 2: %q", lines[2])
+	}
+	if lines[3] != "signed_by:leader_pubkey_hex" {
+		t.Errorf("line 3: %q", lines[3])
+	}
+}
+
 func TestKeywordsHash_EmptySlice(t *testing.T) {
 	h := keywordsHash([]protocol.KeywordWithWeight{})
 	expected := sha256Hex([]byte(""))

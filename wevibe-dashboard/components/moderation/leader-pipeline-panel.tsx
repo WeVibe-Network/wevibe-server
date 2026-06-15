@@ -1,14 +1,18 @@
 'use client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  denyPendingForContributor,
   getSubmissionsByStatus,
+  listMembers,
   listKeywords,
   getKeywordCandidates,
   denySubmission,
   prepareBatchSubmit,
+  getDuplicateClusters,
   type Submission,
   type KeywordWeight,
   type KeywordCandidate,
+  type DuplicateClustersResponse,
 } from '@/lib/hub-client';
 import {
   normalizeKeywordWeights,
@@ -19,6 +23,7 @@ import {
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
 import {
   buildApproveMemoryMsg,
+  buildSetMemberCapabilitiesMsg,
   buildSubmitCommitmentMsg,
   directBroadcast,
   getOrgAccountAddress,
@@ -106,7 +111,23 @@ function shortenPubkey(pubkey: string, visibleChars = 12): string {
   return `${pubkey.slice(0, visibleChars)}…`;
 }
 
-type LoadSource = 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch';
+function shortenHash(hash: string | null | undefined, visibleChars = 12): string {
+  const normalized = hash?.trim() ?? '';
+  if (!normalized) {
+    return 'unknown';
+  }
+  if (normalized.length <= visibleChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, visibleChars)}…`;
+}
+
+function formatSimilarityPercent(score: number): string {
+  const clamped = Math.max(0, Math.min(1, score));
+  return `${(clamped * 100).toFixed(1)}%`;
+}
+
+type LoadSource = 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch' | 'duplicateClusters';
 
 type LoadDiagnostic = {
   source: LoadSource;
@@ -125,6 +146,7 @@ const LOAD_SOURCE_LABELS: Record<LoadSource, string> = {
   pendingChain: 'Pending chain queue',
   keywords: 'Org vocabulary',
   decryptBatch: 'Decrypt batch',
+  duplicateClusters: 'Duplicate advisory clusters',
 };
 
 function normalizeErrorMessage(error: unknown): string {
@@ -231,8 +253,16 @@ export function LeaderPipelinePanel() {
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
   const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
   const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
+  const [duplicateClusters, setDuplicateClusters] = useState<DuplicateClustersResponse | null>(null);
+  const [duplicateClustersExpanded, setDuplicateClustersExpanded] = useState(false);
   const [expandedModeratorVotes, setExpandedModeratorVotes] = useState<Record<string, boolean>>({});
+  const [expandedNearDupMatches, setExpandedNearDupMatches] = useState<Set<string>>(new Set());
+  const [showAllNearDupMatches, setShowAllNearDupMatches] = useState<Set<string>>(new Set());
   const [denyModalSubmissionHash, setDenyModalSubmissionHash] = useState<string | null>(null);
+  const [denyModalReason, setDenyModalReason] = useState('rejected');
+  const [banModalContributorPubkey, setBanModalContributorPubkey] = useState<string | null>(null);
+  const [banModalLoading, setBanModalLoading] = useState(false);
+  const [banContributorError, setBanContributorError] = useState<string | null>(null);
   const [deselectedKeywords, setDeselectedKeywords] = useState<Record<string, Set<string>>>({});
   const verifyQueue = useVerifyQueue();
 
@@ -257,6 +287,30 @@ export function LeaderPipelinePanel() {
       ...prev,
       [submissionHash]: !(prev[submissionHash] ?? false),
     }));
+  }, []);
+
+  const toggleNearDupMatches = useCallback((submissionHash: string) => {
+    setExpandedNearDupMatches((prev) => {
+      const next = new Set(prev);
+      if (next.has(submissionHash)) {
+        next.delete(submissionHash);
+      } else {
+        next.add(submissionHash);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleNearDupShowAll = useCallback((submissionHash: string) => {
+    setShowAllNearDupMatches((prev) => {
+      const next = new Set(prev);
+      if (next.has(submissionHash)) {
+        next.delete(submissionHash);
+      } else {
+        next.add(submissionHash);
+      }
+      return next;
+    });
   }, []);
 
   const keywordProvenance = useCallback((keyword: string): KeywordProvenance => {
@@ -308,11 +362,18 @@ export function LeaderPipelinePanel() {
 
     try {
       const diagnostics: LoadDiagnostic[] = [];
-      const [pendingKeywordResult, pendingChainResult, keywordsResult, keywordCandidatesResult] = await Promise.allSettled([
+      const [
+        pendingKeywordResult,
+        pendingChainResult,
+        keywordsResult,
+        keywordCandidatesResult,
+        duplicateClustersResult,
+      ] = await Promise.allSettled([
         getSubmissionsByStatus(orgId, 'pending_keyword'),
         getSubmissionsByStatus(orgId, 'pending_chain'),
         listKeywords(orgId),
         getKeywordCandidates(orgId),
+        getDuplicateClusters(orgId, 'pending_chain'),
       ]);
 
       const pendingKeywordRaw = pendingKeywordResult.status === 'fulfilled'
@@ -339,6 +400,13 @@ export function LeaderPipelinePanel() {
       const candidates = keywordCandidatesResult.status === 'fulfilled'
         ? keywordCandidatesResult.value
         : [];
+
+      const duplicateClusterSummary = duplicateClustersResult.status === 'fulfilled'
+        ? duplicateClustersResult.value
+        : null;
+      if (duplicateClustersResult.status !== 'fulfilled') {
+        diagnostics.push(createLoadDiagnostic('duplicateClusters', duplicateClustersResult.reason));
+      }
 
       const candidateMap = new Map<string, KeywordCandidate>();
       for (const candidate of candidates) {
@@ -396,6 +464,10 @@ export function LeaderPipelinePanel() {
 
       setOrgVocabulary(vocabulary);
       setKeywordCandidates(candidateMap);
+      setDuplicateClusters(duplicateClusterSummary);
+      if (!duplicateClusterSummary || duplicateClusterSummary.clusters.length === 0) {
+        setDuplicateClustersExpanded(false);
+      }
       setReviewKeywords(keywordQueue);
       setPendingChain(chainQueue);
       setLoadDiagnostics(diagnostics);
@@ -506,15 +578,19 @@ export function LeaderPipelinePanel() {
     resumeVerifyQueue();
   }, [reviewKeywords, deselectedKeywords, orgId, verifyQueue.inFlightHashes]);
 
-  const handleDenyFinal = useCallback(async (hash: string) => {
+  const handleDenyFinal = useCallback(async (hash: string, reason = 'rejected') => {
     if (!orgId) return;
 
     setBusy(hash);
     setNotice(null);
 
     try {
-      await denySubmission(orgId, hash);
-      setNotice(`Denied ${hash.slice(0, 12)}…`);
+      await denySubmission(orgId, hash, reason);
+      setNotice(
+        reason === 'duplicate'
+          ? `Denied ${hash.slice(0, 12)}… as duplicate`
+          : `Denied ${hash.slice(0, 12)}…`,
+      );
       await loadAll();
     } catch (err) {
       toast.error((err as Error).message);
@@ -522,6 +598,66 @@ export function LeaderPipelinePanel() {
       setBusy(null);
     }
   }, [loadAll, orgId]);
+
+  const openBanContributorModal = useCallback((contributorPubkey: string) => {
+    setBanContributorError(null);
+    setBanModalContributorPubkey(contributorPubkey);
+  }, []);
+
+  const handleBanContributor = useCallback(async () => {
+    if (!orgId || !banModalContributorPubkey) {
+      return;
+    }
+
+    const contributorPubkey = banModalContributorPubkey;
+    setBanModalLoading(true);
+    setNotice(null);
+    setBanContributorError(null);
+
+    let chainStepCompleted = false;
+
+    try {
+      const members = await listMembers(orgId);
+      const targetMember = members.find((member) => member.pubkey === contributorPubkey);
+      if (!targetMember) {
+        throw new Error(`Contributor ${shortenPubkey(contributorPubkey)} is not a current org member.`);
+      }
+
+      const { connectWallet } = await import('@/lib/wallet-connect');
+      const walletConn = await connectWallet();
+      const msg = buildSetMemberCapabilitiesMsg(
+        walletConn.address,
+        orgId,
+        contributorPubkey,
+        false,
+        targetMember.can_moderate === true,
+      );
+      const orgAccount = await resolveOrgAccountForGas();
+      await directBroadcast(walletConn.address, [msg], orgAccount);
+      chainStepCompleted = true;
+
+      const denyResult = await denyPendingForContributor(orgId, contributorPubkey);
+      setBanModalContributorPubkey(null);
+      setNotice(
+        `Banned ${shortenPubkey(contributorPubkey)}: chain capability revoked and ${denyResult.denied_count} pending submission(s) denied.`,
+      );
+      await loadAll();
+    } catch (error) {
+      const message = normalizeErrorMessage(error);
+      const failureMessage = chainStepCompleted
+        ? `Chain step completed (can_contribute revoked), but hub deny-pending failed: ${message}`
+        : `Chain step failed (capability unchanged), so hub deny-pending was not run: ${message}`;
+      setBanContributorError(failureMessage);
+      toast.error(failureMessage);
+    } finally {
+      setBanModalLoading(false);
+    }
+  }, [
+    banModalContributorPubkey,
+    loadAll,
+    orgId,
+    resolveOrgAccountForGas,
+  ]);
 
   const handleSubmitBatch = useCallback(async () => {
     if (!orgId) return;
@@ -640,6 +776,8 @@ export function LeaderPipelinePanel() {
     [pendingChain, inFlightHashes],
   );
 
+  const duplicateClusterCount = duplicateClusters?.clusters.length ?? 0;
+
   const isVerifying = verifyQueue.batches.length > 0;
 
   if (!orgId) {
@@ -721,6 +859,12 @@ export function LeaderPipelinePanel() {
         </div>
       )}
 
+      {banContributorError && (
+        <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
+          {banContributorError}
+        </div>
+      )}
+
       {txResult && (
         <div className="rounded-xl border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-4">
           <h3 className="font-semibold text-wv-green">Batch Submitted</h3>
@@ -799,6 +943,23 @@ export function LeaderPipelinePanel() {
                       <span aria-hidden="true" className="text-[10px]">
                         {moderatorVotesExpanded ? '▾' : '▸'}
                       </span>
+                    </button>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <span
+                      className="inline-flex items-center rounded-full border border-wv-line bg-wv-panel-2 px-2 py-0.5 font-mono text-xs text-wv-dim"
+                      title={item.contributor_pubkey}
+                    >
+                      Contributor {shortenPubkey(item.contributor_pubkey)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openBanContributorModal(item.contributor_pubkey)}
+                      disabled={itemBusy || loading || banModalLoading}
+                      className="rounded border border-[rgba(255,107,107,0.42)] bg-[rgba(255,107,107,0.1)] px-2 py-1 text-xs font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
+                    >
+                      Ban contributor
                     </button>
                   </div>
 
@@ -919,7 +1080,7 @@ export function LeaderPipelinePanel() {
                       disabled={itemBusy || loading}
                       className="rounded border border-[rgba(255,107,107,0.5)] bg-[rgba(255,107,107,0.1)] px-2 py-1 text-xs font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.2)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
                     >
-                      Deny (final)
+                      Remove
                     </button>
                   </div>
                 </div>
@@ -946,9 +1107,40 @@ export function LeaderPipelinePanel() {
             disabled={busy === 'chain' || loading || ready.length === 0 || isVerifying}
             className="inline-flex items-center rounded-lg bg-wv-green px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:bg-[rgba(54,211,153,0.85)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
-            {busy === 'chain' ? 'Submitting…' : 'Submit Batch to Chain'}
+            {busy === 'chain' ? 'Submitting…' : 'Send Batch'}
           </button>
         </div>
+
+        {duplicateClusterCount > 0 && duplicateClusters && (
+          <div className="mt-4 rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-3 text-sm text-wv-amber">
+            <button
+              type="button"
+              onClick={() => setDuplicateClustersExpanded((prev) => !prev)}
+              aria-expanded={duplicateClustersExpanded}
+              className="inline-flex items-center gap-2 font-medium text-wv-amber transition hover:text-[rgba(255,178,85,0.9)]"
+            >
+              <span>⚠ {duplicateClusterCount} near-duplicate cluster(s) detected in this batch</span>
+              <span aria-hidden="true" className="text-[10px]">
+                {duplicateClustersExpanded ? '▾' : '▸'}
+              </span>
+            </button>
+            {duplicateClustersExpanded && (
+              <div className="mt-3 space-y-2 text-xs text-wv-amber">
+                {duplicateClusters.clusters.map((cluster, clusterIndex) => (
+                  <div
+                    key={`${clusterIndex}-${cluster.members.join(':')}`}
+                    className="rounded-lg border border-[rgba(255,178,85,0.35)] bg-[rgba(255,178,85,0.1)] px-3 py-2"
+                  >
+                    <p className="font-medium">Cluster {clusterIndex + 1} · {cluster.size} memories</p>
+                    <p className="mt-1 font-mono text-[11px]">
+                      {cluster.members.map((memberHash) => shortenHash(memberHash)).join(' · ')}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {ready.length === 0 && verifyQueue.batches.length === 0 ? (
           <p className="mt-4 text-sm text-wv-dim">No memories ready for batch submit.</p>
@@ -956,6 +1148,13 @@ export function LeaderPipelinePanel() {
           <div className="mt-4 space-y-3">
             {ready.map((item) => {
               const extraction = parseExtractionResult(item.extraction_result);
+              const itemBusy = busy === item.submission_hash;
+              const nearDupMatches = item.near_dup_matches ?? [];
+              const nearDupExpanded = expandedNearDupMatches.has(item.submission_hash);
+              const nearDupShowAll = showAllNearDupMatches.has(item.submission_hash);
+              const visibleNearDupMatches = nearDupShowAll
+                ? nearDupMatches
+                : nearDupMatches.slice(0, 10);
 
               return (
                 <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
@@ -975,6 +1174,80 @@ export function LeaderPipelinePanel() {
                       <ClientTime value={item.verified_at} mode="datetime" />
                     )}
                   </div>
+
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <span
+                      className="inline-flex items-center rounded-full border border-wv-line bg-wv-panel-2 px-2 py-0.5 font-mono text-xs text-wv-dim"
+                      title={item.contributor_pubkey}
+                    >
+                      Contributor {shortenPubkey(item.contributor_pubkey)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openBanContributorModal(item.contributor_pubkey)}
+                      disabled={itemBusy || loading || banModalLoading}
+                      className="rounded border border-[rgba(255,107,107,0.42)] bg-[rgba(255,107,107,0.1)] px-2 py-1 text-xs font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.18)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
+                    >
+                      Ban contributor
+                    </button>
+                  </div>
+
+                  {nearDupMatches.length > 0 ? (
+                    <div className="mt-3 rounded-lg border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.14)] px-3 py-2 text-xs text-wv-amber">
+                      <div
+                        className="flex flex-wrap items-center gap-2 cursor-pointer select-none"
+                        onClick={() => toggleNearDupMatches(item.submission_hash)}
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={nearDupExpanded}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            if (e.key === ' ') {
+                              e.preventDefault();
+                            }
+                            toggleNearDupMatches(item.submission_hash);
+                          }
+                        }}
+                      >
+                        <span className="font-semibold tracking-[0.01em] text-wv-amber">Similar memories</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDenyModalReason('duplicate');
+                            setDenyModalSubmissionHash(item.submission_hash);
+                          }}
+                          disabled={itemBusy || loading}
+                          className="inline-flex items-center text-xs font-medium text-wv-red transition hover:text-[rgba(255,107,107,0.85)] disabled:cursor-not-allowed disabled:text-wv-dim"
+                        >
+                          [remove]
+                        </button>
+                        <span aria-hidden="true" className="ml-auto inline-flex items-center text-sm font-medium text-wv-amber">
+                          {nearDupExpanded ? '⌃' : '⌄'}
+                        </span>
+                      </div>
+
+                      {nearDupExpanded && (
+                        <div className="mt-2 space-y-1.5 text-[11px] text-wv-amber">
+                          {visibleNearDupMatches.map((match, matchIndex) => (
+                            <p key={`${match.cid}-${matchIndex}`}>
+                              {formatSimilarityPercent(match.score)} similar to <span className="font-mono">{shortenHash(match.cid)}</span>
+                            </p>
+                          ))}
+                          {nearDupMatches.length > 10 && !nearDupShowAll && (
+                            <button
+                              type="button"
+                              onClick={() => toggleNearDupShowAll(item.submission_hash)}
+                              className="inline-flex items-center text-xs font-medium text-wv-amber transition hover:text-[rgba(255,178,85,0.9)]"
+                            >
+                              [… show all] ({nearDupMatches.length})
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+
                   <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
                     {item.plaintext ?? 'No plaintext'}
                   </p>
@@ -1071,14 +1344,60 @@ export function LeaderPipelinePanel() {
       </section>
 
       <Modal
-        open={denyModalSubmissionHash !== null}
-        title="Deny submission?"
-        onClose={() => setDenyModalSubmissionHash(null)}
+        open={banModalContributorPubkey !== null}
+        title="Ban contributor?"
+        onClose={() => {
+          if (banModalLoading) {
+            return;
+          }
+          setBanModalContributorPubkey(null);
+        }}
         footer={(
           <div className="flex justify-end gap-2">
             <button
               type="button"
-              onClick={() => setDenyModalSubmissionHash(null)}
+              onClick={() => setBanModalContributorPubkey(null)}
+              disabled={banModalLoading}
+              className="rounded-lg border border-wv-line px-3 py-1.5 text-sm font-medium text-wv-dim transition hover:text-wv-text disabled:cursor-not-allowed disabled:text-wv-faint"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void handleBanContributor();
+              }}
+              disabled={banModalLoading}
+              className="rounded-lg border border-[rgba(255,107,107,0.5)] bg-[rgba(255,107,107,0.1)] px-3 py-1.5 text-sm font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.2)] disabled:cursor-not-allowed disabled:border-wv-line disabled:text-wv-dim"
+            >
+              {banModalLoading ? 'Banning…' : 'Ban contributor'}
+            </button>
+          </div>
+        )}
+      >
+        {banModalContributorPubkey ? (
+          <>
+            Ban contributor <span className="font-mono">{shortenPubkey(banModalContributorPubkey)}</span>? This revokes
+            their ability to contribute and removes ALL their pending submissions. This cannot be undone.
+          </>
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={denyModalSubmissionHash !== null}
+        title="Remove submission?"
+        onClose={() => {
+          setDenyModalSubmissionHash(null);
+          setDenyModalReason('rejected');
+        }}
+        footer={(
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDenyModalSubmissionHash(null);
+                setDenyModalReason('rejected');
+              }}
               className="rounded-lg border border-wv-line px-3 py-1.5 text-sm font-medium text-wv-dim transition hover:text-wv-text"
             >
               Cancel
@@ -1090,12 +1409,14 @@ export function LeaderPipelinePanel() {
                   return;
                 }
                 const hashToDeny = denyModalSubmissionHash;
+                const reasonToUse = denyModalReason;
                 setDenyModalSubmissionHash(null);
-                void handleDenyFinal(hashToDeny);
+                setDenyModalReason('rejected');
+                void handleDenyFinal(hashToDeny, reasonToUse);
               }}
               className="rounded-lg border border-[rgba(255,107,107,0.5)] bg-[rgba(255,107,107,0.1)] px-3 py-1.5 text-sm font-medium text-wv-red transition hover:bg-[rgba(255,107,107,0.2)]"
             >
-              Deny
+              Remove
             </button>
           </div>
         )}

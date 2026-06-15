@@ -668,6 +668,88 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	return memoryResults, contested, nil
 }
 
+type NearDupMatch struct {
+	CID   string  `json:"cid"`
+	Score float64 `json:"score"`
+}
+
+// NearestExistingMemories returns up to `limit` most-similar committed memories
+// to the candidate vector by RAW cosine (no boost/epoch), ordered by score desc,
+// ARCHIVED excluded. For near-duplicate detection at leader curation. Empty
+// slice if none. Caller applies any floor.
+func (c *QdrantClient) NearestExistingMemories(ctx context.Context, orgID string, vector []float32, limit int) ([]NearDupMatch, error) {
+	if c == nil {
+		return nil, fmt.Errorf("qdrant client unavailable")
+	}
+	if len(vector) == 0 {
+		return nil, fmt.Errorf("vector required")
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be positive")
+	}
+
+	searchReq := map[string]any{
+		"vector":       vector,
+		"limit":        limit,
+		"with_payload": true,
+		"filter": map[string]any{
+			"must": []map[string]any{
+				{"key": "org_id", "match": map[string]any{"value": orgID}},
+			},
+			"must_not": []map[string]any{
+				{"key": "lifecycle_state", "match": map[string]any{"value": "ARCHIVED"}},
+			},
+		},
+	}
+
+	reqBody, err := json.Marshal(searchReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal search request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points/search", c.restURL, OrgCollectionName(orgID))
+	req, err := c.newRequest(ctx, "POST", url, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute search request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
+			return nil, fmt.Errorf("search failed: %v", errResp)
+		}
+		return nil, fmt.Errorf("search failed with status %d", resp.StatusCode)
+	}
+
+	var searchResp struct {
+		Result []struct {
+			Score   float64        `json:"score"`
+			Payload map[string]any `json:"payload"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+		return nil, fmt.Errorf("decode search response: %w", err)
+	}
+
+	matches := make([]NearDupMatch, 0, len(searchResp.Result))
+	for _, result := range searchResp.Result {
+		cid, _ := result.Payload["cid"].(string)
+		if cid == "" {
+			continue
+		}
+		matches = append(matches, NearDupMatch{CID: cid, Score: result.Score})
+	}
+
+	return matches, nil
+}
+
 func getPendingDenialCounts(ctx context.Context, db DBQueryer, orgID string, memoryIdentifiers []string) (map[string]int, error) {
 	counts := make(map[string]int, len(memoryIdentifiers))
 	if len(memoryIdentifiers) == 0 {
@@ -867,7 +949,12 @@ func computeKeywordScore(storedWeights map[string]float64, storedKeywords []stri
 }
 
 func AddToIndex(ctx context.Context, client *QdrantClient, entry protocol.IndexEntry) error {
-	if err := client.EnsureCollection(ctx, entry.OrgID, EMBED_DIM); err != nil {
+	dim := uint64(len(entry.Vector))
+	if dim == 0 {
+		dim = EMBED_DIM
+	}
+
+	if err := client.EnsureCollection(ctx, entry.OrgID, dim); err != nil {
 		return fmt.Errorf("ensure collection: %w", err)
 	}
 	return client.UpsertPoint(ctx, entry)

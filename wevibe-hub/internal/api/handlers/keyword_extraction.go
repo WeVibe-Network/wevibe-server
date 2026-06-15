@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
@@ -73,6 +75,7 @@ type SubmissionRecord struct {
 	ModeratorPubkey          *string                              `json:"moderator_pubkey,omitempty"`
 	ApprovedAt               *time.Time                           `json:"approved_at,omitempty"`
 	VerifiedAt               *time.Time                           `json:"verified_at,omitempty"`
+	NearDupMatches           json.RawMessage                      `json:"near_dup_matches,omitempty"`
 	DenialReason             *string                              `json:"denial_reason,omitempty"`
 	ModVotes                 SubmissionModVotes                   `json:"mod_votes"`
 	KeywordVotes             map[string]SubmissionKeywordVotes    `json:"keyword_votes"`
@@ -92,6 +95,11 @@ type SubmissionKeywordVotes struct {
 }
 
 var keywordFormatRegex = regexp.MustCompile(protocol.KeywordFormatRegex)
+
+// Calibrated with text-embedding-3-large observed data: true duplicates landed >=0.84
+// and topical cross-matches <=0.78, so near-duplicate matching uses a 0.80 floor.
+const nearDupProbeLimit = 25
+const nearDupFloor = 0.80
 
 func SubmitKeywordResults(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
@@ -350,16 +358,41 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		var nearDupMatchesJSON []byte
+		if qdrantClient != nil {
+			matches, probeErr := qdrantClient.NearestExistingMemories(r.Context(), orgID, entry.Vector, nearDupProbeLimit)
+			if probeErr != nil {
+				log.Printf("WARNING: near-duplicate probe failed for submission=%s org=%s: %v", entry.SubmissionHash, orgID, probeErr)
+			} else {
+				filteredMatches := make([]retrieval.NearDupMatch, 0, len(matches))
+				for _, match := range matches {
+					if match.Score >= nearDupFloor {
+						filteredMatches = append(filteredMatches, match)
+					}
+				}
+
+				if len(filteredMatches) > 0 {
+					serializedMatches, marshalErr := json.Marshal(filteredMatches)
+					if marshalErr != nil {
+						log.Printf("WARNING: failed to marshal near-duplicate matches for submission=%s org=%s: %v", entry.SubmissionHash, orgID, marshalErr)
+					} else {
+						nearDupMatchesJSON = serializedMatches
+					}
+				}
+			}
+		}
+
 		res, err := pool.Exec(r.Context(), `
 			UPDATE pending_submissions
 			SET status = 'pending_chain',
 			    embedding_vector = $1,
 			    embedding_model_id = $2,
 			    embedding_schema_version = $3,
+			    near_dup_matches = $4,
 			    verified_at = NOW(),
 			    updated_at = NOW()
-			WHERE org_id = $4 AND submission_hash = $5 AND status = 'pending_keyword'
-		`, embeddingVector, entry.EmbeddingModelID, entry.EmbeddingSchemaVersion, orgID, entry.SubmissionHash)
+			WHERE org_id = $5 AND submission_hash = $6 AND status = 'pending_keyword'
+		`, embeddingVector, entry.EmbeddingModelID, entry.EmbeddingSchemaVersion, nearDupMatchesJSON, orgID, entry.SubmissionHash)
 		if err != nil {
 			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "internal error"})
 			continue
@@ -636,7 +669,8 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	if statusFilter != "" {
 		rows, err = pool.Query(r.Context(), `
 			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, status, memory_type,
-			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at
+			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at,
+			       near_dup_matches, updated_at, created_at
 			FROM pending_submissions ps
 			WHERE ps.org_id = $1 AND ps.status = $2
 			ORDER BY ps.created_at DESC
@@ -644,7 +678,8 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	} else {
 		rows, err = pool.Query(r.Context(), `
 			SELECT submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, status, memory_type,
-			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at, updated_at, created_at
+			       preference_confidence, derivation, extraction_result, extraction_feedback, moderator_pubkey, approved_at, verified_at,
+			       near_dup_matches, updated_at, created_at
 			FROM pending_submissions ps
 			WHERE ps.org_id = $1
 			ORDER BY ps.created_at DESC
@@ -668,11 +703,16 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	var submissions []SubmissionRecord
 	for qr.Next() {
 		var sub SubmissionRecord
+		var nearDupMatches []byte
 		err := qr.Scan(&sub.SubmissionHash, &sub.OrgID, &sub.EpochID, &sub.ContributorPubkey,
 			&sub.CiphertextHex, &sub.WrappedDekMod, &sub.Status, &sub.MemoryType, &sub.PreferenceConfidence, &sub.Derivation, &sub.ExtractionResult, &sub.ExtractionFeedback,
-			&sub.ModeratorPubkey, &sub.ApprovedAt, &sub.VerifiedAt, &sub.UpdatedAt, &sub.CreatedAt)
+			&sub.ModeratorPubkey, &sub.ApprovedAt, &sub.VerifiedAt, &nearDupMatches, &sub.UpdatedAt, &sub.CreatedAt)
 		if err != nil {
-			continue
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
+		if nearDupMatches != nil {
+			sub.NearDupMatches = json.RawMessage(nearDupMatches)
 		}
 		sub.MatchedKeywords = []string{}
 		sub.ModVotes = SubmissionModVotes{}

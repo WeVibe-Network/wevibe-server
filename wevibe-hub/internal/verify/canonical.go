@@ -218,6 +218,15 @@ func DenySubmissionMessage(orgID, submissionHash, reason, signedBy string) []byt
 	}, "\n"))
 }
 
+func BanContributorMessage(orgID, contributorPubkey, signedBy string) []byte {
+	return []byte(strings.Join([]string{
+		"wevibe.ban_contributor.v1",
+		fmt.Sprintf("org_id:%s", orgID),
+		fmt.Sprintf("contributor_pubkey:%s", contributorPubkey),
+		fmt.Sprintf("signed_by:%s", signedBy),
+	}, "\n"))
+}
+
 func keywordsHash(keywords []protocol.KeywordWithWeight) string {
 	sorted := make([]protocol.KeywordWithWeight, len(keywords))
 	copy(sorted, keywords)

@@ -1,5 +1,5 @@
 import { buildAuthHeaders, bytesToHex, deriveIdentityX25519Keypair, getIdentity, signWithIdentity } from './wevibe-auth';
-import { linkWalletCanonical } from './wevibe-signing';
+import { banContributorCanonical, denySubmissionCanonical, linkWalletCanonical } from './wevibe-signing';
 import type { OrgRole } from './org-role';
 import type { MemberOrgEntry } from './org-context';
 import { getConfig } from '@/lib/config';
@@ -259,6 +259,23 @@ export async function updateExtractionProfile(
 
 export async function getExtractionPresets(): Promise<ExtractionPresetsResponse> {
   return hubFetch<ExtractionPresetsResponse>('/v1/extraction-presets');
+}
+
+export interface ExtractedSessionRecord {
+  session_id: string;
+  extracted_at: string;
+}
+
+export async function recordExtractedSession(orgId: string, sessionId: string): Promise<ExtractedSessionRecord> {
+  return hubFetch<ExtractedSessionRecord>(`/v1/orgs/${orgId}/extracted-sessions`, {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+}
+
+export async function listExtractedSessions(orgId: string): Promise<ExtractedSessionRecord[]> {
+  const response = await hubFetch<{ sessions?: ExtractedSessionRecord[] }>(`/v1/orgs/${orgId}/extracted-sessions`);
+  return response.sessions ?? [];
 }
 
 // updateOrgChainConfig was removed in CO-011a.4. Category B chain config
@@ -614,6 +631,7 @@ export interface Submission {
   ciphertext_hex?: string | null;
   wrapped_dek_mod?: string | null;
   memory_cid?: string | null;
+  near_dup_matches?: { cid: string; score: number }[] | null;
   encrypted_envelope?: string | null;
   extraction_result?: KeywordWeight[] | null;
   extraction_feedback?: string | null;
@@ -662,6 +680,18 @@ export interface OrgHealth {
   updated_at: string;
 }
 
+export interface DuplicateCluster {
+  members: string[];
+  size: number;
+}
+
+export interface DuplicateClustersResponse {
+  threshold: number;
+  clusters: DuplicateCluster[];
+  unclustered: number;
+  total: number;
+}
+
 export async function getSubmissionsByStatus(orgId: string, status: string): Promise<Submission[]> {
   const response = await hubFetch<Submission[] | { submissions?: Submission[] }>(
     `/v1/orgs/${orgId}/submissions?status=${encodeURIComponent(status)}`,
@@ -670,6 +700,23 @@ export async function getSubmissionsByStatus(orgId: string, status: string): Pro
     return response;
   }
   return response.submissions ?? [];
+}
+
+export async function getDuplicateClusters(
+  orgId: string,
+  status = 'pending_chain',
+  threshold?: number,
+): Promise<DuplicateClustersResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set('status', status);
+  if (threshold !== undefined) {
+    searchParams.set('threshold', String(threshold));
+  }
+
+  const query = searchParams.toString();
+  return hubFetch<DuplicateClustersResponse>(
+    `/v1/orgs/${orgId}/submissions/duplicate-clusters?${query}`,
+  );
 }
 
 export async function voteSubmission(
@@ -735,10 +782,72 @@ export async function updateKeywords(
   });
 }
 
-export async function denySubmission(orgId: string, submissionHash: string): Promise<{ status: string }> {
+export async function denySubmission(
+  orgId: string,
+  submissionHash: string,
+  reason = 'rejected',
+): Promise<{ status: string }> {
+  const identity = await getIdentity();
+  if (!identity) {
+    throw new Error('No dashboard identity');
+  }
+
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    throw new Error('Deny reason is required');
+  }
+
+  const canonical = await denySubmissionCanonical(
+    orgId,
+    submissionHash,
+    normalizedReason,
+    identity.pubkeyHex,
+  );
+  const signature = await signWithIdentity(canonical);
+
   return hubFetch<{ status: string }>(`/v1/orgs/${orgId}/moderation/${encodeURIComponent(submissionHash)}/deny`, {
     method: 'POST',
+    body: JSON.stringify({
+      signed_by: identity.pubkeyHex,
+      reason: normalizedReason,
+      signature,
+    }),
   });
+}
+
+export async function denyPendingForContributor(
+  orgId: string,
+  contributorPubkey: string,
+  reason = 'banned',
+): Promise<{ status: string; denied_count: number }> {
+  const identity = await getIdentity();
+  if (!identity) {
+    throw new Error('No dashboard identity');
+  }
+
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) {
+    throw new Error('Deny reason is required');
+  }
+
+  const canonical = await banContributorCanonical(
+    orgId,
+    contributorPubkey,
+    identity.pubkeyHex,
+  );
+  const signature = await signWithIdentity(canonical);
+
+  return hubFetch<{ status: string; denied_count: number }>(
+    `/v1/orgs/${orgId}/contributors/${encodeURIComponent(contributorPubkey)}/deny-pending`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        reason: normalizedReason,
+        signed_by: identity.pubkeyHex,
+        signature,
+      }),
+    },
+  );
 }
 
 

@@ -151,6 +151,20 @@ export async function denySubmissionCanonical(
   return new TextEncoder().encode(msg);
 }
 
+export async function banContributorCanonical(
+  orgId: string,
+  contributorPubkey: string,
+  signedBy: string,
+): Promise<Uint8Array> {
+  const msg = [
+    'wevibe.ban_contributor.v1',
+    `org_id:${orgId}`,
+    `contributor_pubkey:${contributorPubkey}`,
+    `signed_by:${signedBy}`,
+  ].join('\n');
+  return new TextEncoder().encode(msg);
+}
+
 export async function linkWalletCanonical(
   orgId: string,
   walletAddress: string,

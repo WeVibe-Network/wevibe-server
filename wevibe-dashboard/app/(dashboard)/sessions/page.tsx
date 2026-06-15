@@ -5,7 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import Badge from '@/components/ui/badge';
+import Button from '@/components/ui/button';
 import ClientTime from '@/components/ui/client-time';
+import Modal from '@/components/ui/modal';
 import Spinner from '@/components/ui/spinner';
 import type {
   SessionSummary,
@@ -13,7 +15,12 @@ import type {
 } from '@/lib/session-types';
 import { getIdentity } from '@/lib/wevibe-auth';
 import { enqueueExtraction, useExtractionQueue } from '@/lib/extraction-queue';
-import { getHubInstanceId } from '@/lib/hub-client';
+import {
+  getHubInstanceId,
+  listExtractedSessions,
+  recordExtractedSession,
+} from '@/lib/hub-client';
+import { useOrgContext } from '@/lib/org-context';
 import {
   getDraft,
   loadDrafts,
@@ -24,6 +31,9 @@ type SessionSortKey = 'updated' | 'title' | 'message_count';
 type SortDirection = 'asc' | 'desc';
 
 const SESSION_SORT_STORAGE_KEY = 'wevibe.sessions.sort.v1';
+
+// Shipping default: contributor session duplicate-extraction detection is enabled.
+const SESSION_DEDUP_DETECTION_ENABLED = true;
 
 interface LlmSettingsSnapshot {
   llm_provider: 'ollama' | 'openrouter' | 'lm_studio';
@@ -53,6 +63,7 @@ const DEFAULT_LLM_SETTINGS: LlmSettingsSnapshot = {
 
 export default function SessionsPage() {
   const router = useRouter();
+  const { activeOrg } = useOrgContext();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,6 +74,9 @@ export default function SessionsPage() {
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [identity, setIdentity] = useState<{ pubkeyHex: string } | null>(null);
   const [pubkeyHex, setPubkeyHex] = useState<string | null>(null);
+  const [hubExtractedSessionIds, setHubExtractedSessionIds] = useState<Set<string>>(() => new Set());
+  const [confirmReextractOpen, setConfirmReextractOpen] = useState(false);
+  const [pendingReextractSessionId, setPendingReextractSessionId] = useState<string | null>(null);
   const [extractedDraftCount, setExtractedDraftCount] = useState(0);
   const [draftsVersion, setDraftsVersion] = useState(0);
 
@@ -73,6 +87,8 @@ export default function SessionsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortKey, setSortKey] = useState<SessionSortKey>('updated');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const previousQueuedSessionIdsRef = useRef<Set<string>>(new Set());
+  const orgId = activeOrg?.org_id ?? null;
 
   const queueSnapshot = useExtractionQueue();
 
@@ -174,6 +190,57 @@ export default function SessionsPage() {
     }
     void load();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const activeOrgId = orgId?.trim() ?? '';
+
+    if (!SESSION_DEDUP_DETECTION_ENABLED) {
+      setHubExtractedSessionIds(new Set());
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!activeOrgId || !pubkeyHex) {
+      setHubExtractedSessionIds(new Set());
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function loadExtractedSessionIds() {
+      try {
+        const extractedSessions = await listExtractedSessions(activeOrgId);
+        if (cancelled) {
+          return;
+        }
+
+        const nextSessionIds = new Set<string>();
+        for (const extractedSession of extractedSessions) {
+          const normalizedSessionId = extractedSession.session_id.trim();
+          if (normalizedSessionId.length > 0) {
+            nextSessionIds.add(normalizedSessionId);
+          }
+        }
+
+        setHubExtractedSessionIds(nextSessionIds);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        console.error('Failed to load extracted sessions from hub', error);
+        setHubExtractedSessionIds(new Set());
+      }
+    }
+
+    void loadExtractedSessionIds();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, pubkeyHex]);
 
   useEffect(() => {
     let cancelled = false;
@@ -382,16 +449,10 @@ export default function SessionsPage() {
     });
   }, [pubkeyHex, sessionDetail]);
 
-  const retryExtraction = useCallback(
-    (session: SessionSummary) => {
-      if (activeSessionId !== session.id) {
-        return;
-      }
-
-      enqueueActiveSession();
-    },
-    [activeSessionId, enqueueActiveSession],
-  );
+  const closeReextractModal = useCallback(() => {
+    setConfirmReextractOpen(false);
+    setPendingReextractSessionId(null);
+  }, []);
 
   const draftReadySessionIds = useMemo(() => {
     if (!pubkeyHex) {
@@ -407,6 +468,104 @@ export default function SessionsPage() {
     return ready;
   }, [sessions, pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs, draftsVersion]);
 
+  const extractedSessionIds = useMemo(() => {
+    if (!SESSION_DEDUP_DETECTION_ENABLED) {
+      return new Set<string>();
+    }
+
+    const combined = new Set(hubExtractedSessionIds);
+    for (const sessionId of draftReadySessionIds) {
+      combined.add(sessionId);
+    }
+    return combined;
+  }, [draftReadySessionIds, hubExtractedSessionIds]);
+
+  const requestActiveSessionExtraction = useCallback(() => {
+    if (!sessionDetail) {
+      return;
+    }
+
+    if (!SESSION_DEDUP_DETECTION_ENABLED) {
+      enqueueActiveSession();
+      return;
+    }
+
+    const sessionId = sessionDetail.session_id;
+    if (!extractedSessionIds.has(sessionId)) {
+      enqueueActiveSession();
+      return;
+    }
+
+    setPendingReextractSessionId(sessionId);
+    setConfirmReextractOpen(true);
+  }, [enqueueActiveSession, extractedSessionIds, sessionDetail]);
+
+  const confirmReextract = useCallback(() => {
+    if (!sessionDetail || sessionDetail.session_id !== pendingReextractSessionId) {
+      closeReextractModal();
+      return;
+    }
+
+    closeReextractModal();
+    enqueueActiveSession();
+  }, [closeReextractModal, enqueueActiveSession, pendingReextractSessionId, sessionDetail]);
+
+  const retryExtraction = useCallback(
+    (session: SessionSummary) => {
+      if (activeSessionId !== session.id) {
+        return;
+      }
+
+      requestActiveSessionExtraction();
+    },
+    [activeSessionId, requestActiveSessionExtraction],
+  );
+
+  useEffect(() => {
+    const queuedSessionIds = new Set<string>(queueSnapshot.jobs.map((job) => job.sessionId));
+    const completedExtractedSessionIds: string[] = [];
+
+    if (!SESSION_DEDUP_DETECTION_ENABLED) {
+      previousQueuedSessionIdsRef.current = queuedSessionIds;
+      return;
+    }
+
+    for (const previousSessionId of previousQueuedSessionIdsRef.current) {
+      if (!queuedSessionIds.has(previousSessionId) && draftReadySessionIds.has(previousSessionId)) {
+        completedExtractedSessionIds.push(previousSessionId);
+      }
+    }
+
+    previousQueuedSessionIdsRef.current = queuedSessionIds;
+
+    if (!orgId || completedExtractedSessionIds.length === 0) {
+      return;
+    }
+
+    for (const sessionId of completedExtractedSessionIds) {
+      void recordExtractedSession(orgId, sessionId)
+        .then((record) => {
+          const normalizedSessionId = record.session_id.trim();
+          if (!normalizedSessionId) {
+            return;
+          }
+
+          setHubExtractedSessionIds((current) => {
+            if (current.has(normalizedSessionId)) {
+              return current;
+            }
+
+            const next = new Set(current);
+            next.add(normalizedSessionId);
+            return next;
+          });
+        })
+        .catch((error) => {
+          console.error(`Failed to record extracted session ${sessionId}`, error);
+        });
+    }
+  }, [draftReadySessionIds, orgId, queueSnapshot.jobs]);
+
   useEffect(() => {
     if (!pubkeyHex) {
       setExtractedDraftCount(0);
@@ -417,18 +576,18 @@ export default function SessionsPage() {
   }, [pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs, draftsVersion]);
 
   const extractedSessions = useMemo(() => {
-    const sorted = sessions.filter((session) => draftReadySessionIds.has(session.id));
+    const sorted = sessions.filter((session) => extractedSessionIds.has(session.id));
     return sorted.sort((a, b) => {
       const aUpdated = Date.parse(a.time_updated) || 0;
       const bUpdated = Date.parse(b.time_updated) || 0;
       return bUpdated - aUpdated;
     });
-  }, [sessions, draftReadySessionIds]);
+  }, [extractedSessionIds, sessions]);
 
   const visibleNonExtractedSessions = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
     const filtered = sessions.filter((session) => {
-      if (draftReadySessionIds.has(session.id)) {
+      if (extractedSessionIds.has(session.id)) {
         return false;
       }
 
@@ -460,7 +619,7 @@ export default function SessionsPage() {
     });
 
     return sorted;
-  }, [draftReadySessionIds, searchTerm, sessions, sortDirection, sortKey]);
+  }, [extractedSessionIds, searchTerm, sessions, sortDirection, sortKey]);
 
   const renderSessionCard = (session: SessionSummary) => {
     const isActive = activeSessionId === session.id;
@@ -469,9 +628,16 @@ export default function SessionsPage() {
     const isRunning = sessionQueueStatus === 'running';
     const isQueueLocked = isQueued || isRunning;
     const hasDraft = draftReadySessionIds.has(session.id);
+    const isExtracted = extractedSessionIds.has(session.id);
     const activeDraft = isActive && pubkeyHex ? getDraft(pubkeyHex, session.id) : null;
     const extractedMemoryCount = activeDraft?.memories.length ?? 0;
     const failureReason = getFailureReasonForSession(session.id);
+    const inactiveCardStyle = isExtracted
+      ? 'border-[rgba(54,211,153,0.45)] bg-[rgba(54,211,153,0.08)] hover:border-[rgba(54,211,153,0.6)]'
+      : 'border-wv-line bg-wv-panel hover:border-wv-line-2';
+    const activeCardStyle = isExtracted
+      ? 'border-[rgba(54,211,153,0.6)] bg-[rgba(54,211,153,0.12)] ring-2 ring-[rgba(54,211,153,0.2)]'
+      : 'border-[rgba(124,92,255,0.4)] bg-wv-panel ring-2 ring-[rgba(124,92,255,0.22)]';
 
     return (
       <div key={session.id} className="space-y-2">
@@ -485,10 +651,10 @@ export default function SessionsPage() {
         <button
           disabled={isQueueLocked}
           onClick={() => selectSession(session.id)}
-          className={`w-full rounded-2xl border bg-wv-panel p-5 text-left shadow-wv-sm transition disabled:cursor-not-allowed
+          className={`w-full rounded-2xl border p-5 text-left shadow-wv-sm transition disabled:cursor-not-allowed
             ${isActive
-              ? 'border-[rgba(124,92,255,0.4)] ring-2 ring-[rgba(124,92,255,0.22)]'
-              : 'border-wv-line hover:border-wv-line-2'
+              ? activeCardStyle
+              : inactiveCardStyle
             }
             ${isQueueLocked ? 'opacity-60' : ''}`}
         >
@@ -511,8 +677,10 @@ export default function SessionsPage() {
                 {isRunning && <span className="text-wv-violet">Extracting…</span>}
                 {!isRunning && isQueued && <span className="text-wv-amber">Queued</span>}
                 {!isRunning && !isQueued && hasDraft && <span className="text-wv-green">Draft ready</span>}
+                {!isRunning && !isQueued && !hasDraft && isExtracted && <span className="text-wv-green">Extracted</span>}
               </div>
               <div className="flex gap-2">
+                {isExtracted && <Badge variant="success">Extracted</Badge>}
                 {session.model && (
                   <Badge>{session.model.split('/').pop()}</Badge>
                 )}
@@ -573,7 +741,7 @@ export default function SessionsPage() {
             {!sessionDetailLoading && sessionDetail && !isRunning && !isQueued && !hasDraft && (
               <div className="space-y-2">
                 <button
-                  onClick={enqueueActiveSession}
+                  onClick={requestActiveSessionExtraction}
                   disabled={!canEnqueueExtraction}
                   className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
                 >
@@ -742,6 +910,25 @@ export default function SessionsPage() {
           </div>
         </section>
       )}
+
+      <Modal
+        open={confirmReextractOpen}
+        title="Re-extract this session?"
+        onClose={closeReextractModal}
+        footer={(
+          <div className="flex items-center justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={closeReextractModal}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={confirmReextract}>
+              Re-extract anyway
+            </Button>
+          </div>
+        )}
+      >
+        This session is already marked as extracted for your org. Re-extracting will process it again
+        and create a fresh local draft for review.
+      </Modal>
     </div>
   );
 }

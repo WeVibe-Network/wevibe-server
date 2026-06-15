@@ -156,6 +156,8 @@ CREATE TABLE IF NOT EXISTS pending_submissions (
     embedding_vector        JSONB,
     embedding_model_id      TEXT,
     embedding_schema_version TEXT,
+    -- Near-duplicate advisory field derived at Verify (banner-only signal).
+    near_dup_matches        JSONB, -- ordered (desc) JSON array of {cid,score} for committed memories the candidate is near-duplicate to (above the near-dup floor); advisory; threshold is a CALIBRATION PLACEHOLDER.
     extraction_feedback     TEXT,
     verified_at             TIMESTAMPTZ,
     sanitization_findings   JSONB,
@@ -167,6 +169,18 @@ CREATE TABLE IF NOT EXISTS pending_submissions (
 
 CREATE INDEX IF NOT EXISTS idx_pending_org_status ON pending_submissions(org_id, status);
 CREATE INDEX IF NOT EXISTS idx_pending_contributor ON pending_submissions(contributor_pubkey);
+
+-- ── Extracted sessions ─────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS extracted_sessions (
+    org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    contributor_pubkey  TEXT        NOT NULL,
+    session_id          TEXT        NOT NULL,
+    extracted_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, contributor_pubkey, session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_extracted_sessions_contributor ON extracted_sessions(org_id, contributor_pubkey);
 
 -- ── Approval votes ─────────────────────────────────────────────────────────
 
