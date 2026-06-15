@@ -120,8 +120,8 @@ func GetWalletAddress(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey str
 func ListMembers(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]protocol.MemberRecord, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate, join_epoch,
-			   history_access_from_epoch, authorized_until_epoch, active, joined_at, wallet_address,
-			   dismissed_reports_count
+		       history_access_from_epoch, authorized_until_epoch, active, membership_active, joined_at, wallet_address,
+		       dismissed_reports_count
 		FROM members WHERE org_id = $1 ORDER BY joined_at
 	`, orgID)
 	if err != nil {
