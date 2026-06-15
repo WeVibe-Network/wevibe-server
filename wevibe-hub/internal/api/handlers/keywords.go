@@ -3,8 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
@@ -20,7 +22,7 @@ const (
 
 type KeywordInfo struct {
 	Keyword    string `json:"keyword"`
-	CreatedAt  string `json:"created_at"`
+	CreatedAt  time.Time `json:"created_at"`
 	Deprecated bool   `json:"deprecated"`
 	UsageCount int    `json:"usage_count"`
 }
@@ -76,7 +78,9 @@ func ListKeywords(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var ki KeywordInfo
 		if err := rows.Scan(&ki.Keyword, &ki.CreatedAt, &ki.Deprecated, &ki.UsageCount); err != nil {
-			continue
+			log.Printf("ListKeywords: scan error for org %s: %v", orgID, err)
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
 		}
 		keywords = append(keywords, ki)
 	}
