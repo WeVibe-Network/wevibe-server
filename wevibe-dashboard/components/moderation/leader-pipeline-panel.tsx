@@ -1,18 +1,14 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   getSubmissionsByStatus,
   listKeywords,
   getKeywordCandidates,
-  verifyKeywords,
-  updateKeywords,
   denySubmission,
   prepareBatchSubmit,
   type Submission,
   type KeywordWeight,
   type KeywordCandidate,
-  type VerificationResult,
-  type VerifyEntry,
 } from '@/lib/hub-client';
 import {
   normalizeKeywordWeights,
@@ -27,6 +23,15 @@ import {
   directBroadcast,
   getOrgAccountAddress,
 } from '@/lib/chain-client';
+import {
+  type VerificationJobInput,
+  enqueueVerificationBatch,
+  reconcileSettledHashes,
+  removeVerification,
+  resumeVerifyQueue,
+  retryVerification,
+  useVerifyQueue,
+} from '@/lib/verify-queue';
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
 import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
@@ -218,20 +223,18 @@ export function LeaderPipelinePanel() {
 
   const [reviewKeywords, setReviewKeywords] = useState<Submission[]>([]);
   const [pendingChain, setPendingChain] = useState<Submission[]>([]);
-  const [verifyingHashes, setVerifyingHashes] = useState<Set<string>>(new Set());
-  const [verifyingItems, setVerifyingItems] = useState<Submission[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadDiagnostics, setLoadDiagnostics] = useState<LoadDiagnostic[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [clientState, setClientState] = useState<ConnectionState>('disconnected');
-  const [verifyResults, setVerifyResults] = useState<VerificationResult[] | null>(null);
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
   const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
   const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
   const [expandedModeratorVotes, setExpandedModeratorVotes] = useState<Record<string, boolean>>({});
   const [denyModalSubmissionHash, setDenyModalSubmissionHash] = useState<string | null>(null);
   const [deselectedKeywords, setDeselectedKeywords] = useState<Record<string, Set<string>>>({});
+  const verifyQueue = useVerifyQueue();
 
   const resolveOrgAccountForGas = useCallback(async (): Promise<string> => {
     if (!orgId) {
@@ -389,6 +392,7 @@ export function LeaderPipelinePanel() {
 
       const keywordQueue = applyPlaintext(pendingKeywordRaw);
       const chainQueue = applyPlaintext(pendingChainRaw);
+      reconcileSettledHashes(chainQueue.map((submission) => submission.submission_hash));
 
       setOrgVocabulary(vocabulary);
       setKeywordCandidates(candidateMap);
@@ -408,6 +412,12 @@ export function LeaderPipelinePanel() {
   }, []);
 
   useEffect(() => {
+    if (clientState === 'connected') {
+      resumeVerifyQueue();
+    }
+  }, [clientState]);
+
+  useEffect(() => {
     if (!orgId) return;
     if (clientState === 'connected') {
       void loadAll();
@@ -424,9 +434,25 @@ export function LeaderPipelinePanel() {
     return () => clearInterval(id);
   }, [orgId, clientState, busy, loadAll]);
 
-  const handleVerifyAll = useCallback(async () => {
+  useEffect(() => {
+    if (
+      clientState === 'connected'
+      && verifyQueue.activeCount === 0
+      && verifyQueue.batches.length > 0
+    ) {
+      void loadAll();
+    }
+  }, [clientState, verifyQueue.activeCount, verifyQueue.batches.length, loadAll]);
+
+  const handleVerifyAll = useCallback(() => {
     if (!orgId) return;
-    if (reviewKeywords.length === 0) return;
+
+    const inFlightHashSet = new Set(verifyQueue.inFlightHashes);
+    const awaitingSubmissions = reviewKeywords.filter(
+      (submission) => !inFlightHashSet.has(submission.submission_hash),
+    );
+
+    if (awaitingSubmissions.length === 0) return;
 
     const client = getMcpClient();
     if (client.state !== 'connected') {
@@ -434,7 +460,7 @@ export function LeaderPipelinePanel() {
       return;
     }
 
-    const missingPayload = reviewKeywords.find((submission) => (
+    const missingPayload = awaitingSubmissions.find((submission) => (
       typeof submission.ciphertext_hex !== 'string'
       || submission.ciphertext_hex.length === 0
       || typeof submission.wrapped_dek_mod !== 'string'
@@ -445,142 +471,40 @@ export function LeaderPipelinePanel() {
       return;
     }
 
-    setVerifyingItems(reviewKeywords);
-    setVerifyingHashes(new Set(reviewKeywords.map((submission) => submission.submission_hash)));
-    setBusy('verify');
-    setVerifyResults(null);
-    setNotice(null);
+    const batchInputs: VerificationJobInput[] = [];
 
-    const total = reviewKeywords.length;
+    for (const submission of awaitingSubmissions) {
+      const extraction = parseExtractionResult(submission.extraction_result);
+      const allKeywords = mergeExtractionKeywords(extraction);
+      const deselectedSet = deselectedKeywords[submission.submission_hash];
 
-    type EmbedResult = {
-      id: string;
-      vector: number[] | null;
-      embedding_model_id: string;
-      embedding_schema_version: string;
-      error?: string;
-    };
+      const selectedList = allKeywords
+        .filter((kw) => !(deselectedSet?.has(kw.keywordLc) ?? false))
+        .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
 
-    let progressToastId: string | number | undefined;
-
-    try {
-      for (const submission of reviewKeywords) {
-        const extraction = parseExtractionResult(submission.extraction_result);
-        const allKeywords = mergeExtractionKeywords(extraction);
-        const deselectedSet = deselectedKeywords[submission.submission_hash];
-
-        const selectedList = allKeywords
-          .filter((kw) => !(deselectedSet?.has(kw.keywordLc) ?? false))
-          .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
-
-        if (selectedList.length === 0) {
-          toast.error(`At least one keyword must stay selected for ${submission.submission_hash.slice(0, 12)}…`);
-          return;
-        }
-
-        const deselectedItems = allKeywords
-          .filter((kw) => deselectedSet?.has(kw.keywordLc) ?? false)
-          .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
-
-        await updateKeywords(
-          orgId,
-          submission.submission_hash,
-          renormalizeFromBase(selectedList),
-          toExcludedSuggestionPayload(deselectedItems),
-        );
-      }
-
-      // Progress lives in the toaster (a single sonner toast updated in place across
-      // both stages), not on the page.
-      progressToastId = toast.loading(`Embedding retrieval cards… 0 / ${total}`);
-
-      // Stage 1 — embed retrieval cards ONE memory at a time so we can report real
-      // "X of N" progress. Decrypting + embedding each card through the local LLM
-      // provider is the slow step.
-      const embedResults: EmbedResult[] = [];
-      for (let index = 0; index < reviewKeywords.length; index += 1) {
-        const submission = reviewKeywords[index];
-
-        const batch = await client.callTool<EmbedResult[]>('wevibe_embed_retrieval_card', {
-          org_id: orgId,
-          items: [{
-            id: submission.submission_hash,
-            ciphertext_hex: submission.ciphertext_hex as string,
-            wrapped_dek_mod: submission.wrapped_dek_mod as string,
-            stack_hint: submission.stack_hint ?? [],
-          }],
-        });
-
-        embedResults.push(...batch);
-        toast.loading(`Embedding retrieval cards… ${index + 1} / ${total}`, { id: progressToastId });
-      }
-
-      const embedById = new Map(embedResults.map((result) => [result.id, result] as const));
-      const missingHashes = reviewKeywords.filter(
-        (submission) => !embedById.has(submission.submission_hash),
-      );
-      if (embedResults.length !== reviewKeywords.length || missingHashes.length > 0) {
-        if (progressToastId === undefined) {
-          toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`);
-        } else {
-          toast.error(`Embedding output mismatch for ${missingHashes.length} memory(ies) — verification aborted.`, { id: progressToastId });
-        }
+      if (selectedList.length === 0) {
+        toast.error(`At least one keyword must stay selected for ${submission.submission_hash.slice(0, 12)}…`);
         return;
       }
 
-      const failed = embedResults.filter((r) => !r.vector || r.error);
-      if (failed.length > 0) {
-        if (progressToastId === undefined) {
-          toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`);
-        } else {
-          toast.error(`Embedding failed for ${failed.length} memory(ies) — ensure Ollama and the LLM provider are reachable. First error: ${failed[0]?.error ?? 'no vector returned'}`, { id: progressToastId });
-        }
-        return;
-      }
+      const deselectedItems = allKeywords
+        .filter((kw) => deselectedSet?.has(kw.keywordLc) ?? false)
+        .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
 
-      const entries: VerifyEntry[] = embedResults.map((r) => ({
-        submission_hash: r.id,
-        vector: r.vector as number[],
-        embedding_model_id: r.embedding_model_id,
-        embedding_schema_version: r.embedding_schema_version,
-      }));
-
-      // Stage 2 — hub verifies canonical messages + signatures for all entries.
-      if (progressToastId === undefined) {
-        toast.loading(`Verifying ${total} ${total === 1 ? 'memory' : 'memories'} on the hub…`);
-      } else {
-        toast.loading(`Verifying ${total} ${total === 1 ? 'memory' : 'memories'} on the hub…`, { id: progressToastId });
-      }
-      const results = await verifyKeywords(orgId, entries);
-      setVerifyResults(results);
-      const allPassed = results.every(r => r.passed);
-      if (allPassed) {
-        if (progressToastId === undefined) {
-          toast.success('All keywords verified successfully.');
-        } else {
-          toast.success('All keywords verified successfully.', { id: progressToastId });
-        }
-      } else {
-        const firstError = results.find((result) => !result.passed && result.error)?.error;
-        if (progressToastId === undefined) {
-          toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.');
-        } else {
-          toast.error(firstError ? `Verification failed: ${firstError}` : 'Some verifications failed. Check results below.', { id: progressToastId });
-        }
-      }
-      await loadAll();
-    } catch (err) {
-      if (progressToastId === undefined) {
-        toast.error((err as Error).message);
-      } else {
-        toast.error((err as Error).message, { id: progressToastId });
-      }
-    } finally {
-      setBusy(null);
-      setVerifyingHashes(new Set());
-      setVerifyingItems([]);
+      batchInputs.push({
+        orgId,
+        submissionHash: submission.submission_hash,
+        selected: selectedList,
+        excluded: toExcludedSuggestionPayload(deselectedItems),
+        ciphertextHex: submission.ciphertext_hex as string,
+        wrappedDekMod: submission.wrapped_dek_mod as string,
+        stackHint: Array.isArray(submission.stack_hint) ? submission.stack_hint : [],
+      });
     }
-  }, [reviewKeywords, deselectedKeywords, loadAll, orgId]);
+
+    enqueueVerificationBatch(batchInputs);
+    resumeVerifyQueue();
+  }, [reviewKeywords, deselectedKeywords, orgId, verifyQueue.inFlightHashes]);
 
   const handleDenyFinal = useCallback(async (hash: string) => {
     if (!orgId) return;
@@ -691,7 +615,32 @@ export function LeaderPipelinePanel() {
     }
   }, [orgId, pendingChain, resolveOrgAccountForGas, loadAll]);
 
-  const awaiting = reviewKeywords.filter((submission) => !verifyingHashes.has(submission.submission_hash));
+  const inFlightHashes = useMemo(
+    () => new Set(verifyQueue.inFlightHashes),
+    [verifyQueue.inFlightHashes],
+  );
+
+  const submissionByHash = useMemo(() => {
+    const mapped = new Map<string, Submission>();
+    for (const submission of [...reviewKeywords, ...pendingChain]) {
+      if (!mapped.has(submission.submission_hash)) {
+        mapped.set(submission.submission_hash, submission);
+      }
+    }
+    return mapped;
+  }, [reviewKeywords, pendingChain]);
+
+  const awaiting = useMemo(
+    () => reviewKeywords.filter((submission) => !inFlightHashes.has(submission.submission_hash)),
+    [reviewKeywords, inFlightHashes],
+  );
+
+  const ready = useMemo(
+    () => pendingChain.filter((submission) => !inFlightHashes.has(submission.submission_hash)),
+    [pendingChain, inFlightHashes],
+  );
+
+  const isVerifying = verifyQueue.batches.length > 0;
 
   if (!orgId) {
     return (
@@ -772,19 +721,6 @@ export function LeaderPipelinePanel() {
         </div>
       )}
 
-      {verifyResults && (
-        <div className="rounded-xl border border-wv-line bg-wv-panel p-4">
-          <h3 className="font-semibold text-wv-text">Verification Results</h3>
-          <div className="mt-2 space-y-1">
-            {verifyResults.map(r => (
-              <div key={r.submission_hash} className={`font-mono text-sm ${r.passed ? 'text-wv-green' : 'text-wv-red'}`}>
-                {r.passed ? '✓' : '✗'} {r.submission_hash.slice(0, 12)}… — {r.passed ? 'Passed' : r.error}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {txResult && (
         <div className="rounded-xl border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-4">
           <h3 className="font-semibold text-wv-green">Batch Submitted</h3>
@@ -811,10 +747,10 @@ export function LeaderPipelinePanel() {
           <button
             type="button"
             onClick={() => handleVerifyAll()}
-            disabled={busy === 'verify' || loading || awaiting.length === 0}
+            disabled={loading || awaiting.length === 0}
             className="inline-flex items-center whitespace-nowrap rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
-            {busy === 'verify' ? 'Approving…' : 'Approve'}
+            Approve
           </button>
         </div>
 
@@ -824,7 +760,7 @@ export function LeaderPipelinePanel() {
           <div className="mt-4 space-y-4">
             {awaiting.map((item) => {
               const extraction = parseExtractionResult(item.extraction_result);
-              const itemBusy = busy === item.submission_hash || busy === 'verify';
+              const itemBusy = busy === item.submission_hash;
               const recommendation = parseModerationRecommendation(item.mod_votes);
               const moderatorRecommendations = item.moderator_recommendations ?? [];
               const moderatorVotesExpanded = expandedModeratorVotes[item.submission_hash] ?? false;
@@ -998,24 +934,27 @@ export function LeaderPipelinePanel() {
           <div>
             <h2 className="text-lg font-semibold text-wv-text">Awaiting batch submission</h2>
             <p className="mt-1 text-sm text-wv-dim">
-              {pendingChain.length} ready for batch submit
+              {ready.length} ready for batch submit
             </p>
+            {isVerifying && (
+              <p className="mt-1 text-xs text-wv-amber">Waiting for verification to finish…</p>
+            )}
           </div>
           <button
             type="button"
             onClick={() => handleSubmitBatch()}
-            disabled={busy === 'chain' || loading || pendingChain.length === 0}
+            disabled={busy === 'chain' || loading || ready.length === 0 || isVerifying}
             className="inline-flex items-center rounded-lg bg-wv-green px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:bg-[rgba(54,211,153,0.85)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
             {busy === 'chain' ? 'Submitting…' : 'Submit Batch to Chain'}
           </button>
         </div>
 
-        {pendingChain.length === 0 ? (
+        {ready.length === 0 && verifyQueue.batches.length === 0 ? (
           <p className="mt-4 text-sm text-wv-dim">No memories ready for batch submit.</p>
         ) : (
           <div className="mt-4 space-y-3">
-            {pendingChain.map((item) => {
+            {ready.map((item) => {
               const extraction = parseExtractionResult(item.extraction_result);
 
               return (
@@ -1060,6 +999,73 @@ export function LeaderPipelinePanel() {
                 </div>
               );
             })}
+
+            {verifyQueue.batches.map((batch, batchIndex) => (
+              <div
+                key={batch.batchId}
+                className="rounded-lg border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.08)] p-4"
+              >
+                <p className="text-xs font-medium uppercase tracking-[0.08em] text-wv-violet">
+                  Batch {batchIndex + 1} — verifying
+                </p>
+                <div className="mt-3 space-y-3">
+                  {batch.items.map((queueItem) => {
+                    const submission = submissionByHash.get(queueItem.submissionHash);
+                    const isFailed = queueItem.state === 'failed';
+                    return (
+                      <div
+                        key={`${batch.batchId}-${queueItem.submissionHash}`}
+                        className={isFailed
+                          ? 'rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.1)] p-4'
+                          : 'rounded-lg border border-[rgba(124,92,255,0.35)] bg-wv-panel p-4'}
+                      >
+                        <div className={`flex flex-wrap items-center gap-2 text-xs ${isFailed ? 'text-wv-red' : 'text-wv-dim'}`}>
+                          <span className="font-mono">{queueItem.submissionHash.slice(0, 16)}…</span>
+                          <span
+                            className={isFailed
+                              ? 'rounded-full border border-[rgba(255,107,107,0.45)] bg-[rgba(255,107,107,0.18)] px-2 py-0.5 text-[10px] font-medium text-wv-red'
+                              : 'rounded-full border border-[rgba(124,92,255,0.35)] bg-[rgba(124,92,255,0.12)] px-2 py-0.5 text-[10px] font-medium text-wv-violet'}
+                          >
+                            {isFailed ? 'Failed' : 'Verifying'}
+                          </span>
+                        </div>
+
+                        {submission?.plaintext && (
+                          <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
+                            {submission.plaintext}
+                          </p>
+                        )}
+
+                        {isFailed && (
+                          <>
+                            <p className="mt-2 text-sm text-wv-red">{queueItem.reason ?? 'Verification failed'}</p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  retryVerification(queueItem.submissionHash);
+                                  resumeVerifyQueue();
+                                }}
+                                className="rounded-lg border border-[rgba(124,92,255,0.45)] bg-[rgba(124,92,255,0.12)] px-3 py-1.5 text-xs font-medium text-wv-violet transition hover:bg-[rgba(124,92,255,0.22)]"
+                              >
+                                Retry
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeVerification(queueItem.submissionHash)}
+                                className="rounded-lg border border-wv-line px-3 py-1.5 text-xs font-medium text-wv-dim transition hover:text-wv-text"
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </section>
