@@ -249,7 +249,7 @@ export function ModeratorReviewPanel() {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Awaiting approval</h1>
           <p className="text-sm text-wv-dim">
             Select an organization to review moderator recommendations.
           </p>
@@ -265,7 +265,7 @@ export function ModeratorReviewPanel() {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Awaiting approval</h1>
           <p className="text-sm text-wv-dim">
             Connect to the dashboard MCP server to review pending submissions. Configure the connection under Settings.
           </p>
@@ -281,37 +281,38 @@ export function ModeratorReviewPanel() {
   }
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Moderation Queue</h1>
-          <p className="mt-1 text-sm text-wv-dim">
-            Moderators provide advisory recommendations only; the leader finalizes outcomes.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => loadQueue()}
-          className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-dim shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
-          disabled={loading}
-        >
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </header>
+    <div className="mx-auto max-w-5xl">
+      <section className="rounded-2xl border border-wv-line bg-wv-panel p-6">
+        <header className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Awaiting approval</h1>
+            <p className="mt-1 text-sm text-wv-dim">
+              {items.length} memories awaiting approval — advisory voting
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => loadQueue()}
+            className="inline-flex items-center rounded-lg border border-wv-line px-4 py-2 text-sm font-medium text-wv-dim shadow-wv-sm transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
+            disabled={loading}
+          >
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </header>
 
-      {loading && items.length === 0 ? (
-        <p className="text-sm text-wv-dim">Loading moderation queue…</p>
-      ) : null}
+        {loading && items.length === 0 ? (
+          <p className="mt-6 text-sm text-wv-dim">Loading moderation queue…</p>
+        ) : null}
 
-      {!loading && items.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
-          No pending submissions. Fresh memories will appear here as they arrive.
-        </div>
-      ) : null}
+        {!loading && items.length === 0 ? (
+          <div className="mt-6 rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
+            No pending submissions. Fresh memories will appear here as they arrive.
+          </div>
+        ) : null}
 
-      <div className="space-y-4">
-        {items.map(item => (
-          <article key={item.submission_hash} className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+        <div className="mt-6 space-y-4">
+          {items.map(item => (
+            <article key={item.submission_hash} className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
             <PreferenceScoreCard confidence={item.preference_confidence} className="mb-4" />
             {(() => {
               const recommendation = parseModerationRecommendation(item);
@@ -445,10 +446,10 @@ export function ModeratorReviewPanel() {
                 </>
               );
             })()}
-          </article>
-        ))}
-      </div>
-
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

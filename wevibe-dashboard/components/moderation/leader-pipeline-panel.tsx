@@ -7,12 +7,10 @@ import {
   verifyKeywords,
   updateKeywords,
   denySubmission,
-  getOrgHealth,
   prepareBatchSubmit,
   type Submission,
   type KeywordWeight,
   type KeywordCandidate,
-  type OrgHealth,
   type VerificationResult,
   type VerifyEntry,
 } from '@/lib/hub-client';
@@ -103,7 +101,7 @@ function shortenPubkey(pubkey: string, visibleChars = 12): string {
   return `${pubkey.slice(0, visibleChars)}…`;
 }
 
-type LoadSource = 'orgHealth' | 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch';
+type LoadSource = 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch';
 
 type LoadDiagnostic = {
   source: LoadSource;
@@ -118,7 +116,6 @@ type ExtractionResultPayload = {
 };
 
 const LOAD_SOURCE_LABELS: Record<LoadSource, string> = {
-  orgHealth: 'Org health',
   pendingKeyword: 'Pending keyword queue',
   pendingChain: 'Pending chain queue',
   keywords: 'Org vocabulary',
@@ -219,7 +216,6 @@ export function LeaderPipelinePanel() {
   const { activeOrg } = useOrgContext();
   const orgId = activeOrg?.org_id ?? '';
 
-  const [orgHealth, setOrgHealth] = useState<OrgHealth | null>(null);
   const [reviewKeywords, setReviewKeywords] = useState<Submission[]>([]);
   const [pendingChain, setPendingChain] = useState<Submission[]>([]);
   const [verifyingHashes, setVerifyingHashes] = useState<Set<string>>(new Set());
@@ -309,20 +305,12 @@ export function LeaderPipelinePanel() {
 
     try {
       const diagnostics: LoadDiagnostic[] = [];
-      const [healthResult, pendingKeywordResult, pendingChainResult, keywordsResult, keywordCandidatesResult] = await Promise.allSettled([
-        getOrgHealth(orgId),
+      const [pendingKeywordResult, pendingChainResult, keywordsResult, keywordCandidatesResult] = await Promise.allSettled([
         getSubmissionsByStatus(orgId, 'pending_keyword'),
         getSubmissionsByStatus(orgId, 'pending_chain'),
         listKeywords(orgId),
         getKeywordCandidates(orgId),
       ]);
-
-      const health = healthResult.status === 'fulfilled'
-        ? healthResult.value
-        : null;
-      if (healthResult.status !== 'fulfilled') {
-        diagnostics.push(createLoadDiagnostic('orgHealth', healthResult.reason));
-      }
 
       const pendingKeywordRaw = pendingKeywordResult.status === 'fulfilled'
         ? pendingKeywordResult.value
@@ -402,7 +390,6 @@ export function LeaderPipelinePanel() {
       const keywordQueue = applyPlaintext(pendingKeywordRaw);
       const chainQueue = applyPlaintext(pendingChainRaw);
 
-      setOrgHealth(health);
       setOrgVocabulary(vocabulary);
       setKeywordCandidates(candidateMap);
       setReviewKeywords(keywordQueue);
@@ -705,17 +692,14 @@ export function LeaderPipelinePanel() {
   }, [orgId, pendingChain, resolveOrgAccountForGas, loadAll]);
 
   const awaiting = reviewKeywords.filter((submission) => !verifyingHashes.has(submission.submission_hash));
-  const pendingVerification = verifyingItems.filter(
-    (submission) => !pendingChain.some((pending) => pending.submission_hash === submission.submission_hash),
-  );
 
   if (!orgId) {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Batch Pipeline</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Memory approval</h1>
           <p className="text-sm text-wv-dim">
-            Curate keywords → Verify → Chain submission
+            Approve memories and submit them to chain.
           </p>
         </header>
         <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
@@ -729,9 +713,9 @@ export function LeaderPipelinePanel() {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <header className="flex flex-col gap-2">
-          <h1 className="text-3xl font-semibold tracking-tight">Chain Submit</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Memory approval</h1>
           <p className="text-sm text-wv-dim">
-            Connect to the dashboard MCP server in Settings to manage the batch pipeline.
+            Connect to the dashboard MCP server in Settings to manage approvals.
           </p>
         </header>
         <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
@@ -746,13 +730,7 @@ export function LeaderPipelinePanel() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Batch Pipeline</h1>
-          <p className="mt-1 text-sm text-wv-dim">
-            Curate keywords → Verify → Chain submission
-          </p>
-        </div>
+      <header className="flex justify-end">
         <button
           type="button"
           onClick={() => loadAll()}
@@ -762,35 +740,6 @@ export function LeaderPipelinePanel() {
           {loading ? 'Refreshing…' : 'Refresh'}
         </button>
       </header>
-
-      {orgHealth && (
-        <div className="grid grid-cols-2 gap-4 rounded-xl border border-wv-line bg-wv-panel p-4 shadow-wv-sm sm:grid-cols-4">
-          <div>
-            <p className="text-xs text-wv-dim">Pending Keyword</p>
-            <p className="text-2xl font-semibold text-wv-text">{orgHealth.pending_keyword_count}</p>
-          </div>
-          <div>
-            <p className="text-xs text-wv-dim">Pending Chain</p>
-            <p className="text-2xl font-semibold text-wv-text">{orgHealth.pending_chain_count}</p>
-          </div>
-          <div>
-            <p className="text-xs text-wv-dim">Last Extraction</p>
-            <p className="text-sm font-medium text-wv-text">
-              {orgHealth.last_keyword_extraction
-                ? <ClientTime value={orgHealth.last_keyword_extraction} mode="datetime" />
-                : 'Never'}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-wv-dim">Last Chain Submit</p>
-            <p className="text-sm font-medium text-wv-text">
-              {orgHealth.last_chain_submission
-                ? <ClientTime value={orgHealth.last_chain_submission} mode="datetime" />
-                : 'Never'}
-            </p>
-          </div>
-        </div>
-      )}
 
       {loadDiagnostics.length > 0 && (
         <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-red">
@@ -848,12 +797,12 @@ export function LeaderPipelinePanel() {
         </div>
       )}
 
-      <section className="rounded-xl border border-[rgba(124,92,255,0.4)] bg-[rgba(124,92,255,0.12)] p-6">
+      <section className="rounded-2xl border border-wv-line bg-wv-panel p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-wv-text">Awaiting verification</h2>
+            <h2 className="text-lg font-semibold text-wv-text">Awaiting approval</h2>
             <p className="mt-1 text-sm text-wv-dim">
-              {awaiting.length} memories awaiting verification
+              {awaiting.length} memories awaiting approval
             </p>
             <p className="mt-1 text-xs text-wv-amber">
               Green = already in your keyword set · Blue = commonly suggested by contributors · Yellow = new (joins the set on commit) · Click any keyword to deselect (gray = won’t commit).
@@ -865,12 +814,12 @@ export function LeaderPipelinePanel() {
             disabled={busy === 'verify' || loading || awaiting.length === 0}
             className="inline-flex items-center whitespace-nowrap rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
           >
-            {busy === 'verify' ? 'Verifying…' : 'Verify All'}
+            {busy === 'verify' ? 'Approving…' : 'Approve'}
           </button>
         </div>
 
         {awaiting.length === 0 ? (
-          <p className="mt-4 text-sm text-wv-dim">No memories awaiting verification.</p>
+          <p className="mt-4 text-sm text-wv-dim">No memories awaiting approval.</p>
         ) : (
           <div className="mt-4 space-y-4">
             {awaiting.map((item) => {
@@ -1044,12 +993,12 @@ export function LeaderPipelinePanel() {
         )}
       </section>
 
-      <section className="rounded-xl border border-[rgba(54,211,153,0.4)] bg-[rgba(54,211,153,0.12)] p-6">
+      <section className="rounded-2xl border border-wv-line bg-wv-panel p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-wv-text">Ready for Chain</h2>
+            <h2 className="text-lg font-semibold text-wv-text">Awaiting batch submission</h2>
             <p className="mt-1 text-sm text-wv-dim">
-              {pendingChain.length} verified memories awaiting chain submission
+              {pendingChain.length} ready for batch submit
             </p>
           </div>
           <button
@@ -1062,136 +1011,55 @@ export function LeaderPipelinePanel() {
           </button>
         </div>
 
-        {pendingChain.length === 0 && pendingVerification.length === 0 ? (
-          <p className="mt-4 text-sm text-wv-dim">No memories ready for chain submission.</p>
+        {pendingChain.length === 0 ? (
+          <p className="mt-4 text-sm text-wv-dim">No memories ready for batch submit.</p>
         ) : (
-          <div className="mt-4 space-y-4">
-            {pendingChain.length === 0 ? (
-              <p className="text-sm text-wv-dim">No memories ready for chain submission.</p>
-            ) : (
-              <div className="space-y-3">
-                {pendingChain.map((item) => {
-                  const extraction = parseExtractionResult(item.extraction_result);
+          <div className="mt-4 space-y-3">
+            {pendingChain.map((item) => {
+              const extraction = parseExtractionResult(item.extraction_result);
 
-                  return (
-                    <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
-                      <PreferenceScoreCard confidence={item.preference_confidence} className="mb-3" />
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
-                        <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
-                        <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
-                          Epoch {item.epoch_id}
-                        </span>
-                        <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
-                          Memory
-                        </span>
-                        {item.verified_by && (
-                          <span className="font-mono text-wv-dim">Verified by {item.verified_by.slice(0, 8)}…</span>
-                        )}
-                        {item.verified_at && (
-                          <ClientTime value={item.verified_at} mode="datetime" />
-                        )}
+              return (
+                <div key={item.submission_hash} className="rounded-lg border border-[rgba(54,211,153,0.4)] bg-wv-panel p-4">
+                  <PreferenceScoreCard confidence={item.preference_confidence} className="mb-3" />
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
+                    <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
+                    <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
+                      Epoch {item.epoch_id}
+                    </span>
+                    <span className="rounded-full bg-[rgba(54,211,153,0.12)] px-2 py-0.5 text-xs font-medium text-wv-green">
+                      Memory
+                    </span>
+                    {item.verified_by && (
+                      <span className="font-mono text-wv-dim">Verified by {item.verified_by.slice(0, 8)}…</span>
+                    )}
+                    {item.verified_at && (
+                      <ClientTime value={item.verified_at} mode="datetime" />
+                    )}
+                  </div>
+                  <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
+                    {item.plaintext ?? 'No plaintext'}
+                  </p>
+
+                  {extraction.classified.length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-xs font-medium text-wv-dim">Keywords:</p>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {extraction.classified.map((kw, idx) => {
+                          return (
+                            <span
+                              key={`${kw.keyword}-${idx}`}
+                              className={keywordPillClass(keywordProvenance(kw.keyword), true)}
+                            >
+                              {kw.keyword} {(displayWeight(kw, true) * 100).toFixed(0)}%
+                            </span>
+                          );
+                        })}
                       </div>
-                      <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
-                        {item.plaintext ?? 'No plaintext'}
-                      </p>
-
-                      {extraction.classified.length > 0 && (
-                        <div className="mt-3">
-                          <p className="text-xs font-medium text-wv-dim">Keywords:</p>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {extraction.classified.map((kw, idx) => {
-                              return (
-                                <span
-                                  key={`${kw.keyword}-${idx}`}
-                                  className={keywordPillClass(keywordProvenance(kw.keyword), true)}
-                                >
-                                  {kw.keyword} {(displayWeight(kw, true) * 100).toFixed(0)}%
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {pendingVerification.length > 0 && (
-              <div className="space-y-3">
-                <h3 className="text-sm font-medium text-wv-dim">
-                  Pending verification ({pendingVerification.length})
-                </h3>
-                <div className="space-y-3">
-                  {pendingVerification.map((item) => {
-                    const extraction = parseExtractionResult(item.extraction_result);
-                    const allKeywords = mergeExtractionKeywords(extraction);
-                    const deselectedSet = deselectedKeywords[item.submission_hash];
-                    const selectedList = allKeywords
-                      .filter((kw) => !(deselectedSet?.has(kw.keywordLc) ?? false))
-                      .map(({ keyword, weight, base_weight }) => ({ keyword, weight, base_weight }));
-                    const renorm = renormalizeFromBase(selectedList);
-                    const renormByKeyword = new Map(
-                      renorm.map((kw) => [normalizeKeywordKey(kw.keyword), kw.weight] as const),
-                    );
-
-                    return (
-                      <div
-                        key={`pending-verification-${item.submission_hash}`}
-                        className="rounded-lg border border-[rgba(255,178,85,0.35)] bg-wv-panel p-4 opacity-70"
-                      >
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-wv-dim">
-                          <span className="font-mono">{item.submission_hash.slice(0, 16)}…</span>
-                          <span className="rounded-full bg-wv-panel-2 px-2 py-0.5 text-xs text-wv-dim">
-                            Epoch {item.epoch_id}
-                          </span>
-                          <span className="rounded-full border border-[rgba(255,178,85,0.45)] bg-[rgba(255,178,85,0.16)] px-2 py-0.5 text-xs font-medium text-wv-amber">
-                            Pending verification
-                          </span>
-                        </div>
-
-                        <p className="mt-2 text-sm text-wv-text whitespace-pre-wrap break-words">
-                          {item.plaintext ?? 'No plaintext'}
-                        </p>
-
-                        <div className="mt-3">
-                          <p className="text-xs font-medium text-wv-dim">Keywords</p>
-                          {allKeywords.length === 0 ? (
-                            <p className="mt-1 text-xs text-wv-dim">No extracted keywords yet.</p>
-                          ) : (
-                            <div className="mt-1 flex flex-wrap gap-2">
-                              {allKeywords.map((kw, idx) => {
-                                const selected = !(deselectedSet?.has(kw.keywordLc) ?? false);
-                                const selectedWeight = renormByKeyword.get(kw.keywordLc);
-                                const weightLabel = selectedWeight === undefined
-                                  ? null
-                                  : `${(selectedWeight * 100).toFixed(0)}%`;
-
-                                return (
-                                  <span
-                                    key={`${item.submission_hash}-${kw.keyword}-${idx}`}
-                                    className={`${keywordPillClass(keywordProvenance(kw.keyword), selected)} cursor-not-allowed opacity-80`}
-                                    title={selected
-                                      ? `Selected · Weight ${weightLabel ?? '0%'}`
-                                      : 'Deselected'}
-                                  >
-                                    {kw.keyword}
-                                    {selected && weightLabel && (
-                                      <span className="ml-1 text-wv-dim">{weightLabel}</span>
-                                    )}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                  )}
                 </div>
-              </div>
-            )}
+              );
+            })}
           </div>
         )}
       </section>

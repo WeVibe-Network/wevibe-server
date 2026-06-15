@@ -9,8 +9,11 @@ export default function ModerationNewPage() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
-      {canModerate ? <ModeratorReviewPanel /> : null}
-      {isLeader ? <LeaderPipelinePanel /> : null}
+      {isLeader
+        ? <LeaderPipelinePanel />
+        : canModerate
+          ? <ModeratorReviewPanel />
+          : null}
     </div>
   );
 }
