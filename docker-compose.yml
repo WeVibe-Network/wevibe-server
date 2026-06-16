@@ -245,6 +245,9 @@ services:
       WEVIBE_HUB_URL: http://wevibe-hub:4440
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       WEVIBE_KEYSTORE_PATH: /root/.wevibe/keys
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      WEVIBE_EMBEDDING_PROVIDER: "${WEVIBE_EMBEDDING_PROVIDER:-openrouter}"
+      WEVIBE_EMBEDDING_MODEL: "${WEVIBE_EMBEDDING_MODEL:-openai/text-embedding-3-large}"
     ports:
       # Host port 4452 (container 4450) to coexist with a host-side wevibe MCP on 4450
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:4452:4450"
