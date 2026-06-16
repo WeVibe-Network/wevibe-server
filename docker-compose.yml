@@ -114,7 +114,9 @@ services:
       WEVIBE_CHAIN_GRPC_URL: "tcp://wevibe-chain:9090"
       WEVIBE_CHAIN_SUBMITTER_MNEMONIC: "${WEVIBE_CHAIN_SUBMITTER_MNEMONIC:-abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about}"
       GAS_STRATEGY: "simulate-retry"
-      WEVIBE_DASHBOARD_CONFIG: /etc/wevibe/dashboard.json
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      WEVIBE_EMBEDDING_PROVIDER: "${WEVIBE_EMBEDDING_PROVIDER:-openrouter}"
+      WEVIBE_EMBEDDING_MODEL: "${WEVIBE_EMBEDDING_MODEL:-openai/text-embedding-3-large}"
       WEVIBE_CHAIN_RPC_URL: tcp://wevibe-chain:26657
       FAUCET_URL: http://wevibe-faucet:4470
       WEVIBE_UMBRAL_SIDECAR_ADDR: "wevibe-umbral:4460"
@@ -128,11 +130,6 @@ services:
       WEVIBE_TEST_MODE: "true"
       HUB_NODE_PRIVKEY: "${HUB_NODE_PRIVKEY:-0000000000000000000000000000000000000000000000000000000000000000}"
       WEVIBE_HUB_RESPONSE_SEED: "${WEVIBE_HUB_RESPONSE_SEED:-408e6099f9553438066e0f5dc1565314d163837d2db3c3a1ad821da089766a14}"
-    volumes:
-      # Single source of truth for embeddings: the dashboard settings file is
-      # mounted read-only so the WEVIBE_TEST_MODE /v1/test/embed embedder uses
-      # the same OpenRouter provider/model/key as the rest of WeVibe.
-      - "${HOME}/.config/wevibe/dashboard.json:/etc/wevibe/dashboard.json:ro"
     ports:
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:4440:4440"
     depends_on:

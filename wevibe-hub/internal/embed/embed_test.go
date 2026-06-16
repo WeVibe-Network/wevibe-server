@@ -2,42 +2,15 @@ package embed
 
 import (
 	"context"
-	"encoding/json"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
-func writeDashboardConfigRaw(t *testing.T, raw string) string {
-	t.Helper()
-
-	configPath := filepath.Join(t.TempDir(), "dashboard.json")
-	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
-		t.Fatalf("write dashboard config: %v", err)
-	}
-
-	return configPath
-}
-
-func writeDashboardConfigJSON(t *testing.T, settings map[string]any) string {
-	t.Helper()
-
-	raw, err := json.Marshal(settings)
-	if err != nil {
-		t.Fatalf("marshal dashboard config: %v", err)
-	}
-
-	return writeDashboardConfigRaw(t, string(raw))
-}
-
 func TestResolveEmbeddingConfig_OpenRouter(t *testing.T) {
-	configPath := writeDashboardConfigJSON(t, map[string]any{
-		"embedding_provider":         "openrouter",
-		"embedding_openrouter_model": "text-embedding-3-large",
-		"openrouter_api_key":         "openrouter-test-key",
-	})
-	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
+	t.Setenv("WEVIBE_EMBEDDING_PROVIDER", "")
+	t.Setenv("WEVIBE_EMBEDDING_MODEL", "")
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-test-key")
 
 	config, err := ResolveEmbeddingConfig()
 	if err != nil {
@@ -50,74 +23,108 @@ func TestResolveEmbeddingConfig_OpenRouter(t *testing.T) {
 	if config.APIKey != "openrouter-test-key" {
 		t.Fatalf("expected openrouter API key, got %q", config.APIKey)
 	}
-	if config.Model != "text-embedding-3-large" {
+	if config.Model != "openai/text-embedding-3-large" {
 		t.Fatalf("expected openrouter model, got %q", config.Model)
 	}
 }
 
+func TestResolveEmbeddingConfig_OpenRouterMissingAPIKeyFails(t *testing.T) {
+	t.Setenv("WEVIBE_EMBEDDING_PROVIDER", "openrouter")
+	t.Setenv("WEVIBE_EMBEDDING_MODEL", "openai/text-embedding-3-large")
+	t.Setenv("OPENROUTER_API_KEY", "")
+
+	if _, err := ResolveEmbeddingConfig(); err == nil {
+		t.Fatal("expected ResolveEmbeddingConfig to fail when OPENROUTER_API_KEY is empty")
+	}
+}
+
 func TestResolveEmbeddingConfig_LMStudio(t *testing.T) {
-	configPath := writeDashboardConfigJSON(t, map[string]any{
-		"embedding_provider":       "lm_studio",
-		"embedding_lmstudio_model": "text-embedding-3-large",
-		"lmstudio_url":             "http://127.0.0.1:1234/v1",
-	})
-	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
-
-	config, err := ResolveEmbeddingConfig()
-	if err != nil {
-		t.Fatalf("ResolveEmbeddingConfig returned error: %v", err)
+	tests := []struct {
+		name        string
+		lmStudioURL string
+		expectURL   string
+	}{
+		{
+			name:        "uses default base URL",
+			lmStudioURL: "",
+			expectURL:   "http://127.0.0.1:1234/v1",
+		},
+		{
+			name:        "uses configured base URL",
+			lmStudioURL: "http://host.docker.internal:1234/v1",
+			expectURL:   "http://host.docker.internal:1234/v1",
+		},
 	}
 
-	if config.BaseURL != "http://127.0.0.1:1234/v1" {
-		t.Fatalf("expected lm_studio base URL, got %q", config.BaseURL)
-	}
-	if config.APIKey != "lm-studio" {
-		t.Fatalf("expected lm_studio API key, got %q", config.APIKey)
-	}
-	if config.Model != "text-embedding-3-large" {
-		t.Fatalf("expected lm_studio model, got %q", config.Model)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("WEVIBE_EMBEDDING_PROVIDER", "lm_studio")
+			t.Setenv("WEVIBE_EMBEDDING_MODEL", "openai/text-embedding-3-large")
+			t.Setenv("WEVIBE_LMSTUDIO_URL", tt.lmStudioURL)
+
+			config, err := ResolveEmbeddingConfig()
+			if err != nil {
+				t.Fatalf("ResolveEmbeddingConfig returned error: %v", err)
+			}
+
+			if config.BaseURL != tt.expectURL {
+				t.Fatalf("expected lm_studio base URL %q, got %q", tt.expectURL, config.BaseURL)
+			}
+			if config.APIKey != "lm-studio" {
+				t.Fatalf("expected lm_studio API key, got %q", config.APIKey)
+			}
+			if config.Model != "openai/text-embedding-3-large" {
+				t.Fatalf("expected lm_studio model, got %q", config.Model)
+			}
+		})
 	}
 }
 
 func TestResolveEmbeddingConfig_Ollama(t *testing.T) {
-	configPath := writeDashboardConfigJSON(t, map[string]any{
-		"embedding_provider":     "ollama",
-		"embedding_ollama_model": "nomic-embed-text",
-		"ollama_url":             "http://localhost:11434/",
-	})
-	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
-
-	config, err := ResolveEmbeddingConfig()
-	if err != nil {
-		t.Fatalf("ResolveEmbeddingConfig returned error: %v", err)
+	tests := []struct {
+		name      string
+		ollamaURL string
+		expectURL string
+	}{
+		{
+			name:      "uses default base URL",
+			ollamaURL: "",
+			expectURL: "http://localhost:11434/v1",
+		},
+		{
+			name:      "normalizes configured base URL",
+			ollamaURL: "http://host.docker.internal:11434/",
+			expectURL: "http://host.docker.internal:11434/v1",
+		},
 	}
 
-	if config.BaseURL != "http://localhost:11434/v1" {
-		t.Fatalf("expected ollama base URL, got %q", config.BaseURL)
-	}
-	if config.APIKey != "ollama" {
-		t.Fatalf("expected ollama API key, got %q", config.APIKey)
-	}
-	if config.Model != "nomic-embed-text" {
-		t.Fatalf("expected ollama model, got %q", config.Model)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("WEVIBE_EMBEDDING_PROVIDER", "ollama")
+			t.Setenv("WEVIBE_EMBEDDING_MODEL", "nomic-embed-text")
+			t.Setenv("WEVIBE_OLLAMA_URL", tt.ollamaURL)
 
-func TestResolveEmbeddingConfig_MissingFileFails(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "missing-dashboard.json")
-	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
+			config, err := ResolveEmbeddingConfig()
+			if err != nil {
+				t.Fatalf("ResolveEmbeddingConfig returned error: %v", err)
+			}
 
-	if _, err := ResolveEmbeddingConfig(); err == nil {
-		t.Fatal("expected ResolveEmbeddingConfig to fail for missing file")
+			if config.BaseURL != tt.expectURL {
+				t.Fatalf("expected ollama base URL %q, got %q", tt.expectURL, config.BaseURL)
+			}
+			if config.APIKey != "ollama" {
+				t.Fatalf("expected ollama API key, got %q", config.APIKey)
+			}
+			if config.Model != "nomic-embed-text" {
+				t.Fatalf("expected ollama model, got %q", config.Model)
+			}
+		})
 	}
 }
 
 func TestResolveEmbeddingConfig_UnknownProviderFails(t *testing.T) {
-	configPath := writeDashboardConfigJSON(t, map[string]any{
-		"embedding_provider":         "unknown_provider",
-		"embedding_openrouter_model": "text-embedding-3-large",
-	})
-	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
+	t.Setenv("WEVIBE_EMBEDDING_PROVIDER", "unknown_provider")
+	t.Setenv("WEVIBE_EMBEDDING_MODEL", "openai/text-embedding-3-large")
 
 	if _, err := ResolveEmbeddingConfig(); err == nil {
 		t.Fatal("expected ResolveEmbeddingConfig to fail for unknown provider")
@@ -125,24 +132,12 @@ func TestResolveEmbeddingConfig_UnknownProviderFails(t *testing.T) {
 }
 
 func TestResolveEmbeddingConfig_EmptyModelFails(t *testing.T) {
-	configPath := writeDashboardConfigJSON(t, map[string]any{
-		"embedding_provider":         "openrouter",
-		"embedding_openrouter_model": "",
-		"openrouter_api_key":         "openrouter-test-key",
-	})
-	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
+	t.Setenv("WEVIBE_EMBEDDING_PROVIDER", "openrouter")
+	t.Setenv("WEVIBE_EMBEDDING_MODEL", "   ")
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-test-key")
 
 	if _, err := ResolveEmbeddingConfig(); err == nil {
 		t.Fatal("expected ResolveEmbeddingConfig to fail when model is empty")
-	}
-}
-
-func TestResolveEmbeddingConfig_BadJSONFails(t *testing.T) {
-	configPath := writeDashboardConfigRaw(t, `{`)
-	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
-
-	if _, err := ResolveEmbeddingConfig(); err == nil {
-		t.Fatal("expected ResolveEmbeddingConfig to fail for invalid JSON")
 	}
 }
 
@@ -153,18 +148,14 @@ func TestGetEmbedding_Dim(t *testing.T) {
 }
 
 func TestGetEmbedding_Live(t *testing.T) {
-	if os.Getenv("OPENROUTER_API_KEY") == "" && os.Getenv("WEVIBE_DASHBOARD_CONFIG") == "" {
-		t.Skip("set OPENROUTER_API_KEY or WEVIBE_DASHBOARD_CONFIG to run live embedding test")
+	key := os.Getenv("OPENROUTER_API_KEY")
+	if key == "" {
+		t.Skip("set OPENROUTER_API_KEY to run live embedding test")
 	}
 
-	if os.Getenv("WEVIBE_DASHBOARD_CONFIG") == "" {
-		configPath := writeDashboardConfigJSON(t, map[string]any{
-			"embedding_provider":         "openrouter",
-			"embedding_openrouter_model": "text-embedding-3-large",
-			"openrouter_api_key":         os.Getenv("OPENROUTER_API_KEY"),
-		})
-		t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
-	}
+	t.Setenv("WEVIBE_EMBEDDING_PROVIDER", "openrouter")
+	t.Setenv("WEVIBE_EMBEDDING_MODEL", "openai/text-embedding-3-large")
+	t.Setenv("OPENROUTER_API_KEY", key)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()

@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -20,84 +19,40 @@ type EmbeddingConfig struct {
 	Model   string
 }
 
-type dashboardEmbeddingSettings struct {
-	EmbeddingProvider      any `json:"embedding_provider"`
-	EmbeddingOpenRouterMod any `json:"embedding_openrouter_model"`
-	OpenRouterAPIKey       any `json:"openrouter_api_key"`
-	EmbeddingOllamaModel   any `json:"embedding_ollama_model"`
-	OllamaURL              any `json:"ollama_url"`
-	EmbeddingLMStudioModel any `json:"embedding_lmstudio_model"`
-	LMStudioURL            any `json:"lmstudio_url"`
-}
-
-func asStringOrEmpty(value any) string {
-	str, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(str)
-}
-
-func asString(value any) string {
-	str, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return str
-}
-
-func resolveDashboardConfigPath() (string, error) {
-	if envPath := strings.TrimSpace(os.Getenv("WEVIBE_DASHBOARD_CONFIG")); envPath != "" {
-		return envPath, nil
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user home dir: %w", err)
-	}
-
-	return filepath.Join(homeDir, ".config", "wevibe", "dashboard.json"), nil
-}
-
 func ResolveEmbeddingConfig() (EmbeddingConfig, error) {
-	configPath, err := resolveDashboardConfigPath()
-	if err != nil {
-		return EmbeddingConfig{}, err
+	provider := strings.TrimSpace(os.Getenv("WEVIBE_EMBEDDING_PROVIDER"))
+	if provider == "" {
+		provider = "openrouter"
 	}
 
-	rawConfig, err := os.ReadFile(configPath)
-	if err != nil {
-		return EmbeddingConfig{}, fmt.Errorf("read dashboard config %q: %w", configPath, err)
+	rawModel := os.Getenv("WEVIBE_EMBEDDING_MODEL")
+	model := strings.TrimSpace(rawModel)
+	if rawModel == "" {
+		model = "openai/text-embedding-3-large"
 	}
 
-	var parsed dashboardEmbeddingSettings
-	if err := json.Unmarshal(rawConfig, &parsed); err != nil {
-		return EmbeddingConfig{}, fmt.Errorf("parse dashboard config %q: %w", configPath, err)
-	}
-
-	provider := asStringOrEmpty(parsed.EmbeddingProvider)
-	resolved := EmbeddingConfig{}
+	resolved := EmbeddingConfig{Model: model}
 
 	switch provider {
 	case "openrouter":
 		resolved.BaseURL = "https://openrouter.ai/api/v1"
-		resolved.APIKey = asString(parsed.OpenRouterAPIKey)
-		resolved.Model = asStringOrEmpty(parsed.EmbeddingOpenRouterMod)
+		resolved.APIKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+		if resolved.APIKey == "" {
+			return EmbeddingConfig{}, fmt.Errorf("OPENROUTER_API_KEY is required for provider %q", provider)
+		}
 	case "lm_studio":
-		resolved.BaseURL = asStringOrEmpty(parsed.LMStudioURL)
+		resolved.BaseURL = strings.TrimSpace(os.Getenv("WEVIBE_LMSTUDIO_URL"))
 		if resolved.BaseURL == "" {
 			resolved.BaseURL = "http://127.0.0.1:1234/v1"
 		}
 		resolved.APIKey = "lm-studio"
-		resolved.Model = asStringOrEmpty(parsed.EmbeddingLMStudioModel)
 	case "ollama":
-		ollamaURL := asStringOrEmpty(parsed.OllamaURL)
+		ollamaURL := strings.TrimSpace(os.Getenv("WEVIBE_OLLAMA_URL"))
 		if ollamaURL == "" {
 			ollamaURL = "http://localhost:11434"
 		}
 		resolved.BaseURL = fmt.Sprintf("%s/v1", strings.TrimSuffix(ollamaURL, "/"))
 		resolved.APIKey = "ollama"
-		resolved.Model = asStringOrEmpty(parsed.EmbeddingOllamaModel)
 	default:
 		return EmbeddingConfig{}, fmt.Errorf("unsupported embedding provider %q", provider)
 	}

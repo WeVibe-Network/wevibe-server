@@ -8,6 +8,7 @@ dist/
 .venv/
 venv/
 .env
+.env.local
 *.env
 # Never commit prompt-string OVERRIDE files (runtime overrides / scratch prompt dirs).
 # The canonical extraction prompts ARE committed as .md (single source of truth, D-5.6):
