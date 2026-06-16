@@ -9,54 +9,39 @@ import { getProfile, type ProfileResponse } from '@/lib/hub-client';
 import { useIdentity } from '@/lib/identity-context';
 import { resetMcpClient } from '@/lib/mcp-client';
 import type { DashboardSettings } from '@/lib/settings';
+import { DASHBOARD_SETTINGS_DEFAULTS } from '@/lib/settings-defaults';
 import { txError, txSuccess, txToast } from '@/lib/toast';
 import { clearWalletAddress, getIdentity, setWalletAddress } from '@/lib/wevibe-auth';
 import { connectWallet, disconnectWallet } from '@/lib/wallet-connect';
 import ClientTime from '@/components/ui/client-time';
 import { toast } from 'sonner';
 
-const DEFAULT_DASHBOARD_SETTINGS: DashboardSettings = {
-  llm_provider: 'ollama',
-  ollama_url: 'http://localhost:11434',
-  ollama_model: 'qwen2.5:14b',
-  openrouter_api_key: '',
-  openrouter_model: 'anthropic/claude-sonnet-4',
-  lmstudio_url: 'http://127.0.0.1:1234/v1',
-  lmstudio_model: '',
-  embedding_provider: 'lm_studio',
-  embedding_ollama_model: 'nomic-embed-text',
-  embedding_lmstudio_model: 'text-embedding-nomic-embed-text-v1.5',
-  embedding_openrouter_model: 'openai/text-embedding-3-large',
-  org_id: '',
-  mod_pubkey: '',
-};
-
 function normalizeDashboardSettings(value: Partial<DashboardSettings>): DashboardSettings {
   return {
     llm_provider:
       value.llm_provider === 'openrouter' || value.llm_provider === 'lm_studio'
         ? value.llm_provider
-        : 'ollama',
-    ollama_url: value.ollama_url ?? DEFAULT_DASHBOARD_SETTINGS.ollama_url,
-    ollama_model: value.ollama_model ?? DEFAULT_DASHBOARD_SETTINGS.ollama_model,
-    openrouter_api_key: value.openrouter_api_key ?? DEFAULT_DASHBOARD_SETTINGS.openrouter_api_key,
-    openrouter_model: value.openrouter_model ?? DEFAULT_DASHBOARD_SETTINGS.openrouter_model,
-    lmstudio_url: value.lmstudio_url ?? DEFAULT_DASHBOARD_SETTINGS.lmstudio_url,
-    lmstudio_model: value.lmstudio_model ?? DEFAULT_DASHBOARD_SETTINGS.lmstudio_model,
+        : DASHBOARD_SETTINGS_DEFAULTS.llm_provider,
+    ollama_url: value.ollama_url ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_url,
+    ollama_model: value.ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_model,
+    openrouter_api_key: value.openrouter_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_api_key,
+    openrouter_model: value.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
+    lmstudio_url: value.lmstudio_url ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_url,
+    lmstudio_model: value.lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_model,
     embedding_provider:
       value.embedding_provider === 'ollama'
       || value.embedding_provider === 'openrouter'
       || value.embedding_provider === 'lm_studio'
         ? value.embedding_provider
-        : DEFAULT_DASHBOARD_SETTINGS.embedding_provider,
+        : DASHBOARD_SETTINGS_DEFAULTS.embedding_provider,
     embedding_ollama_model:
-      value.embedding_ollama_model ?? DEFAULT_DASHBOARD_SETTINGS.embedding_ollama_model,
+      value.embedding_ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_ollama_model,
     embedding_lmstudio_model:
-      value.embedding_lmstudio_model ?? DEFAULT_DASHBOARD_SETTINGS.embedding_lmstudio_model,
+      value.embedding_lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_lmstudio_model,
     embedding_openrouter_model:
-      value.embedding_openrouter_model ?? DEFAULT_DASHBOARD_SETTINGS.embedding_openrouter_model,
-    org_id: value.org_id ?? DEFAULT_DASHBOARD_SETTINGS.org_id,
-    mod_pubkey: value.mod_pubkey ?? DEFAULT_DASHBOARD_SETTINGS.mod_pubkey,
+      value.embedding_openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_openrouter_model,
+    org_id: value.org_id ?? DASHBOARD_SETTINGS_DEFAULTS.org_id,
+    mod_pubkey: value.mod_pubkey ?? DASHBOARD_SETTINGS_DEFAULTS.mod_pubkey,
   };
 }
 

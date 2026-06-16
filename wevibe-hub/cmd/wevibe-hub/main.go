@@ -153,7 +153,7 @@ func main() {
 	handlers.SetNotificationDispatcher(notificationDispatcher)
 
 	txDecoder := chain.BuildTxDecoder(chainClient.GetCodec())
-	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, cfg.OllamaURL, umbralService)
+	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, umbralService)
 	watcher.SetDispatcher(notificationDispatcher)
 	go func() {
 		if err := watcher.Start(ctx); err != nil {

@@ -24,7 +24,6 @@ import (
 	reputationtypes "github.com/wevibe-network/wevibe-chain/x/reputation/types"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/embed"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/envelopes"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
@@ -42,7 +41,6 @@ type ChainWatcher struct {
 	notifHub      *notifications.NotificationHub
 	dispatcher    *notifications.Dispatcher
 	qdrantClient  *retrieval.QdrantClient
-	embedURL      string
 	umbralService *umbral.Service
 }
 
@@ -89,7 +87,7 @@ func BuildTxDecoder(cdc codec.Codec) TxDecoderFunc {
 	}
 }
 
-func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, txDecoder TxDecoderFunc, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, embedURL string, umbralService *umbral.Service) *ChainWatcher {
+func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Logger, txDecoder TxDecoderFunc, notifHub *notifications.NotificationHub, qdrantClient *retrieval.QdrantClient, umbralService *umbral.Service) *ChainWatcher {
 	return &ChainWatcher{
 		chainClient:   chainClient,
 		db:            db,
@@ -97,7 +95,6 @@ func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Log
 		txDecoder:     txDecoder,
 		notifHub:      notifHub,
 		qdrantClient:  qdrantClient,
-		embedURL:      embedURL,
 		umbralService: umbralService,
 	}
 }
@@ -219,18 +216,6 @@ func (w *ChainWatcher) catchUp(ctx context.Context, lastSeen int64) error {
 		}
 	}
 	return nil
-}
-
-func (w *ChainWatcher) computeEmbedding(ctx context.Context, keywords []string) ([]float32, error) {
-	if len(keywords) == 0 {
-		return make([]float32, embed.EMBED_DIM), nil
-	}
-	combinedText := strings.Join(keywords, " ")
-	vector, err := embed.GetEmbedding(ctx, w.embedURL, combinedText)
-	if err != nil || len(vector) == 0 {
-		return make([]float32, embed.EMBED_DIM), nil
-	}
-	return vector, nil
 }
 
 func (w *ChainWatcher) reconnect(ctx context.Context) error {

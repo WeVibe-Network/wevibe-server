@@ -11,7 +11,6 @@ type Config struct {
 	DatabaseURL     string
 	QdrantAddr      string
 	QdrantAPIKey    string
-	OllamaURL       string
 	StripeSecretKey string
 	S3Bucket        string
 	NodePrivkey     string
@@ -50,7 +49,6 @@ func Load() Config {
 		DatabaseURL:                os.Getenv("DATABASE_URL"),
 		QdrantAddr:                 getEnvOrDefault("QDRANT_ADDR", "localhost:6333"),
 		QdrantAPIKey:               qdrantAPIKey,
-		OllamaURL:                  getEnvOrDefault("OLLAMA_URL", "http://localhost:11434"),
 		StripeSecretKey:            os.Getenv("STRIPE_SECRET_KEY"),
 		S3Bucket:                   getEnvOrDefault("WEVIBE_S3_BUCKET", "wevibe-memories"),
 		NodePrivkey:                os.Getenv("HUB_NODE_PRIVKEY"),

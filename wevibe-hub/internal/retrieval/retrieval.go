@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +41,7 @@ func OrgCollectionName(orgID string) string {
 	return "org_" + orgID + "_memories"
 }
 
-const EMBED_DIM = 768
+const EMBED_DIM = 3072
 const contestedThreshold = 0.20
 
 const (
@@ -453,25 +456,43 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 
 	reqBody, err := json.Marshal(searchReq)
 	if err != nil {
+		log.Printf("[recall] qdrant search marshal FAILED org=%s collection=%s vecDim=%d: %v", orgID, OrgCollectionName(orgID), len(vector), err)
 		return nil, false, fmt.Errorf("marshal search request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/collections/%s/points/search", c.restURL, OrgCollectionName(orgID))
+	collectionName := OrgCollectionName(orgID)
+	url := fmt.Sprintf("%s/collections/%s/points/search", c.restURL, collectionName)
+	log.Printf("[recall] qdrant search request org=%s collection=%s url=%s vecDim=%d limit=%d includeDormant=%v kw=%d", orgID, collectionName, url, len(vector), searchLimit, includeDormant, len(keywordWeights))
 	req, err := c.newRequest(ctx, "POST", url, reqBody)
 	if err != nil {
+		log.Printf("[recall] qdrant search create request FAILED org=%s collection=%s url=%s: %v", orgID, collectionName, url, err)
 		return nil, false, fmt.Errorf("create request: %w", err)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[recall] qdrant search http call FAILED org=%s collection=%s url=%s: %v", orgID, collectionName, url, err)
 		return nil, false, fmt.Errorf("execute search request: %w", err)
 	}
 	defer resp.Body.Close()
+	log.Printf("[recall] qdrant search response org=%s collection=%s status=%d", orgID, collectionName, resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			log.Printf("[recall] qdrant search non-2xx read body FAILED org=%s collection=%s status=%d: %v", orgID, collectionName, resp.StatusCode, readErr)
+		}
+		body := string(bodyBytes)
+		if body == "" {
+			body = "<empty>"
+		}
+		log.Printf("[recall] qdrant search non-2xx org=%s collection=%s status=%d queryVecDim=%d body=%s", orgID, collectionName, resp.StatusCode, len(vector), body)
+		if expectedDim, ok := extractExpectedVectorDim(body); ok {
+			log.Printf("[recall] qdrant vector dimensions org=%s collection=%s queryVecDim=%d expectedVecDim=%d", orgID, collectionName, len(vector), expectedDim)
+		}
 		var errResp map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
+		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			return nil, false, fmt.Errorf("search failed: %v", errResp)
 		}
 		return nil, false, fmt.Errorf("search failed with status %d", resp.StatusCode)
@@ -485,6 +506,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+		log.Printf("[recall] qdrant search decode FAILED org=%s collection=%s: %v", orgID, collectionName, err)
 		return nil, false, fmt.Errorf("decode search response: %w", err)
 	}
 
@@ -666,6 +688,38 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 
 	return memoryResults, contested, nil
+}
+
+func extractExpectedVectorDim(body string) (int, bool) {
+	lower := strings.ToLower(body)
+	idx := strings.Index(lower, "expected dim")
+	if idx == -1 {
+		return 0, false
+	}
+
+	segment := lower[idx+len("expected dim"):]
+	start := -1
+	for i := 0; i < len(segment); i++ {
+		if segment[i] >= '0' && segment[i] <= '9' {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return 0, false
+	}
+
+	end := start
+	for end < len(segment) && segment[end] >= '0' && segment[end] <= '9' {
+		end++
+	}
+
+	value, err := strconv.Atoi(segment[start:end])
+	if err != nil {
+		return 0, false
+	}
+
+	return value, true
 }
 
 type NearDupMatch struct {

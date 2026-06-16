@@ -130,6 +130,137 @@ func TestVerifyKeywords_FailClosedOnWrongVectorDimension(t *testing.T) {
 	}
 }
 
+func TestVerifyKeywords_VectorDimensionGate_BatchRejectsLegacyAndEmptyVectors(t *testing.T) {
+	pool := testPoolMod(t)
+	handlers.SetPool(pool)
+
+	orgID, contributorPubkey := setupOrgForModeration(t, pool)
+	leader := newVoteActor(t)
+	insertLeaderForVerify(t, pool, orgID, leader.pubHex)
+
+	legacyDimSubmission := insertPendingSubmissionWithStoredExtraction(t, pool, orgID, contributorPubkey)
+	emptyVectorSubmission := insertPendingSubmissionWithStoredExtraction(t, pool, orgID, contributorPubkey)
+	validDimSubmission := insertPendingSubmissionWithStoredExtraction(t, pool, orgID, contributorPubkey)
+
+	router := chi.NewRouter()
+	router.Post("/v1/orgs/{orgID}/verify-keywords", handlers.VerifyKeywords)
+
+	const legacyEmbeddingDim = 768
+	validVector := make([]float32, embed.EMBED_DIM)
+	validVector[0] = 0.25
+	validVector[embed.EMBED_DIM-1] = 0.75
+
+	resp := performVerifyKeywordsRequest(t, router, orgID, leader, handlers.VerifyKeywordsRequest{
+		Entries: []handlers.VerifyEntry{
+			{
+				SubmissionHash:         legacyDimSubmission,
+				Vector:                 make([]float32, legacyEmbeddingDim),
+				EmbeddingModelID:       "leader-card-model",
+				EmbeddingSchemaVersion: "schema-v1",
+			},
+			{
+				SubmissionHash:         emptyVectorSubmission,
+				Vector:                 []float32{},
+				EmbeddingModelID:       "leader-card-model",
+				EmbeddingSchemaVersion: "schema-v1",
+			},
+			{
+				SubmissionHash:         validDimSubmission,
+				Vector:                 validVector,
+				EmbeddingModelID:       "leader-card-model",
+				EmbeddingSchemaVersion: "schema-v1",
+			},
+		},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload verifyKeywordsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Verified != 1 {
+		t.Fatalf("expected verified=1 (only the valid-dimension vector), got %d", payload.Verified)
+	}
+	if len(payload.Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(payload.Results))
+	}
+
+	outcomes := make(map[string]verifyKeywordOutcome, len(payload.Results))
+	for _, outcome := range payload.Results {
+		outcomes[outcome.SubmissionHash] = outcome
+	}
+
+	assertOutcome := func(hash string, wantPassed bool, wantError string) {
+		t.Helper()
+		outcome, ok := outcomes[hash]
+		if !ok {
+			t.Fatalf("missing outcome for submission %s", hash)
+		}
+		if outcome.Passed != wantPassed {
+			t.Fatalf("submission %s passed=%v, want %v (error=%q)", hash, outcome.Passed, wantPassed, outcome.Error)
+		}
+		if outcome.Error != wantError {
+			t.Fatalf("submission %s unexpected error: got %q want %q", hash, outcome.Error, wantError)
+		}
+	}
+
+	assertOutcome(
+		legacyDimSubmission,
+		false,
+		fmt.Sprintf("missing or wrong-dimension embedding vector (got %d, expected %d)", legacyEmbeddingDim, embed.EMBED_DIM),
+	)
+	assertOutcome(
+		emptyVectorSubmission,
+		false,
+		fmt.Sprintf("missing or wrong-dimension embedding vector (got %d, expected %d)", 0, embed.EMBED_DIM),
+	)
+	assertOutcome(validDimSubmission, true, "")
+
+	assertSubmission := func(hash, wantStatus string, wantVectorPersisted bool) {
+		t.Helper()
+
+		var status string
+		var embeddingVector []byte
+		err := pool.QueryRow(context.Background(), `
+			SELECT status, embedding_vector
+			FROM pending_submissions
+			WHERE org_id = $1 AND submission_hash = $2
+		`, orgID, hash).Scan(&status, &embeddingVector)
+		if err != nil {
+			t.Fatalf("query submission %s: %v", hash, err)
+		}
+
+		if status != wantStatus {
+			t.Fatalf("submission %s status mismatch: got %q want %q", hash, status, wantStatus)
+		}
+
+		if !wantVectorPersisted {
+			if len(embeddingVector) != 0 {
+				t.Fatalf("submission %s expected no embedding_vector persisted, got %s", hash, string(embeddingVector))
+			}
+			return
+		}
+
+		if len(embeddingVector) == 0 {
+			t.Fatalf("submission %s expected embedding_vector to be persisted", hash)
+		}
+
+		var stored []float32
+		if err := json.Unmarshal(embeddingVector, &stored); err != nil {
+			t.Fatalf("submission %s unmarshal embedding_vector: %v", hash, err)
+		}
+		if len(stored) != embed.EMBED_DIM {
+			t.Fatalf("submission %s stored vector dim mismatch: got %d want %d", hash, len(stored), embed.EMBED_DIM)
+		}
+	}
+
+	assertSubmission(legacyDimSubmission, protocol.SubmissionStatusPendingKeyword, false)
+	assertSubmission(emptyVectorSubmission, protocol.SubmissionStatusPendingKeyword, false)
+	assertSubmission(validDimSubmission, protocol.SubmissionStatusPendingChain, true)
+}
+
 func TestVerifyKeywords_TransitionsToPendingChainAndPersistsEmbedding(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)

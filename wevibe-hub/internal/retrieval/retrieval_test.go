@@ -2,9 +2,11 @@ package retrieval
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -204,8 +206,114 @@ func TestOrgCollectionName(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	if EMBED_DIM != 768 {
-		t.Errorf("expected EMBED_DIM to be 768, got %d", EMBED_DIM)
+	if EMBED_DIM != 3072 {
+		t.Errorf("expected EMBED_DIM to be 3072, got %d", EMBED_DIM)
+	}
+}
+
+func TestQueryPoints_EmbeddingModelFilterAppliedConditionally(t *testing.T) {
+	type capturedSearchRequest struct {
+		path string
+		body map[string]any
+	}
+
+	captured := make([]capturedSearchRequest, 0, 2)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode qdrant request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		captured = append(captured, capturedSearchRequest{path: r.URL.Path, body: payload})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": []any{}})
+	}))
+	defer server.Close()
+
+	client := &QdrantClient{
+		restURL: server.URL,
+		apiKey:  "test-api-key-for-unit-tests-only",
+	}
+	client.SetPendingDenialDB(emptyPendingDenialDB{})
+
+	orgID := "filter-org"
+	vector := make([]float32, EMBED_DIM)
+
+	_, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "text-embedding-3-large", 5, false)
+	if err != nil {
+		t.Fatalf("QueryPoints with embedding model id failed: %v", err)
+	}
+
+	_, _, err = client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false)
+	if err != nil {
+		t.Fatalf("QueryPoints without embedding model id failed: %v", err)
+	}
+
+	if len(captured) != 2 {
+		t.Fatalf("expected 2 captured qdrant search requests, got %d", len(captured))
+	}
+
+	wantPath := fmt.Sprintf("/collections/%s/points/search", OrgCollectionName(orgID))
+	for i, req := range captured {
+		if req.path != wantPath {
+			t.Fatalf("request %d path mismatch: got %q want %q", i, req.path, wantPath)
+		}
+	}
+
+	assertEmbeddingModelFilterCondition(t, captured[0].body, "text-embedding-3-large", true)
+	assertEmbeddingModelFilterCondition(t, captured[1].body, "", false)
+}
+
+func assertEmbeddingModelFilterCondition(t *testing.T, requestBody map[string]any, expectedModelID string, expected bool) {
+	t.Helper()
+
+	filter, ok := requestBody["filter"].(map[string]any)
+	if !ok {
+		t.Fatalf("search request missing filter object: %#v", requestBody)
+	}
+
+	mustConditions, ok := filter["must"].([]any)
+	if !ok {
+		t.Fatalf("search request missing filter.must conditions: %#v", filter)
+	}
+
+	foundEmbeddingModelFilter := false
+	for _, rawCondition := range mustConditions {
+		condition, ok := rawCondition.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, _ := condition["key"].(string)
+		if key != "embedding_model_id" {
+			continue
+		}
+
+		foundEmbeddingModelFilter = true
+		if !expected {
+			t.Fatalf("embedding_model_id filter present unexpectedly: %#v", condition)
+		}
+
+		match, ok := condition["match"].(map[string]any)
+		if !ok {
+			t.Fatalf("embedding_model_id condition missing match clause: %#v", condition)
+		}
+
+		actualModelID, _ := match["value"].(string)
+		if actualModelID != expectedModelID {
+			t.Fatalf("embedding_model_id filter value mismatch: got %q want %q", actualModelID, expectedModelID)
+		}
+	}
+
+	if expected && !foundEmbeddingModelFilter {
+		t.Fatalf("embedding_model_id filter missing from must conditions: %#v", mustConditions)
+	}
+
+	if !expected && foundEmbeddingModelFilter {
+		t.Fatalf("embedding_model_id filter should be omitted when model id empty: %#v", mustConditions)
 	}
 }
 

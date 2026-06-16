@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
+import { DASHBOARD_SETTINGS_DEFAULTS } from './settings-defaults';
+
 export interface DashboardSettings {
   llm_provider: 'ollama' | 'openrouter' | 'lm_studio';
   ollama_url: string;
@@ -19,19 +21,9 @@ export interface DashboardSettings {
 }
 
 const DEFAULTS: DashboardSettings = {
-  llm_provider: 'ollama',
-  ollama_url: process.env.WEVIBE_OLLAMA_URL ?? 'http://localhost:11434',
-  ollama_model: '',
-  openrouter_api_key: '',
-  openrouter_model: '',
-  lmstudio_url: process.env.WEVIBE_LMSTUDIO_URL ?? 'http://127.0.0.1:1234/v1',
-  lmstudio_model: '',
-  embedding_provider: 'lm_studio',
-  embedding_ollama_model: 'nomic-embed-text',
-  embedding_lmstudio_model: 'text-embedding-nomic-embed-text-v1.5',
-  embedding_openrouter_model: 'openai/text-embedding-3-large',
-  org_id: '',
-  mod_pubkey: '',
+  ...DASHBOARD_SETTINGS_DEFAULTS,
+  ollama_url: process.env.WEVIBE_OLLAMA_URL ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_url,
+  lmstudio_url: process.env.WEVIBE_LMSTUDIO_URL ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_url,
 };
 
 export function getProviderReadiness(

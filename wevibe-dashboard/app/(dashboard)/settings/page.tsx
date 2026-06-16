@@ -14,6 +14,7 @@ import {
   type MemberRecord,
 } from '@/lib/hub-client';
 import { type DashboardSettings } from '@/lib/settings';
+import { DASHBOARD_SETTINGS_DEFAULTS } from '@/lib/settings-defaults';
 import { connectWallet } from '@/lib/wallet-connect';
 import {
   buildSetOrgConfigMsg,
@@ -1323,19 +1324,20 @@ function OrgLlamaConfig() {
       .then(r => r.json())
       .then(data => {
         const s = {
-          llm_provider: data.llm_provider ?? 'ollama',
-          ollama_url: data.ollama_url ?? 'http://localhost:11434',
-          ollama_model: data.ollama_model ?? 'qwen2.5:14b',
-          lmstudio_url: data.lmstudio_url ?? 'http://127.0.0.1:1234/v1',
-          lmstudio_model: data.lmstudio_model ?? '',
-          openrouter_api_key: data.openrouter_api_key ?? '',
-          openrouter_model: data.openrouter_model ?? 'anthropic/claude-sonnet-4',
-          embedding_provider: data.embedding_provider ?? 'lm_studio',
-          embedding_ollama_model: data.embedding_ollama_model ?? 'nomic-embed-text',
-          embedding_lmstudio_model: data.embedding_lmstudio_model ?? 'text-embedding-nomic-embed-text-v1.5',
-          embedding_openrouter_model: data.embedding_openrouter_model ?? 'openai/text-embedding-3-large',
-          org_id: data.org_id ?? '',
-          mod_pubkey: data.mod_pubkey ?? '',
+          llm_provider: data.llm_provider ?? DASHBOARD_SETTINGS_DEFAULTS.llm_provider,
+          ollama_url: data.ollama_url ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_url,
+          ollama_model: data.ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_model,
+          lmstudio_url: data.lmstudio_url ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_url,
+          lmstudio_model: data.lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_model,
+          openrouter_api_key: data.openrouter_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_api_key,
+          openrouter_model: data.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
+          embedding_provider: data.embedding_provider ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_provider,
+          embedding_ollama_model: data.embedding_ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_ollama_model,
+          embedding_lmstudio_model: data.embedding_lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_lmstudio_model,
+          embedding_openrouter_model:
+            data.embedding_openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_openrouter_model,
+          org_id: data.org_id ?? DASHBOARD_SETTINGS_DEFAULTS.org_id,
+          mod_pubkey: data.mod_pubkey ?? DASHBOARD_SETTINGS_DEFAULTS.mod_pubkey,
         } as DashboardSettings;
         setSettings(s);
       })
