@@ -44,3 +44,5 @@ AGENTS.md
 MANAGER.md
 WORKER.md
 SESSIONCONTINUANCE.md
+handlers.test
+*.test

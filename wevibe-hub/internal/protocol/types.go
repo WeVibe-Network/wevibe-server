@@ -328,12 +328,6 @@ type RemoveMemberRequest struct {
 	Signature string `json:"signature"`
 }
 
-type UpdateMemberRoleRequest struct {
-	Role      string `json:"role"`
-	SignedBy  string `json:"signed_by"`
-	Signature string `json:"signature"`
-}
-
 type TransferLeadershipRequest struct {
 	NewLeaderPubkey string `json:"new_leader_pubkey"`
 	SignedBy        string `json:"signed_by"`

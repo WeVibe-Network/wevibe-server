@@ -63,16 +63,6 @@ func RemoveMemberMessage(orgID, pubkey, signedBy string) []byte {
 	}, "\n"))
 }
 
-func UpdateMemberRoleMessage(orgID, pubkey, role, signedBy string) []byte {
-	return []byte(strings.Join([]string{
-		"wevibe.update_member_role.v1",
-		fmt.Sprintf("org_id:%s", orgID),
-		fmt.Sprintf("pubkey:%s", pubkey),
-		fmt.Sprintf("role:%s", role),
-		fmt.Sprintf("signed_by:%s", signedBy),
-	}, "\n"))
-}
-
 func TransferLeadershipMessage(orgID, newLeaderPubkey, signedBy string) []byte {
 	return []byte(strings.Join([]string{
 		"wevibe.transfer_leadership.v1",
