@@ -15,7 +15,7 @@ interface OpenRouterEmbeddingModelsResponse {
 export async function GET() {
   try {
     const settings = loadSettings();
-    const openrouterApiKey = settings.openrouter_api_key.trim();
+    const openrouterApiKey = settings.embedding_api_key.trim();
     const shouldSendAuth =
       openrouterApiKey.length > 0 && !openrouterApiKey.startsWith('••••');
 

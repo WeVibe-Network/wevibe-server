@@ -1283,13 +1283,13 @@ export default function SettingsPage() {
 
           <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
             <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-wv-text">Org &amp; Embedding Configuration</h2>
-              <InfoTooltip label="About org and embedding configuration">
-                Organization identity and vector embedding provider settings for this org.
+              <h2 className="text-lg font-semibold text-wv-text">Org Embedding Model</h2>
+              <InfoTooltip label="About org embedding model settings">
+                Organization-scoped embedding provider, model, and key settings for this org.
               </InfoTooltip>
             </div>
             <p className="mt-1 text-sm text-wv-dim">
-              Configure your organization ID, moderator pubkey, and vector embedding provider/model.
+              Configure your organization ID, moderator pubkey, and org embedding provider/model.
             </p>
 
             <OrgLlamaConfig />
@@ -1329,7 +1329,8 @@ function OrgLlamaConfig() {
           ollama_model: data.ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_model,
           lmstudio_url: data.lmstudio_url ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_url,
           lmstudio_model: data.lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_model,
-          openrouter_api_key: data.openrouter_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_api_key,
+          extraction_api_key: data.extraction_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_api_key,
+          embedding_api_key: data.embedding_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_api_key,
           openrouter_model: data.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
           embedding_provider: data.embedding_provider ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_provider,
           embedding_ollama_model: data.embedding_ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_ollama_model,
@@ -1710,8 +1711,8 @@ function OrgLlamaConfig() {
               <input
                 id="embedding-openrouter-api-key"
                 type="password"
-                value={settings.openrouter_api_key}
-                onChange={e => setSettings(s => s ? { ...s, openrouter_api_key: e.target.value } : s)}
+                value={settings.embedding_api_key}
+                onChange={e => setSettings(s => s ? { ...s, embedding_api_key: e.target.value } : s)}
                 placeholder="sk-..."
                 className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
               />

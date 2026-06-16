@@ -104,7 +104,7 @@ export async function GET() {
   };
 
   if (provider === 'openrouter') {
-    const apiKey = settings.openrouter_api_key.trim();
+    const apiKey = settings.embedding_api_key.trim();
     if (apiKey.length === 0 || apiKey.startsWith('••••')) {
       return NextResponse.json({
         ready: false,

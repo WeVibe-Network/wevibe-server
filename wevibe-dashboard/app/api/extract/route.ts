@@ -384,7 +384,7 @@ export async function POST(request: NextRequest) {
 
   if (useOpenRouter) {
     mcpExtractRequestBody.provider = 'openrouter';
-    mcpExtractRequestBody.api_key = settings.openrouter_api_key;
+    mcpExtractRequestBody.api_key = settings.extraction_api_key;
     mcpExtractRequestBody.base_url = 'https://openrouter.ai/api/v1';
   } else if (useLmStudio) {
     mcpExtractRequestBody.provider = 'lm_studio';

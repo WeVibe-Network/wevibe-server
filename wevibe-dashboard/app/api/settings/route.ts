@@ -14,8 +14,11 @@ export async function GET() {
   const providerReadiness = getProviderReadiness(settings);
   return NextResponse.json({
     ...settings,
-    openrouter_api_key: settings.openrouter_api_key
-      ? '••••' + settings.openrouter_api_key.slice(-4)
+    extraction_api_key: settings.extraction_api_key
+      ? '••••' + settings.extraction_api_key.slice(-4)
+      : '',
+    embedding_api_key: settings.embedding_api_key
+      ? '••••' + settings.embedding_api_key.slice(-4)
       : '',
     provider_ready: providerReadiness.ready,
     provider_ready_reason: providerReadiness.reason,
@@ -30,10 +33,14 @@ export async function PUT(request: NextRequest) {
     llm_provider: body.llm_provider ?? current.llm_provider,
     ollama_url: body.ollama_url ?? current.ollama_url,
     ollama_model: body.ollama_model ?? current.ollama_model,
-    openrouter_api_key:
-      body.openrouter_api_key && !body.openrouter_api_key.startsWith('••••')
-        ? body.openrouter_api_key
-        : current.openrouter_api_key,
+    extraction_api_key:
+      body.extraction_api_key && !body.extraction_api_key.startsWith('••••')
+        ? body.extraction_api_key
+        : current.extraction_api_key,
+    embedding_api_key:
+      body.embedding_api_key && !body.embedding_api_key.startsWith('••••')
+        ? body.embedding_api_key
+        : current.embedding_api_key,
     openrouter_model: body.openrouter_model ?? current.openrouter_model,
     lmstudio_url: body.lmstudio_url ?? current.lmstudio_url,
     lmstudio_model: body.lmstudio_model ?? current.lmstudio_model,
@@ -52,8 +59,11 @@ export async function PUT(request: NextRequest) {
   invalidateReadinessCache();
   return NextResponse.json({
     ...updated,
-    openrouter_api_key: updated.openrouter_api_key
-      ? '••••' + updated.openrouter_api_key.slice(-4)
+    extraction_api_key: updated.extraction_api_key
+      ? '••••' + updated.extraction_api_key.slice(-4)
+      : '',
+    embedding_api_key: updated.embedding_api_key
+      ? '••••' + updated.embedding_api_key.slice(-4)
       : '',
   });
 }

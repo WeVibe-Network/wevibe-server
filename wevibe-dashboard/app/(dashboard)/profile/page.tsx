@@ -24,7 +24,8 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
         : DASHBOARD_SETTINGS_DEFAULTS.llm_provider,
     ollama_url: value.ollama_url ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_url,
     ollama_model: value.ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_model,
-    openrouter_api_key: value.openrouter_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_api_key,
+    extraction_api_key: value.extraction_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_api_key,
+    embedding_api_key: value.embedding_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_api_key,
     openrouter_model: value.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
     lmstudio_url: value.lmstudio_url ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_url,
     lmstudio_model: value.lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_model,
@@ -476,7 +477,7 @@ export default function ProfilePage() {
   };
 
   const openRouterApiKeyChanged = Boolean(
-    settings?.openrouter_api_key && !settings.openrouter_api_key.startsWith('••••'),
+    settings?.extraction_api_key && !settings.extraction_api_key.startsWith('••••'),
   );
 
   const isSettingsDirty = Boolean(
@@ -694,7 +695,7 @@ export default function ProfilePage() {
 
         <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
           <div className="flex items-start justify-between gap-3">
-            <h3 className="text-lg font-semibold text-wv-text">App &amp; Model settings</h3>
+            <h3 className="text-lg font-semibold text-wv-text">Extraction Model</h3>
             <InfoTooltip label="App & Model settings">
               Local app preferences: your MCP server URL and the language model used for extraction. Stored on this device.
             </InfoTooltip>
@@ -899,12 +900,12 @@ export default function ProfilePage() {
                       <input
                         id="profile-openrouter-key"
                         type="password"
-                        value={settings.openrouter_api_key}
+                        value={settings.extraction_api_key}
                         onChange={event => setSettings(current => (
                           current
                             ? {
                               ...current,
-                              openrouter_api_key: event.target.value,
+                              extraction_api_key: event.target.value,
                             }
                             : current
                         ))}

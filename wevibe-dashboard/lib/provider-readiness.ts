@@ -43,7 +43,7 @@ function buildSignature(
   provider: CertifiedReadiness['provider'],
   model: string,
 ): string {
-  return `${provider}|${model}|${settings.ollama_url}|${settings.lmstudio_url}|${settings.openrouter_api_key.length > 0}`;
+  return `${provider}|${model}|${settings.ollama_url}|${settings.lmstudio_url}|${settings.extraction_api_key.length > 0}`;
 }
 
 function toCertifiedReadiness(
@@ -109,7 +109,7 @@ export async function getCertifiedReadiness(s: DashboardSettings): Promise<Certi
       const response = await fetch('https://openrouter.ai/api/v1/models', {
         method: 'GET',
         headers: {
-          Authorization: `Bearer ${s.openrouter_api_key}`,
+          Authorization: `Bearer ${s.extraction_api_key}`,
         },
         cache: 'no-store',
         signal: AbortSignal.timeout(5_000),
