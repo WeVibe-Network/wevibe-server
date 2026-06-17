@@ -16,7 +16,23 @@ type Vector = {
 
 const enc = new TextEncoder();
 
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function sha256Hex(data: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return toHex(new Uint8Array(digest));
+}
+
 const vectors: Vector[] = [
+  {
+    name: 'zero leaves (empty input)',
+    leaves: [],
+    expected: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  },
   {
     name: 'one leaf ("abc")',
     leaves: [enc.encode('abc')],
@@ -32,12 +48,24 @@ const vectors: Vector[] = [
     leaves: [enc.encode('abc'), enc.encode('def'), enc.encode('ghi')],
     expected: '3971de445e748ce8f150c12340fb84c991fdb9e7ec4c9cdc85ad17ea2b20b44a',
   },
+  {
+    name: 'four leaves ("abc","def","ghi","jkl") — even, balanced',
+    leaves: [enc.encode('abc'), enc.encode('def'), enc.encode('ghi'), enc.encode('jkl')],
+    expected: '732623ee9e53140f0007c490180e2af937815eb8932a555c7213388fa822653c',
+  },
+  {
+    name: 'five leaves ("abc","def","ghi","jkl","mno") — odd at multiple levels',
+    leaves: [enc.encode('abc'), enc.encode('def'), enc.encode('ghi'), enc.encode('jkl'), enc.encode('mno')],
+    expected: '442fa66be13666a62f20b9450a10985bc5c7a1edb2d152caedf373e77ff12352',
+  },
 ];
 
 let failed = 0;
+let total = 0;
 
 async function main() {
   for (const v of vectors) {
+    total += 1;
     const root = await computeMerkleRoot(v.leaves);
     const ok = root === v.expected;
     if (!ok) failed += 1;
@@ -45,11 +73,76 @@ async function main() {
       `${ok ? 'PASS' : 'FAIL'}: ${v.name}\n  got      ${root}\n  expected ${v.expected}`,
     );
   }
+
+  const singleLeaf = enc.encode('single leaf identity check');
+  const singleLeafRoot = await computeMerkleRoot([singleLeaf]);
+  const singleLeafExpected = await sha256Hex(singleLeaf);
+  const singleLeafOk = singleLeafRoot === singleLeafExpected;
+  total += 1;
+  if (!singleLeafOk) failed += 1;
+  console.log(
+    `${singleLeafOk ? 'PASS' : 'FAIL'}: single leaf identity property\n  got      ${singleLeafRoot}\n  expected ${singleLeafExpected}`,
+  );
+
+  const determinismLeaves = [
+    enc.encode('det-a'),
+    enc.encode('det-b'),
+    enc.encode('det-c'),
+    enc.encode('det-d'),
+    enc.encode('det-e'),
+  ];
+  const detRootA = await computeMerkleRoot(determinismLeaves);
+  const detRootB = await computeMerkleRoot(determinismLeaves);
+  const determinismOk = detRootA === detRootB;
+  total += 1;
+  if (!determinismOk) failed += 1;
+  console.log(
+    `${determinismOk ? 'PASS' : 'FAIL'}: determinism (same input twice)\n  first    ${detRootA}\n  second   ${detRootB}`,
+  );
+
+  const orderedLeaves = [
+    enc.encode('alpha'),
+    enc.encode('beta'),
+    enc.encode('gamma'),
+    enc.encode('delta'),
+    enc.encode('epsilon'),
+  ];
+  const swappedLeaves = [
+    enc.encode('beta'),
+    enc.encode('alpha'),
+    enc.encode('gamma'),
+    enc.encode('delta'),
+    enc.encode('epsilon'),
+  ];
+  const orderedRoot = await computeMerkleRoot(orderedLeaves);
+  const swappedRoot = await computeMerkleRoot(swappedLeaves);
+  const orderNormalizationOk = orderedRoot === swappedRoot;
+  total += 1;
+  if (!orderNormalizationOk) failed += 1;
+  console.log(
+    `${orderNormalizationOk ? 'PASS' : 'FAIL'}: input-order normalization (raw-leaf sort)\n  ordered  ${orderedRoot}\n  swapped  ${swappedRoot}`,
+  );
+
+  const changedLeaves = [
+    enc.encode('alpha'),
+    enc.encode('beta'),
+    enc.encode('gamma'),
+    enc.encode('delta'),
+    enc.encode('zeta'),
+  ];
+  const changedRoot = await computeMerkleRoot(changedLeaves);
+  const contentSensitivityOk = orderedRoot !== changedRoot;
+  total += 1;
+  if (!contentSensitivityOk) failed += 1;
+  console.log(
+    `${contentSensitivityOk ? 'PASS' : 'FAIL'}: content sensitivity (changing a leaf changes root)\n  original ${orderedRoot}\n  changed  ${changedRoot}`,
+  );
+
   if (failed > 0) {
-    console.log(`\nFAILED ${failed} of ${vectors.length} merkle parity vectors`);
+    console.log(`\nFAILED ${failed} of ${total} merkle tests`);
     process.exit(1);
   }
-  console.log(`\nAll ${vectors.length} merkle parity vectors PASSED`);
+  console.log(`\nAll ${total} merkle tests PASSED`);
 }
 
 main().catch((err) => {
