@@ -11,13 +11,14 @@ import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
 import { getConfig, isProductionEnv } from '@/lib/config';
 import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
+import { MCP_OFFLINE_CODE } from '@/lib/mcp-errors';
 import { useOrgContext } from '@/lib/org-context';
+import { finalizeOrgSetup, OrgBridgeError, requestOrgCryptoSetup } from '@/lib/org-bridge';
 import { SLOT_CAP, slotBarHeightPercent, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 import { connectWallet } from '@/lib/wallet-connect';
 import { createGuestIdentity, setWalletAddress } from '@/lib/wevibe-auth';
-import { finalizeOrgSetup, requestOrgCryptoSetup } from '@/lib/org-bridge';
 
 const vibeFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
 const REGISTER_ORG_STORAGE_QUOTA = 1000;
@@ -419,14 +420,18 @@ export default function BuyOrgPage() {
         txError(toastId, 'Created, but on-chain confirmation is taking longer than expected — refresh shortly.');
       }
     } catch (err) {
-      const kind = classifyError(err);
-      const fallbackMessage = err instanceof Error ? err.message : String(err);
+      if (err instanceof OrgBridgeError && err.code === MCP_OFFLINE_CODE) {
+        txError(toastId, err.message, err.remediation);
+      } else {
+        const kind = classifyError(err);
+        const fallbackMessage = err instanceof Error ? err.message : String(err);
 
-      if (kind === 'needs_gas') {
-        setShowFaucetPrompt(true);
+        if (kind === 'needs_gas') {
+          setShowFaucetPrompt(true);
+        }
+
+        txError(toastId, errorToastMessage(kind, fallbackMessage));
       }
-
-      txError(toastId, errorToastMessage(kind, fallbackMessage));
     } finally {
       setSubmitting(false);
     }

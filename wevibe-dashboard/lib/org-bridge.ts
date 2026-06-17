@@ -21,6 +21,22 @@ export interface OrgCryptoSetupResult {
 
 interface ErrorBody {
   error?: string;
+  code?: string;
+  remediation?: string;
+}
+
+export class OrgBridgeError extends Error {
+  readonly code?: string;
+  readonly remediation?: string;
+  readonly status: number;
+
+  constructor(message: string, opts: { code?: string; remediation?: string; status: number }) {
+    super(message);
+    this.name = 'OrgBridgeError';
+    this.code = opts.code;
+    this.remediation = opts.remediation;
+    this.status = opts.status;
+  }
 }
 
 async function parseErrorBody(response: Response): Promise<ErrorBody> {
@@ -46,7 +62,11 @@ export async function requestOrgCryptoSetup(args: {
 
   if (!response.ok) {
     const body = await parseErrorBody(response);
-    throw new Error(body.error ?? 'org crypto setup failed');
+    throw new OrgBridgeError(body.error ?? 'org crypto setup failed', {
+      code: body.code,
+      remediation: body.remediation,
+      status: response.status,
+    });
   }
 
   const body = (await response.json()) as {
@@ -76,7 +96,11 @@ export async function finalizeOrgSetup(setupId: string, orgId: string): Promise<
 
   if (!response.ok) {
     const body = await parseErrorBody(response);
-    throw new Error(body.error ?? 'org setup finalize failed');
+    throw new OrgBridgeError(body.error ?? 'org setup finalize failed', {
+      code: body.code,
+      remediation: body.remediation,
+      status: response.status,
+    });
   }
 }
 
@@ -93,6 +117,10 @@ export async function requestProvisionRecall(orgId: string): Promise<void> {
 
   if (!response.ok) {
     const body = await parseErrorBody(response);
-    throw new Error(body.error ?? 'provision recall failed');
+    throw new OrgBridgeError(body.error ?? 'provision recall failed', {
+      code: body.code,
+      remediation: body.remediation,
+      status: response.status,
+    });
   }
 }

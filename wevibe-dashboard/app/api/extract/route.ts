@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
+import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/lib/mcp-errors';
 import { getCertifiedReadiness } from '@/lib/provider-readiness';
 import { loadSettings } from '@/lib/settings';
 import type {
@@ -304,7 +305,7 @@ export async function POST(request: NextRequest) {
 
   if (!sessionToken) {
     return NextResponse.json(
-      { error: 'local WeVibe MCP not running (no session token)' },
+      { error: MCP_OFFLINE_ERROR, code: MCP_OFFLINE_CODE, remediation: MCP_OFFLINE_REMEDIATION },
       { status: 503 },
     );
   }

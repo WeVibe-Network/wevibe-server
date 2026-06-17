@@ -30,6 +30,13 @@ export function txSuccess(id: string | number, message: string, txHash?: string)
   toast.success(message, { id });
 }
 
-export function txError(id: string | number, message: string): void {
+export function txError(id: string | number, message: string, description?: string): void {
+  const normalizedDescription = description?.trim();
+
+  if (normalizedDescription) {
+    toast.error(message, { id, description: normalizedDescription });
+    return;
+  }
+
   toast.error(message, { id });
 }
