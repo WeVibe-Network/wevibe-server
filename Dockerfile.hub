@@ -28,7 +28,6 @@ WORKDIR /build
 # Now copy hub source (exclude go.mod/go.sum - already patched above)
 COPY wevibe-server/wevibe-hub/cmd ./cmd
 COPY wevibe-server/wevibe-hub/internal ./internal
-COPY wevibe-server/wevibe-hub/tests ./tests
 COPY wevibe-server/wevibe-hub/docs ./docs
 COPY wevibe-server/db/schema.sql ./db/schema.sql
 
