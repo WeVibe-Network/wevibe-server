@@ -152,6 +152,8 @@ CREATE TABLE IF NOT EXISTS pending_submissions (
     denial_reason           TEXT,
     moderator_pubkey        TEXT,
     approved_at             TIMESTAMPTZ,
+    commit_error            TEXT,
+    commit_attempted_at     TIMESTAMPTZ,
     extraction_result       JSONB,
     embedding_vector        JSONB,
     embedding_model_id      TEXT,

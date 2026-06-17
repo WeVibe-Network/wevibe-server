@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ import (
 
 func InviteMember(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
@@ -36,13 +37,13 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req protocol.InviteMemberRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
@@ -59,7 +60,7 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 	if req.PrePubkey != "" {
 		_, err = decodePrePubkey(req.PrePubkey)
 		if err != nil {
-			http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
+			WriteError(w, http.StatusBadRequest, "invalid_pre_pubkey", "pre_pubkey must be valid hex and exactly 33 bytes")
 			return
 		}
 	}
@@ -82,13 +83,13 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if leaderPubkey != req.SignedBy {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden")
 		return
 	}
 
 	canonical := verify.InviteMemberMessage(orgID, req.Pubkey, req.X25519Pubkey, req.Role, req.SignedBy, req.EncEnvelope, req.SearchEnvelope, req.ModEnvelope, req.CanContribute, req.CanModerate)
 	if err := verify.RequestSignature(req.SignedBy, req.Signature, canonical); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -101,7 +102,7 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 	member, err := members.InviteMember(r.Context(), pool, orgID, currentEpoch, req)
 	if err != nil {
 		if errors.Is(err, members.ErrInvalidPrePubkey) {
-			http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
+			WriteError(w, http.StatusBadRequest, "invalid_pre_pubkey", "pre_pubkey must be valid hex and exactly 33 bytes")
 			return
 		}
 		var pgErr *pgconn.PgError
@@ -137,14 +138,14 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 
 func GetMember(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	pubkey := chi.URLParam(r, "pubkey")
 	if orgID == "" || pubkey == "" {
-		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id and pubkey required")
 		return
 	}
 
@@ -163,7 +164,7 @@ func GetMember(w http.ResponseWriter, r *http.Request) {
 }
 func GetKeyEnvelope(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
@@ -175,24 +176,24 @@ func GetKeyEnvelope(w http.ResponseWriter, r *http.Request) {
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized: valid Authorization header required")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -220,7 +221,7 @@ func GetKeyEnvelope(w http.ResponseWriter, r *http.Request) {
 
 func ListMembers(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
@@ -262,7 +263,7 @@ func ListMembers(w http.ResponseWriter, r *http.Request) {
 
 func GetMemberOrgs(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
@@ -274,7 +275,7 @@ func GetMemberOrgs(w http.ResponseWriter, r *http.Request) {
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized: valid Authorization header required")
 		return
 	}
 
@@ -285,18 +286,18 @@ func GetMemberOrgs(w http.ResponseWriter, r *http.Request) {
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -316,7 +317,7 @@ func GetMemberOrgs(w http.ResponseWriter, r *http.Request) {
 
 func LinkWallet(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
@@ -328,13 +329,13 @@ func LinkWallet(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req protocol.LinkWalletRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
@@ -380,39 +381,39 @@ type storeMemberKFragRequest struct {
 
 func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	memberPubkey := chi.URLParam(r, "pubkey")
 	if orgID == "" || memberPubkey == "" {
-		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id and pubkey required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden")
 		return
 	}
 
 	var req protocol.EnableMemberRecallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	if req.PrePubkey != "" {
 		prePubkeyBytes, err := decodePrePubkey(req.PrePubkey)
 		if err != nil {
-			http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
+			WriteError(w, http.StatusBadRequest, "invalid_pre_pubkey", "pre_pubkey must be valid hex and exactly 33 bytes")
 			return
 		}
 
@@ -455,32 +456,32 @@ func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
 
 func DisableMemberRecall(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	memberPubkey := chi.URLParam(r, "pubkey")
 	if orgID == "" || memberPubkey == "" {
-		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id and pubkey required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden")
 		return
 	}
 
 	var req disableMemberRecallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
@@ -496,77 +497,78 @@ func DisableMemberRecall(w http.ResponseWriter, r *http.Request) {
 
 func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	memberPubkey := chi.URLParam(r, "pubkey")
 	if orgID == "" || memberPubkey == "" {
-		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id and pubkey required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized: valid Authorization header required")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req storeMemberKFragRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
 	prePubkey, err := decodePrePubkey(req.PrePubkey)
 	if err != nil {
-		http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_pre_pubkey", "pre_pubkey must be valid hex and exactly 33 bytes")
 		return
 	}
 
 	kfrag, err := hex.DecodeString(req.Kfrag)
 	if err != nil {
-		http.Error(w, `{"error":"kfrag must be valid hex"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_kfrag", "kfrag must be valid hex")
 		return
 	}
 
 	if umbralService == nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		WriteError(w, 500, "umbral_unavailable", "recall key service unavailable")
 		return
 	}
 
 	if err := umbralService.StoreKFrag(r.Context(), orgID, req.EpochID, prePubkey, kfrag); err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		log.Printf("[kfrag] StoreKFrag failed org=%s epoch=%d: %v", orgID, req.EpochID, err)
+		WriteError(w, http.StatusInternalServerError, "kfrag_store_failed", "failed to store recall key in sidecar", err.Error())
 		return
 	}
 
@@ -576,55 +578,55 @@ func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
 
 func RegisterPreKey(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	pubkey := chi.URLParam(r, "pubkey")
 	if orgID == "" || pubkey == "" {
-		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id and pubkey required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized: valid Authorization header required")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req protocol.RegisterPreKeyRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
 	prePubkey, err := decodePrePubkey(req.PrePubkey)
 	if err != nil {
-		http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_pre_pubkey", "pre_pubkey must be valid hex and exactly 33 bytes")
 		return
 	}
 
@@ -635,7 +637,7 @@ func RegisterPreKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !isLeader {
-			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden")
 			return
 		}
 	}
@@ -654,14 +656,14 @@ func RegisterPreKey(w http.ResponseWriter, r *http.Request) {
 
 func GetPreKey(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	pubkey := chi.URLParam(r, "pubkey")
 	if orgID == "" || pubkey == "" {
-		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id and pubkey required")
 		return
 	}
 

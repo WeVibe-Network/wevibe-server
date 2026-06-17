@@ -17,10 +17,21 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 )
 
-func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, contentHash []byte, keywords []string, contributorID string, contributorWallet string, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte) error {
+func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, contentHash []byte, keywords []string, contributorID string, contributorWallet string, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte) (retErr error) {
 	logger := w.logger.With("org_id", orgID, "tx_hash", txHash)
 
 	contentHashHex := hex.EncodeToString(contentHash)
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if err := w.recordSubmissionCommitError(ctx, orgID, contentHashHex, retErr.Error()); err != nil {
+			logger.Warn("failed to record pending_submission commit error",
+				"content_hash", contentHashHex,
+				"commit_error", retErr.Error(),
+				"error", err)
+		}
+	}()
 
 	var epochID int64
 	var extractionResult json.RawMessage
@@ -126,9 +137,11 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 			"cid", contentHashHex)
 	}
 
+	qdrantCommitError := ""
 	if shouldUpsertVector {
 		if err := retrieval.AddToIndex(ctx, w.qdrantClient, entry); err != nil {
 			logger.Warn("failed to add entry to qdrant index", "error", err)
+			qdrantCommitError = fmt.Sprintf("committed to chain but qdrant index failed: %v", err)
 		}
 	}
 
@@ -153,11 +166,19 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		}
 	}
 
+	var commitError any
+	if qdrantCommitError != "" {
+		commitError = qdrantCommitError
+	}
+
 	_, err = w.db.Exec(ctx, `
 		UPDATE pending_submissions
-		SET status = $3, updated_at = NOW()
+		SET status = $3,
+		    commit_error = $5,
+		    commit_attempted_at = NOW(),
+		    updated_at = NOW()
 		WHERE org_id = $1 AND submission_hash = $2 AND status = $4
-	`, orgID, contentHashHex, protocol.SubmissionStatusCommitted, protocol.SubmissionStatusPendingChain)
+	`, orgID, contentHashHex, protocol.SubmissionStatusCommitted, protocol.SubmissionStatusPendingChain, commitError)
 	if err != nil {
 		return fmt.Errorf("update pending_submissions: %w", err)
 	}
@@ -184,5 +205,18 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		"keywords_count", len(keywords),
 		"memory_type", memoryType)
 
+	return nil
+}
+
+func (w *ChainWatcher) recordSubmissionCommitError(ctx context.Context, orgID, submissionHash, commitError string) error {
+	_, err := w.db.Exec(ctx, `
+		UPDATE pending_submissions
+		SET commit_error = $3,
+		    commit_attempted_at = NOW()
+		WHERE org_id = $1 AND submission_hash = $2
+	`, orgID, submissionHash, commitError)
+	if err != nil {
+		return fmt.Errorf("update pending_submissions commit error: %w", err)
+	}
 	return nil
 }

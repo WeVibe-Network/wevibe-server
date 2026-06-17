@@ -488,6 +488,10 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			body = "<empty>"
 		}
 		log.Printf("[recall] qdrant search non-2xx org=%s collection=%s status=%d queryVecDim=%d body=%s", orgID, collectionName, resp.StatusCode, len(vector), body)
+		if resp.StatusCode == http.StatusNotFound && strings.Contains(body, "doesn't exist") {
+			log.Printf("[recall] qdrant collection not yet created org=%s collection=%s — returning empty result", orgID, collectionName)
+			return []protocol.MemoryResult{}, false, nil
+		}
 		if expectedDim, ok := extractExpectedVectorDim(body); ok {
 			log.Printf("[recall] qdrant vector dimensions org=%s collection=%s queryVecDim=%d expectedVecDim=%d", orgID, collectionName, len(vector), expectedDim)
 		}

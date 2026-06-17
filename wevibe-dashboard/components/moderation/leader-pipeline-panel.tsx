@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   denyPendingForContributor,
+  getCommitStatus,
   getSubmissionsByStatus,
   listMembers,
   listKeywords,
@@ -14,12 +15,15 @@ import {
   type KeywordCandidate,
   type DuplicateClustersResponse,
 } from '@/lib/hub-client';
+import { remediationFor } from '@/lib/error-remediation';
+import { isHubError } from '@/lib/hub-error';
 import {
   normalizeKeywordWeights,
   renormalizeFromBase,
   toExcludedSuggestionPayload,
   displayWeight,
 } from '@/lib/keyword-weights';
+import { requestProvisionRecall } from '@/lib/org-bridge';
 import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
 import {
   buildApproveMemoryMsg,
@@ -127,7 +131,7 @@ function formatSimilarityPercent(score: number): string {
   return `${(clamped * 100).toFixed(1)}%`;
 }
 
-type LoadSource = 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch' | 'duplicateClusters';
+type LoadSource = 'pendingKeyword' | 'pendingChain' | 'keywords' | 'decryptBatch' | 'duplicateClusters' | 'commitStatus';
 
 type LoadDiagnostic = {
   source: LoadSource;
@@ -147,6 +151,7 @@ const LOAD_SOURCE_LABELS: Record<LoadSource, string> = {
   keywords: 'Org vocabulary',
   decryptBatch: 'Decrypt batch',
   duplicateClusters: 'Duplicate advisory clusters',
+  commitStatus: 'On-chain commit status',
 };
 
 function normalizeErrorMessage(error: unknown): string {
@@ -157,6 +162,38 @@ function normalizeErrorMessage(error: unknown): string {
     return error;
   }
   return 'Unknown error';
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (isHubError(error)) {
+    return error.code;
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const maybeCode = (error as { code?: unknown }).code;
+    if (typeof maybeCode === 'string' && maybeCode.trim().length > 0) {
+      return maybeCode;
+    }
+  }
+
+  return undefined;
+}
+
+function getErrorRemediation(error: unknown): string | undefined {
+  const code = getErrorCode(error);
+  const remediated = remediationFor(code);
+  if (remediated) {
+    return remediated;
+  }
+
+  if (typeof error === 'object' && error !== null) {
+    const maybeRemediation = (error as { remediation?: unknown }).remediation;
+    if (typeof maybeRemediation === 'string' && maybeRemediation.trim().length > 0) {
+      return maybeRemediation;
+    }
+  }
+
+  return undefined;
 }
 
 function inferLikelyCause(
@@ -196,6 +233,15 @@ function createLoadDiagnostic(source: LoadSource, error: unknown): LoadDiagnosti
     label: LOAD_SOURCE_LABELS[source],
     message,
     likelyCause: inferLikelyCause(source, message),
+  };
+}
+
+function createCommitStatusDiagnostic(message: string): LoadDiagnostic {
+  return {
+    source: 'commitStatus',
+    label: LOAD_SOURCE_LABELS.commitStatus,
+    message,
+    likelyCause: inferLikelyCause('commitStatus', message),
   };
 }
 
@@ -594,7 +640,13 @@ export function LeaderPipelinePanel() {
       );
       await loadAll();
     } catch (err) {
-      toast.error((err as Error).message);
+      const message = (err as Error).message;
+      const description = getErrorRemediation(err);
+      if (description) {
+        toast.error(message, { description });
+      } else {
+        toast.error(message);
+      }
     } finally {
       setBusy(null);
     }
@@ -648,8 +700,13 @@ export function LeaderPipelinePanel() {
       const failureMessage = chainStepCompleted
         ? `Chain step completed (can_contribute revoked), but hub deny-pending failed: ${message}`
         : `Chain step failed (capability unchanged), so hub deny-pending was not run: ${message}`;
+      const description = getErrorRemediation(error);
       setBanContributorError(failureMessage);
-      toast.error(failureMessage);
+      if (description) {
+        toast.error(failureMessage, { description });
+      } else {
+        toast.error(failureMessage);
+      }
     } finally {
       setBanModalLoading(false);
     }
@@ -740,12 +797,46 @@ export function LeaderPipelinePanel() {
       setReviewKeywords(dropSubmitted);
       setTimeout(() => { void loadAll(); }, 2500);
       txSuccess(txToastId, 'Serve batch submitted to chain.', txHash);
+
+      try {
+        await requestProvisionRecall(orgId);
+        toast.success('Recall keys provisioned');
+      } catch (err) {
+        const message = normalizeErrorMessage(err);
+        const code = getErrorCode(err);
+        const description = remediationFor(code) ?? (typeof (err as { remediation?: unknown })?.remediation === 'string'
+          ? (err as { remediation?: string }).remediation
+          : undefined);
+        toast.error(`Committed to chain, but recall provisioning failed: ${message}`, description ? { description } : undefined);
+      }
+
+      try {
+        const statuses = await getCommitStatus(orgId);
+        const firstCommitError = statuses.find(
+          (entry) => typeof entry.commit_error === 'string' && entry.commit_error.trim().length > 0,
+        )?.commit_error;
+
+        setLoadDiagnostics((prev) => {
+          const withoutCommitStatus = prev.filter((diag) => diag.source !== 'commitStatus');
+          if (!firstCommitError) {
+            return withoutCommitStatus;
+          }
+          return [...withoutCommitStatus, createCommitStatusDiagnostic(firstCommitError)];
+        });
+      } catch {
+        // Best-effort: the chain commit already succeeded.
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const description = getErrorRemediation(err);
       if (txToastId !== null) {
-        txError(txToastId, message);
+        txError(txToastId, message, description);
       } else {
-        toast.error(message);
+        if (description) {
+          toast.error(message, { description });
+        } else {
+          toast.error(message);
+        }
       }
     } finally {
       setBusy(null);

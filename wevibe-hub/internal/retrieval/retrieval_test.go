@@ -268,6 +268,50 @@ func TestQueryPoints_EmbeddingModelFilterAppliedConditionally(t *testing.T) {
 	assertEmbeddingModelFilterCondition(t, captured[1].body, "", false)
 }
 
+func TestQueryPointsMissingCollectionReturnsEmpty(t *testing.T) {
+	orgID := "x"
+	collectionName := OrgCollectionName(orgID)
+	wantPath := fmt.Sprintf("/collections/%s/points/search", collectionName)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != wantPath {
+			t.Errorf("request path mismatch: got %q want %q", r.URL.Path, wantPath)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": map[string]any{
+				"error": fmt.Sprintf("Not found: Collection `%s` doesn't exist!", collectionName),
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &QdrantClient{
+		restURL: server.URL,
+		apiKey:  "test-api-key-for-unit-tests-only",
+	}
+	client.SetPendingDenialDB(emptyPendingDenialDB{})
+
+	vector := make([]float32, EMBED_DIM)
+	results, contested, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false)
+	if err != nil {
+		t.Fatalf("QueryPoints returned unexpected error: %v", err)
+	}
+	if contested {
+		t.Fatalf("expected contested=false, got true")
+	}
+	if results == nil {
+		t.Fatalf("expected non-nil empty results slice")
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected empty results, got %d", len(results))
+	}
+}
+
 func assertEmbeddingModelFilterCondition(t *testing.T, requestBody map[string]any, expectedModelID string, expected bool) {
 	t.Helper()
 

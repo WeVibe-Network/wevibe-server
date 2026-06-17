@@ -106,52 +106,52 @@ const nearDupFloor = 0.80
 
 func SubmitKeywordResults(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden: leader only")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req KeywordResultSubmission
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
@@ -207,63 +207,64 @@ func SubmitKeywordResults(w http.ResponseWriter, r *http.Request) {
 
 func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden: leader only")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req VerifyKeywordsRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
 	if len(req.Entries) == 0 {
-		http.Error(w, `{"error":"entries required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "entries required")
 		return
 	}
 
 	type result struct {
 		Hash   string `json:"submission_hash"`
 		Passed bool   `json:"passed"`
+		Code   string `json:"code,omitempty"`
 		Error  string `json:"error,omitempty"`
 	}
 	var results []result
@@ -276,7 +277,7 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 
 	for _, entry := range req.Entries {
 		if entry.SubmissionHash == "" {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "submission_hash required"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "submission_hash_required", Error: "submission_hash required"})
 			continue
 		}
 
@@ -288,27 +289,27 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			WHERE org_id = $1 AND submission_hash = $2
 		`, orgID, entry.SubmissionHash).Scan(&status, &memoryType, &ciphertextHex, &extractionResult)
 		if err != nil {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "submission not found"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "submission_not_found", Error: "submission not found"})
 			continue
 		}
 
 		if status != "pending_keyword" {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("invalid status: %s (expected pending_keyword)", status)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "invalid_status", Error: fmt.Sprintf("invalid status: %s (expected pending_keyword)", status)})
 			continue
 		}
 		if !protocol.IsValidMemoryType(memoryType) {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("invalid memory_type: %s", memoryType)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "invalid_memory_type", Error: fmt.Sprintf("invalid memory_type: %s", memoryType)})
 			continue
 		}
 
 		var storedExtraction storedExtractionResult
 		if err := json.Unmarshal(extractionResult, &storedExtraction); err != nil || len(storedExtraction.Classified) == 0 {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "no stored classified keywords"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "no_classified_keywords", Error: "no stored classified keywords"})
 			continue
 		}
 
 		if len(storedExtraction.Classified) > protocol.MaxKeywordsPerMemory {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("too many keywords: %d (max %d)", len(storedExtraction.Classified), protocol.MaxKeywordsPerMemory)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "too_many_keywords", Error: fmt.Sprintf("too many keywords: %d (max %d)", len(storedExtraction.Classified), protocol.MaxKeywordsPerMemory)})
 			continue
 		}
 
@@ -322,12 +323,12 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			weightSum += kw.Weight
 		}
 		if invalidKeyword != "" {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("invalid keyword format: %s", invalidKeyword)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "invalid_keyword_format", Error: fmt.Sprintf("invalid keyword format: %s", invalidKeyword)})
 			continue
 		}
 
 		if abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("keyword weights sum to %.4f, must be 1.0 (±%.2f)", weightSum, protocol.KeywordWeightTolerance)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "keyword_weight_sum", Error: fmt.Sprintf("keyword weights sum to %.4f, must be 1.0 (±%.2f)", weightSum, protocol.KeywordWeightTolerance)})
 			continue
 		}
 
@@ -340,41 +341,41 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if hasPendingSuggestions {
-				results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "suggestions must be approved/rejected (all must have rationale)"})
+				results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "suggestion_rationale_required", Error: "suggestions must be approved/rejected (all must have rationale)"})
 				continue
 			}
 		}
 
 		if len(ciphertextHex) > protocol.MaxMemoryChars*2 {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("memory plaintext too long: %d chars (max %d)", len(ciphertextHex)/2, protocol.MaxMemoryChars)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "plaintext_too_long", Error: fmt.Sprintf("memory plaintext too long: %d chars (max %d)", len(ciphertextHex)/2, protocol.MaxMemoryChars)})
 			continue
 		}
 
 		if len(entry.Vector) != embed.EMBED_DIM {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: fmt.Sprintf("missing or wrong-dimension embedding vector (got %d, expected %d)", len(entry.Vector), embed.EMBED_DIM)})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "vector_dim_mismatch", Error: fmt.Sprintf("missing or wrong-dimension embedding vector (got %d, expected %d)", len(entry.Vector), embed.EMBED_DIM)})
 			continue
 		}
 
 		if entry.UmbralCapsule == "" || entry.UmbralCiphertext == "" {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "missing umbral capsule/ciphertext"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "missing_capsule", Error: "missing umbral capsule/ciphertext"})
 			continue
 		}
 
 		capsuleBytes, err := hex.DecodeString(entry.UmbralCapsule)
 		if err != nil {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "invalid umbral_capsule hex"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "invalid_capsule_hex", Error: "invalid umbral_capsule hex"})
 			continue
 		}
 
 		ciphertextBytes, err := hex.DecodeString(entry.UmbralCiphertext)
 		if err != nil {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "invalid umbral_ciphertext hex"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "invalid_ciphertext_hex", Error: "invalid umbral_ciphertext hex"})
 			continue
 		}
 
 		embeddingVector, err := json.Marshal(entry.Vector)
 		if err != nil {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "failed to marshal embedding vector"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "vector_marshal_failed", Error: "failed to marshal embedding vector"})
 			continue
 		}
 
@@ -416,11 +417,11 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			WHERE org_id = $7 AND submission_hash = $8 AND status = 'pending_keyword'
 		`, embeddingVector, entry.EmbeddingModelID, entry.EmbeddingSchemaVersion, nearDupMatchesJSON, capsuleBytes, ciphertextBytes, orgID, entry.SubmissionHash)
 		if err != nil {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "internal error"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "transition_failed", Error: "internal error"})
 			continue
 		}
 		if res.RowsAffected() == 0 {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "submission not found or status changed"})
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "submission_status_changed", Error: "submission not found or status changed"})
 			continue
 		}
 
@@ -444,7 +445,7 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 
 func UpdateKeywords(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
@@ -457,40 +458,40 @@ func UpdateKeywords(w http.ResponseWriter, r *http.Request) {
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden: leader only")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req UpdateKeywordsRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
@@ -559,7 +560,7 @@ func UpdateKeywords(w http.ResponseWriter, r *http.Request) {
 
 func RemoveSubmission(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
@@ -572,28 +573,28 @@ func RemoveSubmission(w http.ResponseWriter, r *http.Request) {
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden: leader only")
 		return
 	}
 
@@ -633,40 +634,40 @@ func RemoveSubmission(w http.ResponseWriter, r *http.Request) {
 
 func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
 	if err != nil || role != "leader" {
-		http.Error(w, `{"error":"forbidden: leader only"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "forbidden_leader_only", "forbidden: leader only")
 		return
 	}
 
@@ -800,34 +801,34 @@ func ListSubmissions(w http.ResponseWriter, r *http.Request) {
 
 func ListMySubmissions(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id required")
 		return
 	}
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
-		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "timestamp_invalid", "invalid timestamp format, use RFC3339")
 		return
 	}
 	now := time.Now()
 	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
-		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "timestamp_expired", "timestamp expired or too far in future")
 		return
 	}
 	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 

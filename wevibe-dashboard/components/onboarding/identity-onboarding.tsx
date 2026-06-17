@@ -6,12 +6,13 @@ import Card from '@/components/ui/card';
 import { ErrorBanner } from '@/components/ui/states';
 import InfoTooltip from '@/components/ui/tooltip';
 import {
+  adoptIdentityFromLocalMcp,
   adoptIdentityFromPasskey,
   createGuestIdentity,
   importIdentityFromPhrase,
 } from '@/lib/wevibe-auth';
 
-type BusyAction = 'create' | 'adopt' | 'import' | null;
+type BusyAction = 'adopt-local' | 'create' | 'adopt' | 'import' | null;
 
 export function IdentityOnboarding({ onReady }: { onReady: () => void | Promise<void> }) {
   const [busy, setBusy] = useState<BusyAction>(null);
@@ -38,6 +39,10 @@ export function IdentityOnboarding({ onReady }: { onReady: () => void | Promise<
 
   const handleCreate = useCallback(async () => {
     await runAction('create', createGuestIdentity);
+  }, [runAction]);
+
+  const handleAdoptLocal = useCallback(async () => {
+    await runAction('adopt-local', adoptIdentityFromLocalMcp);
   }, [runAction]);
 
   const handleAdopt = useCallback(async () => {
@@ -67,8 +72,12 @@ export function IdentityOnboarding({ onReady }: { onReady: () => void | Promise<
         {error && <ErrorBanner>{error}</ErrorBanner>}
 
         <div className="flex flex-col gap-3">
-          <Button type="button" onClick={handleCreate} disabled={disabled}>
-            {busy === 'create' ? 'Creating…' : 'Create identity'}
+          <Button type="button" onClick={handleAdoptLocal} disabled={disabled}>
+            {busy === 'adopt-local' ? 'Connecting…' : 'Use my coding-suite identity'}
+          </Button>
+
+          <Button type="button" variant="secondary" onClick={handleCreate} disabled={disabled}>
+            {busy === 'create' ? 'Creating…' : 'Create a separate identity'}
           </Button>
 
           <div className="flex items-center gap-2">

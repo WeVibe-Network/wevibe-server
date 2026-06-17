@@ -4,6 +4,8 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { listMembers, enableMemberRecall, disableMemberRecall, type MemberRecord } from '@/lib/hub-client'
 import { requestProvisionRecall } from '@/lib/org-bridge'
+import { isHubError } from '@/lib/hub-error'
+import { remediationFor } from '@/lib/error-remediation'
 import { getIdentity } from '@/lib/wevibe-auth'
 import { connectWallet } from '@/lib/wallet-connect'
 import {
@@ -230,7 +232,18 @@ export default function MembersPage() {
         try {
           await requestProvisionRecall(orgId)
         } catch (provisionErr) {
-          toast.error(`Recall enabled, but kfrag provisioning failed: ${(provisionErr as Error).message}`, { id })
+          const message = `Recall enabled, but kfrag provisioning failed: ${(provisionErr as Error).message}`
+          const hasCodeOrRemediation = typeof provisionErr === 'object' && provisionErr !== null && (
+            'code' in provisionErr || 'remediation' in provisionErr
+          )
+          if (isHubError(provisionErr) || hasCodeOrRemediation) {
+            toast.error(message, {
+              id,
+              description: remediationFor((provisionErr as any)?.code) ?? (provisionErr as any)?.remediation,
+            })
+          } else {
+            toast.error(message, { id })
+          }
         }
       }
       await refreshMembers()
@@ -245,7 +258,17 @@ export default function MembersPage() {
       } else {
         const message = (err as Error).message
         setError(message)
-        toast.error(message, { id })
+        const hasCodeOrRemediation = typeof err === 'object' && err !== null && (
+          'code' in err || 'remediation' in err
+        )
+        if (isHubError(err) || hasCodeOrRemediation) {
+          toast.error(message, {
+            id,
+            description: remediationFor((err as any)?.code) ?? (err as any)?.remediation,
+          })
+        } else {
+          toast.error(message, { id })
+        }
       }
     } finally {
       setEnableRecallTarget(null)

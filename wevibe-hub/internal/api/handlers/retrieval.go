@@ -10,14 +10,14 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/receipts"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const defaultTrialDailyQueryLimit = 5
@@ -25,21 +25,21 @@ const defaultTrialDailyQueryLimit = 5
 func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
 		log.Printf("[recall] ERROR query init database unavailable")
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("[recall] ERROR parse request body FAILED: %v", err)
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
 	var req protocol.QueryRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		log.Printf("[recall] ERROR parse json FAILED bodyLen=%d: %v", len(body), err)
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
 		return
 	}
 
@@ -48,13 +48,13 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 
 	if req.OrgID == "" || req.AgentPubkey == "" {
 		log.Printf("[recall] DENY/ERROR missing required fields org=%s agentPresent=%v", req.OrgID, req.AgentPubkey != "")
-		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "missing required fields")
 		return
 	}
 
 	if req.PrePubkey == "" {
 		log.Printf("[recall] DENY/ERROR missing pre_pubkey org=%s agent=%s", req.OrgID, agentLogID)
-		http.Error(w, `{"error":"pre_pubkey is required for PRE retrieval"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "pre_pubkey_required", "pre_pubkey is required for PRE retrieval")
 		return
 	}
 
@@ -67,53 +67,53 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	member, err := members.GetMember(ctx, pool, req.OrgID, req.AgentPubkey)
 	if err != nil {
 		log.Printf("[recall] DENY/ERROR getMember org=%s agent=%s: %v", req.OrgID, agentLogID, err)
-		http.Error(w, `{"error":"not a member of this org"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "not_a_member", "not a member of this org")
 		return
 	}
 
 	isTrial, trialExpiresAt, err := members.GetTrialStatus(ctx, pool, req.OrgID, req.AgentPubkey)
 	if err != nil {
 		log.Printf("[recall] ERROR getTrialStatus org=%s agent=%s: %v", req.OrgID, agentLogID, err)
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		WriteError(w, http.StatusInternalServerError, "internal_error", "internal error", err.Error())
 		return
 	}
 	if isTrial {
 		if trialExpiresAt != nil && time.Now().After(*trialExpiresAt) {
 			log.Printf("[recall] DENY trial expired org=%s agent=%s expiresAt=%s", req.OrgID, agentLogID, trialExpiresAt.UTC().Format(time.RFC3339))
-			http.Error(w, `{"error":"Trial expired. Contact org leader to upgrade."}`, http.StatusForbidden)
+			WriteError(w, http.StatusForbidden, "trial_expired", "Trial expired. Contact org leader to upgrade.")
 			return
 		}
 
 		trialDailyLimit, limitErr := getTrialDailyQueryLimit(ctx, pool, req.OrgID)
 		if limitErr != nil {
 			log.Printf("[recall] ERROR trial gate load limit FAILED org=%s: %v", req.OrgID, limitErr)
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			WriteError(w, http.StatusInternalServerError, "internal_error", "internal error", limitErr.Error())
 			return
 		}
 
 		queryCount, countErr := getTodayMemberQueryCount(ctx, pool, req.OrgID, req.AgentPubkey)
 		if countErr != nil {
 			log.Printf("[recall] ERROR trial gate count queries FAILED org=%s agent=%s: %v", req.OrgID, agentLogID, countErr)
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			WriteError(w, http.StatusInternalServerError, "internal_error", "internal error", countErr.Error())
 			return
 		}
 		if queryCount >= trialDailyLimit {
 			log.Printf("[recall] DENY trial daily limit reached org=%s agent=%s count=%d limit=%d", req.OrgID, agentLogID, queryCount, trialDailyLimit)
-			http.Error(w, `{"error":"trial daily query limit reached"}`, http.StatusForbidden)
+			WriteError(w, http.StatusForbidden, "trial_limit", "trial daily query limit reached")
 			return
 		}
 	} else if !member.MembershipActive {
 		// Non-trial members must hold an active subscription. Trial members are
 		// governed by the orthogonal trial path above (expiry + daily limit).
 		log.Printf("[recall] DENY inactive membership org=%s agent=%s", req.OrgID, agentLogID)
-		http.Error(w, `{"error":"membership not active — subscribe to query"}`, http.StatusForbidden)
+		WriteError(w, http.StatusForbidden, "membership_inactive", "membership not active — subscribe to query")
 		return
 	}
 
 	currentEpoch, err := orgs.GetCurrentEpoch(ctx, pool, req.OrgID)
 	if err != nil {
 		log.Printf("[recall] ERROR resolve current epoch FAILED org=%s: %v", req.OrgID, err)
-		http.Error(w, `{"error":"failed to resolve epoch access"}`, http.StatusInternalServerError)
+		WriteError(w, http.StatusInternalServerError, "epoch_resolve_failed", "failed to resolve epoch access", err.Error())
 		return
 	}
 
@@ -124,7 +124,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 
 	if len(req.KeywordWeights) == 0 && len(req.Vector) == 0 {
 		log.Printf("[recall] DENY/ERROR empty query payload org=%s agent=%s", req.OrgID, agentLogID)
-		http.Error(w, `{"error":"keywords or vector required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "keywords or vector required")
 		return
 	}
 
@@ -135,7 +135,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[recall] qdrant QueryByKeywords FAILED org=%s: %v", req.OrgID, err)
-		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		WriteError(w, http.StatusInternalServerError, "query_failed", "query failed", err.Error())
 		return
 	}
 	log.Printf("[recall] qdrant returned %d candidates contested=%v org=%s", len(results), contested, req.OrgID)
@@ -174,7 +174,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	chainMemories, notFound, err := chainClient.GetMemoriesBatch(ctx, req.OrgID, contentHashes)
 	if err != nil {
 		log.Printf("[recall] ERROR chain GetMemoriesBatch FAILED org=%s hashCount=%d: %v", req.OrgID, len(contentHashes), err)
-		http.Error(w, `{"error":"chain unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "chain_unavailable", "chain unavailable")
 		return
 	}
 
@@ -205,7 +205,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		`, req.OrgID, protocol.SubmissionStatusCommitted, cids)
 		if err != nil {
 			log.Printf("[recall] ERROR load umbral payloads FAILED org=%s candidateCount=%d: %v", req.OrgID, len(cids), err)
-			http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+			WriteError(w, http.StatusInternalServerError, "query_failed", "query failed", err.Error())
 			return
 		}
 		defer rows.Close()
@@ -216,14 +216,14 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 			var ciphertext []byte
 			if err := rows.Scan(&cid, &capsule, &ciphertext); err != nil {
 				log.Printf("[recall] ERROR scan umbral payload row FAILED org=%s: %v", req.OrgID, err)
-				http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+				WriteError(w, http.StatusInternalServerError, "query_failed", "query failed", err.Error())
 				return
 			}
 			umbralByCID[cid] = umbralPayload{capsule: capsule, ciphertext: ciphertext}
 		}
 		if err := rows.Err(); err != nil {
 			log.Printf("[recall] ERROR iterate umbral payload rows FAILED org=%s: %v", req.OrgID, err)
-			http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+			WriteError(w, http.StatusInternalServerError, "query_failed", "query failed", err.Error())
 			return
 		}
 	}
@@ -231,7 +231,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	memberPKBytes, err := hex.DecodeString(req.PrePubkey)
 	if err != nil {
 		log.Printf("[recall] DENY/ERROR decode pre_pubkey FAILED org=%s agent=%s: %v", req.OrgID, agentLogID, err)
-		http.Error(w, `{"error":"invalid pre_pubkey format"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_pre_pubkey", "invalid pre_pubkey format")
 		return
 	}
 
@@ -245,7 +245,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		}
 		if !protocol.IsValidMemoryType(cm.MemoryType) {
 			log.Printf("[recall] ERROR invalid chain memory_type org=%s cid=%s memoryType=%s", req.OrgID, res.CID, cm.MemoryType)
-			http.Error(w, `{"error":"invalid memory_type from chain"}`, http.StatusInternalServerError)
+			WriteError(w, http.StatusInternalServerError, "invalid_memory_type", "invalid memory_type from chain")
 			return
 		}
 		res.ChainAttested = true
@@ -333,7 +333,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		log.Printf("[recall] receipt CreateReceipt FAILED org=%s agent=%s zeroResults=false: %v", req.OrgID, agentLogID, err)
-		http.Error(w, `{"error":"receipt failed"}`, http.StatusInternalServerError)
+		WriteError(w, http.StatusInternalServerError, "receipt_failed", "receipt failed", err.Error())
 		return
 	}
 
@@ -389,33 +389,33 @@ func getTodayMemberQueryCount(ctx context.Context, pool *pgxpool.Pool, orgID, pu
 
 func GetMemory(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
 
 	orgID := chi.URLParam(r, "orgID")
 	cid := chi.URLParam(r, "cid")
 	if orgID == "" || cid == "" {
-		http.Error(w, `{"error":"org_id and cid required"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id and cid required")
 		return
 	}
 
 	hashBytes, err := hex.DecodeString(cid)
 	if err != nil {
-		http.Error(w, `{"error":"invalid cid format"}`, http.StatusBadRequest)
+		WriteError(w, http.StatusBadRequest, "invalid_request", "invalid cid format")
 		return
 	}
 
 	chainMems, _, err := chainClient.GetMemoriesBatch(r.Context(), orgID, [][]byte{hashBytes})
 	if err != nil {
-		http.Error(w, `{"error":"chain unavailable"}`, http.StatusServiceUnavailable)
+		WriteError(w, http.StatusServiceUnavailable, "chain_unavailable", "chain unavailable")
 		return
 	}
 
 	if len(chainMems) > 0 {
 		cm := chainMems[0]
 		if !protocol.IsValidMemoryType(cm.MemoryType) {
-			http.Error(w, `{"error":"invalid memory_type from chain"}`, http.StatusInternalServerError)
+			WriteError(w, http.StatusInternalServerError, "invalid_memory_type", "invalid memory_type from chain")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -446,11 +446,11 @@ func GetMemory(w http.ResponseWriter, r *http.Request) {
 		WHERE submission_hash = $1 AND org_id = $2 AND status = $3
 	`, cid, orgID, protocol.SubmissionStatusCommitted).Scan(&ciphertextHex, &epochID, &memoryType)
 	if err != nil {
-		http.Error(w, `{"error":"memory not found or not approved"}`, http.StatusNotFound)
+		WriteError(w, http.StatusNotFound, "memory_not_found", "memory not found or not approved")
 		return
 	}
 	if !protocol.IsValidMemoryType(memoryType) {
-		http.Error(w, `{"error":"invalid memory_type in hub cache"}`, http.StatusInternalServerError)
+		WriteError(w, http.StatusInternalServerError, "invalid_memory_type", "invalid memory_type in hub cache")
 		return
 	}
 

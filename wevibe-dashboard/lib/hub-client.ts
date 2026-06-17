@@ -3,6 +3,7 @@ import { banContributorCanonical, denySubmissionCanonical, linkWalletCanonical }
 import type { OrgRole } from './org-role';
 import type { MemberOrgEntry } from './org-context';
 import { getConfig } from '@/lib/config';
+import { HubError } from './hub-error';
 
 function getHubUrl(): string {
   return getConfig().hubUrl;
@@ -34,8 +35,16 @@ async function hubFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ error: resp.statusText }));
-    throw new Error(err.error ?? `Hub error ${resp.status}`);
+    const err = await resp.json().catch(() => ({ error: resp.statusText })) as {
+      error?: string;
+      code?: string;
+      detail?: string;
+    };
+    throw new HubError(err.error ?? `Hub error ${resp.status}`, {
+      code: err.code,
+      detail: err.detail,
+      status: resp.status,
+    });
   }
   return resp.json();
 }
@@ -693,6 +702,18 @@ export interface DuplicateClustersResponse {
   total: number;
 }
 
+export interface CommitStatusEntry {
+  submission_hash: string;
+  status: string;
+  commit_error: string | null;
+  commit_attempted_at: string | null;
+}
+
+export async function getCommitStatus(orgId: string): Promise<CommitStatusEntry[]> {
+  const resp = await hubFetch<{ submissions: CommitStatusEntry[] }>(`/v1/orgs/${orgId}/commit-status`);
+  return resp.submissions ?? [];
+}
+
 export async function getSubmissionsByStatus(orgId: string, status: string): Promise<Submission[]> {
   const response = await hubFetch<Submission[] | { submissions?: Submission[] }>(
     `/v1/orgs/${orgId}/submissions?status=${encodeURIComponent(status)}`,
@@ -1136,10 +1157,16 @@ export async function enableMemberRecall(orgId: string, pubkey: string, free?: b
   );
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
-    const error = new Error(err.error ?? `Hub error ${response.status}`) as Error & { status?: number };
-    error.status = response.status;
-    throw error;
+    const err = await response.json().catch(() => ({ error: response.statusText })) as {
+      error?: string;
+      code?: string;
+      detail?: string;
+    };
+    throw new HubError(err.error ?? `Hub error ${response.status}`, {
+      code: err.code,
+      detail: err.detail,
+      status: response.status,
+    });
   }
 }
 

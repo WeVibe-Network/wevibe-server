@@ -46,6 +46,10 @@ export interface IdentityMetadata {
   createdAt: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -510,6 +514,35 @@ export async function importIdentityFromPhrase(phrase: string): Promise<{ pubkey
   const seed = await mnemonicToSeed(phrase);
 
   return adoptImportedSeed(seed);
+}
+
+export async function adoptIdentityFromLocalMcp(): Promise<{ pubkeyHex: string }> {
+  let response: Response;
+  try {
+    response = await fetch('/api/identity/adopt-local', { method: 'POST' });
+  } catch {
+    throw new Error('Unable to reach local identity bridge on this machine.');
+  }
+
+  const responseBody = (await response.json().catch(() => null)) as unknown;
+
+  if (!response.ok) {
+    if (isRecord(responseBody) && responseBody.error === 'no_identity') {
+      throw new Error('No coding-suite identity found on this machine.');
+    }
+
+    if (isRecord(responseBody) && typeof responseBody.error === 'string') {
+      throw new Error(responseBody.error);
+    }
+
+    throw new Error('Failed to adopt identity from local coding-suite.');
+  }
+
+  if (!isRecord(responseBody) || typeof responseBody.code !== 'string') {
+    throw new Error('Local identity bridge returned an invalid pairing code.');
+  }
+
+  return adoptIdentityFromCode(responseBody.code);
 }
 
 export async function adoptIdentityFromCode(token: string): Promise<{ pubkeyHex: string }> {

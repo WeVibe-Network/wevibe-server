@@ -285,6 +285,7 @@ func main() {
 			r.Delete("/submissions/{hash}", handlers.RemoveSubmission)
 			r.Get("/submissions", handlers.ListSubmissions)
 			r.Get("/my-submissions", handlers.ListMySubmissions)
+			r.Get("/commit-status", handlers.CommitStatus)
 
 			r.Get("/health", handlers.OrgHealth)
 
