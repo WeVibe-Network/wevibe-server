@@ -15,4 +15,5 @@ export const DASHBOARD_SETTINGS_DEFAULTS: DashboardSettings = {
   embedding_openrouter_model: 'openai/text-embedding-3-large',
   org_id: '',
   mod_pubkey: '',
+  deployment: 'local',
 };

@@ -19,6 +19,7 @@ export interface DashboardSettings {
   embedding_openrouter_model: string;
   org_id: string;
   mod_pubkey: string;
+  deployment: 'local' | 'server';
 }
 
 const DEFAULTS: DashboardSettings = {

@@ -221,6 +221,7 @@ services:
       WEVIBE_COIN_DENOM: ${WEVIBE_COIN_DENOM:-VIBE}
       WEVIBE_COIN_MIN_DENOM: ${WEVIBE_COIN_MIN_DENOM:-uvibe}
       WEVIBE_ENV: ${WEVIBE_ENV:-development}
+      WEVIBE_DEPLOYMENT: ${WEVIBE_DEPLOYMENT:-server}
       NODE_ENV: production
     ports:
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:3000:3000"
