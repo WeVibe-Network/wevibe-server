@@ -75,7 +75,7 @@ type CreateOrgRequest struct {
 	HubServingKey      string   `json:"hub_serving_key"`
 	FeeModel           FeeModel `json:"fee_model"`
 	PkMod              string   `json:"pk_mod"`
-	UmbralPK           []byte   `json:"-"`
+	UmbralPK           string   `json:"umbral_pk,omitempty"`
 	Signature          string   `json:"signature"`
 	EncEnvelope        string   `json:"enc_envelope"`
 	SearchEnvelope     string   `json:"search_envelope"`
@@ -84,7 +84,7 @@ type CreateOrgRequest struct {
 
 type RotateEpochRequest struct {
 	NewPkMod  string               `json:"new_pk_mod"`
-	UmbralPK  []byte               `json:"-"`
+	UmbralPK  string               `json:"umbral_pk,omitempty"`
 	SignedBy  string               `json:"signed_by"`
 	Signature string               `json:"signature"`
 	Envelopes []MemberEnvelopePair `json:"envelopes"`
@@ -130,7 +130,6 @@ type InviteMemberRequest struct {
 	EncEnvelope    string `json:"enc_envelope"`
 	SearchEnvelope string `json:"search_envelope"`
 	ModEnvelope    string `json:"mod_envelope"`
-	EpochSK        string `json:"epoch_sk"`
 }
 
 type KeyEnvelopeResponse struct {
@@ -343,6 +342,12 @@ type LinkWalletRequest struct {
 	WalletAddress string `json:"wallet_address"`
 	SignedBy      string `json:"signed_by"`
 	Signature     string `json:"signature"`
+}
+
+type EnableMemberRecallRequest struct {
+	SignedBy  string `json:"signed_by"`
+	Free      bool   `json:"free"`
+	PrePubkey string `json:"pre_pubkey,omitempty"`
 }
 
 type RegisterPreKeyRequest struct {

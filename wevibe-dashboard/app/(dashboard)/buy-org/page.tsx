@@ -17,7 +17,7 @@ import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 import { connectWallet } from '@/lib/wallet-connect';
 import { createGuestIdentity, setWalletAddress } from '@/lib/wevibe-auth';
-import { buildOrgSetup } from '@/lib/wevibe-crypto';
+import { finalizeOrgSetup, requestOrgCryptoSetup } from '@/lib/org-bridge';
 
 const vibeFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
 const REGISTER_ORG_STORAGE_QUOTA = 1000;
@@ -322,10 +322,9 @@ export default function BuyOrgPage() {
 
       const hubServingKey = await getHubServingAddress();
 
-      const setup = await buildOrgSetup({
+      const setup = await requestOrgCryptoSetup({
         orgName: orgNameValue,
         domain: domainValue,
-        leaderEd25519PubHex: identity.pubkeyHex,
         leaderWallet: walletAddress,
       });
 
@@ -350,6 +349,8 @@ export default function BuyOrgPage() {
 
       const orgId = extractOrgIdFromDeliverTxData(broadcastResult.deliverTxData);
 
+      await finalizeOrgSetup(setup.setup_id, orgId);
+
       await recordOrg({
         org_id: orgId,
         tx_hash: broadcastResult.txHash,
@@ -365,6 +366,7 @@ export default function BuyOrgPage() {
         enc_envelope: setup.payload.enc_envelope,
         search_envelope: setup.payload.search_envelope,
         mod_envelope: setup.payload.mod_envelope,
+        umbral_pk: setup.payload.umbral_pk,
         pk_mod: setup.payload.pk_mod,
         signature: setup.payload.signature,
         hub_serving_key: hubServingKey,
@@ -375,7 +377,7 @@ export default function BuyOrgPage() {
       setCreatedOrg({
         orgId,
         orgName: orgNameValue,
-        recoveryPhrase: setup.recoveryPhrase,
+        recoveryPhrase: setup.recovery_phrase,
       });
       setCopyStatus('idle');
       setRecoveryPhrasePhase('reveal');

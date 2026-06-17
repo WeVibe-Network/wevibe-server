@@ -30,7 +30,7 @@ type verifyKeywordOutcome struct {
 }
 
 func TestVerifyKeywordsRequest_UnmarshalEntriesVector(t *testing.T) {
-	input := []byte(`{"entries":[{"submission_hash":"hash-1","vector":[0.1,0.2],"embedding_model_id":"model-a","embedding_schema_version":"schema-1"}]}`)
+	input := []byte(`{"entries":[{"submission_hash":"hash-1","vector":[0.1,0.2],"embedding_model_id":"model-a","embedding_schema_version":"schema-1","umbral_capsule":"cafe","umbral_ciphertext":"beef"}]}`)
 
 	var req handlers.VerifyKeywordsRequest
 	if err := json.Unmarshal(input, &req); err != nil {
@@ -45,6 +45,12 @@ func TestVerifyKeywordsRequest_UnmarshalEntriesVector(t *testing.T) {
 	}
 	if len(req.Entries[0].Vector) != 2 {
 		t.Fatalf("expected vector length 2, got %d", len(req.Entries[0].Vector))
+	}
+	if req.Entries[0].UmbralCapsule != "cafe" {
+		t.Fatalf("unexpected umbral_capsule: %q", req.Entries[0].UmbralCapsule)
+	}
+	if req.Entries[0].UmbralCiphertext != "beef" {
+		t.Fatalf("unexpected umbral_ciphertext: %q", req.Entries[0].UmbralCiphertext)
 	}
 }
 
@@ -130,6 +136,78 @@ func TestVerifyKeywords_FailClosedOnWrongVectorDimension(t *testing.T) {
 	}
 }
 
+func TestVerifyKeywords_FailClosedOnMissingUmbral(t *testing.T) {
+	pool := testPoolMod(t)
+	handlers.SetPool(pool)
+
+	orgID, contributorPubkey := setupOrgForModeration(t, pool)
+	leader := newVoteActor(t)
+	insertLeaderForVerify(t, pool, orgID, leader.pubHex)
+
+	submissionHash := insertPendingSubmissionWithStoredExtraction(t, pool, orgID, contributorPubkey)
+
+	router := chi.NewRouter()
+	router.Post("/v1/orgs/{orgID}/verify-keywords", handlers.VerifyKeywords)
+
+	goodVector := make([]float32, embed.EMBED_DIM)
+	goodVector[0] = 0.5
+	goodVector[embed.EMBED_DIM-1] = 0.5
+
+	resp := performVerifyKeywordsRequest(t, router, orgID, leader, handlers.VerifyKeywordsRequest{
+		Entries: []handlers.VerifyEntry{{
+			SubmissionHash:         submissionHash,
+			Vector:                 goodVector,
+			EmbeddingModelID:       "leader-card-model",
+			EmbeddingSchemaVersion: "schema-v1",
+		}},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var payload verifyKeywordsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Verified != 0 {
+		t.Fatalf("expected verified=0, got %d", payload.Verified)
+	}
+	if len(payload.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(payload.Results))
+	}
+	if payload.Results[0].Passed {
+		t.Fatalf("expected passed=false when umbral payload is missing")
+	}
+	if payload.Results[0].Error != "missing umbral capsule/ciphertext" {
+		t.Fatalf("unexpected error: %q", payload.Results[0].Error)
+	}
+
+	var status string
+	var embeddingVector []byte
+	var umbralCapsule []byte
+	var umbralCiphertext []byte
+	err := pool.QueryRow(context.Background(), `
+		SELECT status, embedding_vector, umbral_capsule, umbral_ciphertext
+		FROM pending_submissions
+		WHERE org_id = $1 AND submission_hash = $2
+	`, orgID, submissionHash).Scan(&status, &embeddingVector, &umbralCapsule, &umbralCiphertext)
+	if err != nil {
+		t.Fatalf("query pending submission: %v", err)
+	}
+	if status != protocol.SubmissionStatusPendingKeyword {
+		t.Fatalf("status changed unexpectedly: got %q want %q", status, protocol.SubmissionStatusPendingKeyword)
+	}
+	if len(embeddingVector) != 0 {
+		t.Fatalf("expected no embedding vector persisted on failure, got %s", string(embeddingVector))
+	}
+	if len(umbralCapsule) != 0 {
+		t.Fatalf("expected no umbral_capsule persisted on failure, got %x", umbralCapsule)
+	}
+	if len(umbralCiphertext) != 0 {
+		t.Fatalf("expected no umbral_ciphertext persisted on failure, got %x", umbralCiphertext)
+	}
+}
+
 func TestVerifyKeywords_VectorDimensionGate_BatchRejectsLegacyAndEmptyVectors(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)
@@ -169,6 +247,8 @@ func TestVerifyKeywords_VectorDimensionGate_BatchRejectsLegacyAndEmptyVectors(t 
 				Vector:                 validVector,
 				EmbeddingModelID:       "leader-card-model",
 				EmbeddingSchemaVersion: "schema-v1",
+				UmbralCapsule:          "cafe",
+				UmbralCiphertext:       "beef",
 			},
 		},
 	})
@@ -277,12 +357,16 @@ func TestVerifyKeywords_TransitionsToPendingChainAndPersistsEmbedding(t *testing
 	goodVector := make([]float32, embed.EMBED_DIM)
 	goodVector[0] = 0.125
 	goodVector[embed.EMBED_DIM-1] = 0.875
+	wantCapsule := []byte{0xca, 0xfe}
+	wantCiphertext := []byte{0xb0, 0x0b}
 	resp := performVerifyKeywordsRequest(t, router, orgID, leader, handlers.VerifyKeywordsRequest{
 		Entries: []handlers.VerifyEntry{{
 			SubmissionHash:         submissionHash,
 			Vector:                 goodVector,
 			EmbeddingModelID:       "leader-card-model",
 			EmbeddingSchemaVersion: "schema-v1",
+			UmbralCapsule:          "cafe",
+			UmbralCiphertext:       "b00b",
 		}},
 	})
 	if resp.Code != http.StatusOK {
@@ -307,11 +391,13 @@ func TestVerifyKeywords_TransitionsToPendingChainAndPersistsEmbedding(t *testing
 	var embeddingVector []byte
 	var modelID string
 	var schemaVersion string
+	var umbralCapsule []byte
+	var umbralCiphertext []byte
 	err := pool.QueryRow(context.Background(), `
-		SELECT status, embedding_vector, embedding_model_id, embedding_schema_version
+		SELECT status, embedding_vector, embedding_model_id, embedding_schema_version, umbral_capsule, umbral_ciphertext
 		FROM pending_submissions
 		WHERE org_id = $1 AND submission_hash = $2
-	`, orgID, submissionHash).Scan(&status, &embeddingVector, &modelID, &schemaVersion)
+	`, orgID, submissionHash).Scan(&status, &embeddingVector, &modelID, &schemaVersion, &umbralCapsule, &umbralCiphertext)
 	if err != nil {
 		t.Fatalf("query updated submission: %v", err)
 	}
@@ -323,6 +409,12 @@ func TestVerifyKeywords_TransitionsToPendingChainAndPersistsEmbedding(t *testing
 	}
 	if schemaVersion != "schema-v1" {
 		t.Fatalf("unexpected embedding_schema_version: %q", schemaVersion)
+	}
+	if !bytes.Equal(umbralCapsule, wantCapsule) {
+		t.Fatalf("unexpected umbral_capsule bytes: got %x want %x", umbralCapsule, wantCapsule)
+	}
+	if !bytes.Equal(umbralCiphertext, wantCiphertext) {
+		t.Fatalf("unexpected umbral_ciphertext bytes: got %x want %x", umbralCiphertext, wantCiphertext)
 	}
 
 	var storedVector []float32

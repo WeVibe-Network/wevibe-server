@@ -21,26 +21,30 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type GenerateKeyPairRequest struct {
+type StoreKFragRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	OrgId         string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
+	EpochId       uint64                 `protobuf:"varint,2,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
+	MemberPk      []byte                 `protobuf:"bytes,3,opt,name=member_pk,json=memberPk,proto3" json:"member_pk,omitempty"`
+	Kfrag         []byte                 `protobuf:"bytes,4,opt,name=kfrag,proto3" json:"kfrag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GenerateKeyPairRequest) Reset() {
-	*x = GenerateKeyPairRequest{}
+func (x *StoreKFragRequest) Reset() {
+	*x = StoreKFragRequest{}
 	mi := &file_sidecar_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GenerateKeyPairRequest) String() string {
+func (x *StoreKFragRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GenerateKeyPairRequest) ProtoMessage() {}
+func (*StoreKFragRequest) ProtoMessage() {}
 
-func (x *GenerateKeyPairRequest) ProtoReflect() protoreflect.Message {
+func (x *StoreKFragRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_sidecar_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -52,182 +56,60 @@ func (x *GenerateKeyPairRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GenerateKeyPairRequest.ProtoReflect.Descriptor instead.
-func (*GenerateKeyPairRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use StoreKFragRequest.ProtoReflect.Descriptor instead.
+func (*StoreKFragRequest) Descriptor() ([]byte, []int) {
 	return file_sidecar_proto_rawDescGZIP(), []int{0}
 }
 
-type GenerateKeyPairResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Serialized Umbral SecretKey (32 bytes, big-endian).
-	// SENSITIVE — must be handled as secret material by the caller.
-	SecretKey []byte `protobuf:"bytes,1,opt,name=secret_key,json=secretKey,proto3" json:"secret_key,omitempty"`
-	// Serialized Umbral PublicKey (33 bytes, compressed secp256k1 point).
-	PublicKey     []byte `protobuf:"bytes,2,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GenerateKeyPairResponse) Reset() {
-	*x = GenerateKeyPairResponse{}
-	mi := &file_sidecar_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GenerateKeyPairResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GenerateKeyPairResponse) ProtoMessage() {}
-
-func (x *GenerateKeyPairResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GenerateKeyPairResponse.ProtoReflect.Descriptor instead.
-func (*GenerateKeyPairResponse) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *GenerateKeyPairResponse) GetSecretKey() []byte {
-	if x != nil {
-		return x.SecretKey
-	}
-	return nil
-}
-
-func (x *GenerateKeyPairResponse) GetPublicKey() []byte {
-	if x != nil {
-		return x.PublicKey
-	}
-	return nil
-}
-
-type GenerateKFragsRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Org identifier — used as storage key prefix.
-	OrgId string `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
-	// Epoch identifier — used as storage key component.
-	EpochId uint64 `protobuf:"varint,2,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
-	// Serialized Umbral SecretKey of the epoch (delegating key).
-	// SENSITIVE — the sidecar uses this transiently and does NOT store it.
-	DelegatingSk []byte `protobuf:"bytes,3,opt,name=delegating_sk,json=delegatingSk,proto3" json:"delegating_sk,omitempty"`
-	// Serialized Umbral PublicKey of the member (receiving key).
-	ReceivingPk []byte `protobuf:"bytes,4,opt,name=receiving_pk,json=receivingPk,proto3" json:"receiving_pk,omitempty"`
-	// Serialized Umbral SecretKey used for signing kfrags.
-	// SENSITIVE — the sidecar uses this transiently and does NOT store it.
-	SignerSk []byte `protobuf:"bytes,5,opt,name=signer_sk,json=signerSk,proto3" json:"signer_sk,omitempty"`
-	// Serialized Umbral PublicKey corresponding to signer_sk (verifying key).
-	VerifyingPk   []byte `protobuf:"bytes,6,opt,name=verifying_pk,json=verifyingPk,proto3" json:"verifying_pk,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GenerateKFragsRequest) Reset() {
-	*x = GenerateKFragsRequest{}
-	mi := &file_sidecar_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GenerateKFragsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GenerateKFragsRequest) ProtoMessage() {}
-
-func (x *GenerateKFragsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GenerateKFragsRequest.ProtoReflect.Descriptor instead.
-func (*GenerateKFragsRequest) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *GenerateKFragsRequest) GetOrgId() string {
+func (x *StoreKFragRequest) GetOrgId() string {
 	if x != nil {
 		return x.OrgId
 	}
 	return ""
 }
 
-func (x *GenerateKFragsRequest) GetEpochId() uint64 {
+func (x *StoreKFragRequest) GetEpochId() uint64 {
 	if x != nil {
 		return x.EpochId
 	}
 	return 0
 }
 
-func (x *GenerateKFragsRequest) GetDelegatingSk() []byte {
+func (x *StoreKFragRequest) GetMemberPk() []byte {
 	if x != nil {
-		return x.DelegatingSk
+		return x.MemberPk
 	}
 	return nil
 }
 
-func (x *GenerateKFragsRequest) GetReceivingPk() []byte {
+func (x *StoreKFragRequest) GetKfrag() []byte {
 	if x != nil {
-		return x.ReceivingPk
+		return x.Kfrag
 	}
 	return nil
 }
 
-func (x *GenerateKFragsRequest) GetSignerSk() []byte {
-	if x != nil {
-		return x.SignerSk
-	}
-	return nil
-}
-
-func (x *GenerateKFragsRequest) GetVerifyingPk() []byte {
-	if x != nil {
-		return x.VerifyingPk
-	}
-	return nil
-}
-
-type GenerateKFragsResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Serialized VerifiedKeyFrag. Stored internally by the sidecar.
-	// Returned to caller for backup/audit purposes only.
-	Kfrag         []byte `protobuf:"bytes,1,opt,name=kfrag,proto3" json:"kfrag,omitempty"`
+type StoreKFragResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *GenerateKFragsResponse) Reset() {
-	*x = GenerateKFragsResponse{}
-	mi := &file_sidecar_proto_msgTypes[3]
+func (x *StoreKFragResponse) Reset() {
+	*x = StoreKFragResponse{}
+	mi := &file_sidecar_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *GenerateKFragsResponse) String() string {
+func (x *StoreKFragResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*GenerateKFragsResponse) ProtoMessage() {}
+func (*StoreKFragResponse) ProtoMessage() {}
 
-func (x *GenerateKFragsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[3]
+func (x *StoreKFragResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sidecar_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -238,16 +120,9 @@ func (x *GenerateKFragsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use GenerateKFragsResponse.ProtoReflect.Descriptor instead.
-func (*GenerateKFragsResponse) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *GenerateKFragsResponse) GetKfrag() []byte {
-	if x != nil {
-		return x.Kfrag
-	}
-	return nil
+// Deprecated: Use StoreKFragResponse.ProtoReflect.Descriptor instead.
+func (*StoreKFragResponse) Descriptor() ([]byte, []int) {
+	return file_sidecar_proto_rawDescGZIP(), []int{1}
 }
 
 type ReEncryptRequest struct {
@@ -264,7 +139,7 @@ type ReEncryptRequest struct {
 
 func (x *ReEncryptRequest) Reset() {
 	*x = ReEncryptRequest{}
-	mi := &file_sidecar_proto_msgTypes[4]
+	mi := &file_sidecar_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -276,7 +151,7 @@ func (x *ReEncryptRequest) String() string {
 func (*ReEncryptRequest) ProtoMessage() {}
 
 func (x *ReEncryptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[4]
+	mi := &file_sidecar_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -289,7 +164,7 @@ func (x *ReEncryptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReEncryptRequest.ProtoReflect.Descriptor instead.
 func (*ReEncryptRequest) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{4}
+	return file_sidecar_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ReEncryptRequest) GetOrgId() string {
@@ -330,7 +205,7 @@ type ReEncryptResponse struct {
 
 func (x *ReEncryptResponse) Reset() {
 	*x = ReEncryptResponse{}
-	mi := &file_sidecar_proto_msgTypes[5]
+	mi := &file_sidecar_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -342,7 +217,7 @@ func (x *ReEncryptResponse) String() string {
 func (*ReEncryptResponse) ProtoMessage() {}
 
 func (x *ReEncryptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[5]
+	mi := &file_sidecar_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -355,7 +230,7 @@ func (x *ReEncryptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReEncryptResponse.ProtoReflect.Descriptor instead.
 func (*ReEncryptResponse) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{5}
+	return file_sidecar_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ReEncryptResponse) GetCfrag() []byte {
@@ -376,7 +251,7 @@ type DeleteKFragsRequest struct {
 
 func (x *DeleteKFragsRequest) Reset() {
 	*x = DeleteKFragsRequest{}
-	mi := &file_sidecar_proto_msgTypes[6]
+	mi := &file_sidecar_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -388,7 +263,7 @@ func (x *DeleteKFragsRequest) String() string {
 func (*DeleteKFragsRequest) ProtoMessage() {}
 
 func (x *DeleteKFragsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[6]
+	mi := &file_sidecar_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -401,7 +276,7 @@ func (x *DeleteKFragsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteKFragsRequest.ProtoReflect.Descriptor instead.
 func (*DeleteKFragsRequest) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{6}
+	return file_sidecar_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DeleteKFragsRequest) GetOrgId() string {
@@ -428,7 +303,7 @@ type DeleteKFragsResponse struct {
 
 func (x *DeleteKFragsResponse) Reset() {
 	*x = DeleteKFragsResponse{}
-	mi := &file_sidecar_proto_msgTypes[7]
+	mi := &file_sidecar_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -440,7 +315,7 @@ func (x *DeleteKFragsResponse) String() string {
 func (*DeleteKFragsResponse) ProtoMessage() {}
 
 func (x *DeleteKFragsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[7]
+	mi := &file_sidecar_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -453,7 +328,7 @@ func (x *DeleteKFragsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteKFragsResponse.ProtoReflect.Descriptor instead.
 func (*DeleteKFragsResponse) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{7}
+	return file_sidecar_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DeleteKFragsResponse) GetDeletedCount() uint32 {
@@ -472,7 +347,7 @@ type DeleteOrgKFragsRequest struct {
 
 func (x *DeleteOrgKFragsRequest) Reset() {
 	*x = DeleteOrgKFragsRequest{}
-	mi := &file_sidecar_proto_msgTypes[8]
+	mi := &file_sidecar_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -484,7 +359,7 @@ func (x *DeleteOrgKFragsRequest) String() string {
 func (*DeleteOrgKFragsRequest) ProtoMessage() {}
 
 func (x *DeleteOrgKFragsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[8]
+	mi := &file_sidecar_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -497,7 +372,7 @@ func (x *DeleteOrgKFragsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrgKFragsRequest.ProtoReflect.Descriptor instead.
 func (*DeleteOrgKFragsRequest) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{8}
+	return file_sidecar_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DeleteOrgKFragsRequest) GetOrgId() string {
@@ -516,7 +391,7 @@ type DeleteOrgKFragsResponse struct {
 
 func (x *DeleteOrgKFragsResponse) Reset() {
 	*x = DeleteOrgKFragsResponse{}
-	mi := &file_sidecar_proto_msgTypes[9]
+	mi := &file_sidecar_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -528,7 +403,7 @@ func (x *DeleteOrgKFragsResponse) String() string {
 func (*DeleteOrgKFragsResponse) ProtoMessage() {}
 
 func (x *DeleteOrgKFragsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[9]
+	mi := &file_sidecar_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -541,7 +416,7 @@ func (x *DeleteOrgKFragsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteOrgKFragsResponse.ProtoReflect.Descriptor instead.
 func (*DeleteOrgKFragsResponse) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{9}
+	return file_sidecar_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DeleteOrgKFragsResponse) GetDeletedCount() uint32 {
@@ -559,7 +434,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_sidecar_proto_msgTypes[10]
+	mi := &file_sidecar_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -571,7 +446,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[10]
+	mi := &file_sidecar_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -584,7 +459,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{10}
+	return file_sidecar_proto_rawDescGZIP(), []int{8}
 }
 
 type HealthResponse struct {
@@ -600,7 +475,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_sidecar_proto_msgTypes[11]
+	mi := &file_sidecar_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -612,7 +487,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sidecar_proto_msgTypes[11]
+	mi := &file_sidecar_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -625,7 +500,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_sidecar_proto_rawDescGZIP(), []int{11}
+	return file_sidecar_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *HealthResponse) GetHealthy() bool {
@@ -653,22 +528,13 @@ var File_sidecar_proto protoreflect.FileDescriptor
 
 const file_sidecar_proto_rawDesc = "" +
 	"\n" +
-	"\rsidecar.proto\x12\tumbral.v1\"\x18\n" +
-	"\x16GenerateKeyPairRequest\"W\n" +
-	"\x17GenerateKeyPairResponse\x12\x1d\n" +
-	"\n" +
-	"secret_key\x18\x01 \x01(\fR\tsecretKey\x12\x1d\n" +
-	"\n" +
-	"public_key\x18\x02 \x01(\fR\tpublicKey\"\xd1\x01\n" +
-	"\x15GenerateKFragsRequest\x12\x15\n" +
+	"\rsidecar.proto\x12\tumbral.v1\"x\n" +
+	"\x11StoreKFragRequest\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x19\n" +
-	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12#\n" +
-	"\rdelegating_sk\x18\x03 \x01(\fR\fdelegatingSk\x12!\n" +
-	"\freceiving_pk\x18\x04 \x01(\fR\vreceivingPk\x12\x1b\n" +
-	"\tsigner_sk\x18\x05 \x01(\fR\bsignerSk\x12!\n" +
-	"\fverifying_pk\x18\x06 \x01(\fR\vverifyingPk\".\n" +
-	"\x16GenerateKFragsResponse\x12\x14\n" +
-	"\x05kfrag\x18\x01 \x01(\fR\x05kfrag\"{\n" +
+	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
+	"\tmember_pk\x18\x03 \x01(\fR\bmemberPk\x12\x14\n" +
+	"\x05kfrag\x18\x04 \x01(\fR\x05kfrag\"\x14\n" +
+	"\x12StoreKFragResponse\"{\n" +
 	"\x10ReEncryptRequest\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x19\n" +
 	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
@@ -690,10 +556,10 @@ const file_sidecar_proto_rawDesc = "" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x1f\n" +
 	"\vkfrag_count\x18\x02 \x01(\x04R\n" +
 	"kfragCount\x12%\n" +
-	"\x0eumbral_version\x18\x03 \x01(\tR\rumbralVersion2\xf2\x03\n" +
-	"\rUmbralSidecar\x12X\n" +
-	"\x0fGenerateKeyPair\x12!.umbral.v1.GenerateKeyPairRequest\x1a\".umbral.v1.GenerateKeyPairResponse\x12U\n" +
-	"\x0eGenerateKFrags\x12 .umbral.v1.GenerateKFragsRequest\x1a!.umbral.v1.GenerateKFragsResponse\x12F\n" +
+	"\x0eumbral_version\x18\x03 \x01(\tR\rumbralVersion2\x8c\x03\n" +
+	"\rUmbralSidecar\x12I\n" +
+	"\n" +
+	"StoreKFrag\x12\x1c.umbral.v1.StoreKFragRequest\x1a\x1d.umbral.v1.StoreKFragResponse\x12F\n" +
 	"\tReEncrypt\x12\x1b.umbral.v1.ReEncryptRequest\x1a\x1c.umbral.v1.ReEncryptResponse\x12O\n" +
 	"\fDeleteKFrags\x12\x1e.umbral.v1.DeleteKFragsRequest\x1a\x1f.umbral.v1.DeleteKFragsResponse\x12X\n" +
 	"\x0fDeleteOrgKFrags\x12!.umbral.v1.DeleteOrgKFragsRequest\x1a\".umbral.v1.DeleteOrgKFragsResponse\x12=\n" +
@@ -711,39 +577,35 @@ func file_sidecar_proto_rawDescGZIP() []byte {
 	return file_sidecar_proto_rawDescData
 }
 
-var file_sidecar_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_sidecar_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_sidecar_proto_goTypes = []any{
-	(*GenerateKeyPairRequest)(nil),  // 0: umbral.v1.GenerateKeyPairRequest
-	(*GenerateKeyPairResponse)(nil), // 1: umbral.v1.GenerateKeyPairResponse
-	(*GenerateKFragsRequest)(nil),   // 2: umbral.v1.GenerateKFragsRequest
-	(*GenerateKFragsResponse)(nil),  // 3: umbral.v1.GenerateKFragsResponse
-	(*ReEncryptRequest)(nil),        // 4: umbral.v1.ReEncryptRequest
-	(*ReEncryptResponse)(nil),       // 5: umbral.v1.ReEncryptResponse
-	(*DeleteKFragsRequest)(nil),     // 6: umbral.v1.DeleteKFragsRequest
-	(*DeleteKFragsResponse)(nil),    // 7: umbral.v1.DeleteKFragsResponse
-	(*DeleteOrgKFragsRequest)(nil),  // 8: umbral.v1.DeleteOrgKFragsRequest
-	(*DeleteOrgKFragsResponse)(nil), // 9: umbral.v1.DeleteOrgKFragsResponse
-	(*HealthRequest)(nil),           // 10: umbral.v1.HealthRequest
-	(*HealthResponse)(nil),          // 11: umbral.v1.HealthResponse
+	(*StoreKFragRequest)(nil),       // 0: umbral.v1.StoreKFragRequest
+	(*StoreKFragResponse)(nil),      // 1: umbral.v1.StoreKFragResponse
+	(*ReEncryptRequest)(nil),        // 2: umbral.v1.ReEncryptRequest
+	(*ReEncryptResponse)(nil),       // 3: umbral.v1.ReEncryptResponse
+	(*DeleteKFragsRequest)(nil),     // 4: umbral.v1.DeleteKFragsRequest
+	(*DeleteKFragsResponse)(nil),    // 5: umbral.v1.DeleteKFragsResponse
+	(*DeleteOrgKFragsRequest)(nil),  // 6: umbral.v1.DeleteOrgKFragsRequest
+	(*DeleteOrgKFragsResponse)(nil), // 7: umbral.v1.DeleteOrgKFragsResponse
+	(*HealthRequest)(nil),           // 8: umbral.v1.HealthRequest
+	(*HealthResponse)(nil),          // 9: umbral.v1.HealthResponse
 }
 var file_sidecar_proto_depIdxs = []int32{
-	0,  // 0: umbral.v1.UmbralSidecar.GenerateKeyPair:input_type -> umbral.v1.GenerateKeyPairRequest
-	2,  // 1: umbral.v1.UmbralSidecar.GenerateKFrags:input_type -> umbral.v1.GenerateKFragsRequest
-	4,  // 2: umbral.v1.UmbralSidecar.ReEncrypt:input_type -> umbral.v1.ReEncryptRequest
-	6,  // 3: umbral.v1.UmbralSidecar.DeleteKFrags:input_type -> umbral.v1.DeleteKFragsRequest
-	8,  // 4: umbral.v1.UmbralSidecar.DeleteOrgKFrags:input_type -> umbral.v1.DeleteOrgKFragsRequest
-	10, // 5: umbral.v1.UmbralSidecar.Health:input_type -> umbral.v1.HealthRequest
-	1,  // 6: umbral.v1.UmbralSidecar.GenerateKeyPair:output_type -> umbral.v1.GenerateKeyPairResponse
-	3,  // 7: umbral.v1.UmbralSidecar.GenerateKFrags:output_type -> umbral.v1.GenerateKFragsResponse
-	5,  // 8: umbral.v1.UmbralSidecar.ReEncrypt:output_type -> umbral.v1.ReEncryptResponse
-	7,  // 9: umbral.v1.UmbralSidecar.DeleteKFrags:output_type -> umbral.v1.DeleteKFragsResponse
-	9,  // 10: umbral.v1.UmbralSidecar.DeleteOrgKFrags:output_type -> umbral.v1.DeleteOrgKFragsResponse
-	11, // 11: umbral.v1.UmbralSidecar.Health:output_type -> umbral.v1.HealthResponse
-	6,  // [6:12] is the sub-list for method output_type
-	0,  // [0:6] is the sub-list for method input_type
-	0,  // [0:0] is the sub-list for extension type_name
-	0,  // [0:0] is the sub-list for extension extendee
-	0,  // [0:0] is the sub-list for field type_name
+	0, // 0: umbral.v1.UmbralSidecar.StoreKFrag:input_type -> umbral.v1.StoreKFragRequest
+	2, // 1: umbral.v1.UmbralSidecar.ReEncrypt:input_type -> umbral.v1.ReEncryptRequest
+	4, // 2: umbral.v1.UmbralSidecar.DeleteKFrags:input_type -> umbral.v1.DeleteKFragsRequest
+	6, // 3: umbral.v1.UmbralSidecar.DeleteOrgKFrags:input_type -> umbral.v1.DeleteOrgKFragsRequest
+	8, // 4: umbral.v1.UmbralSidecar.Health:input_type -> umbral.v1.HealthRequest
+	1, // 5: umbral.v1.UmbralSidecar.StoreKFrag:output_type -> umbral.v1.StoreKFragResponse
+	3, // 6: umbral.v1.UmbralSidecar.ReEncrypt:output_type -> umbral.v1.ReEncryptResponse
+	5, // 7: umbral.v1.UmbralSidecar.DeleteKFrags:output_type -> umbral.v1.DeleteKFragsResponse
+	7, // 8: umbral.v1.UmbralSidecar.DeleteOrgKFrags:output_type -> umbral.v1.DeleteOrgKFragsResponse
+	9, // 9: umbral.v1.UmbralSidecar.Health:output_type -> umbral.v1.HealthResponse
+	5, // [5:10] is the sub-list for method output_type
+	0, // [0:5] is the sub-list for method input_type
+	0, // [0:0] is the sub-list for extension type_name
+	0, // [0:0] is the sub-list for extension extendee
+	0, // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_sidecar_proto_init() }
@@ -757,7 +619,7 @@ func file_sidecar_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sidecar_proto_rawDesc), len(file_sidecar_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

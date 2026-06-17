@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,6 +35,8 @@ type VerifyEntry struct {
 	Vector                 []float32 `json:"vector"`
 	EmbeddingModelID       string    `json:"embedding_model_id"`
 	EmbeddingSchemaVersion string    `json:"embedding_schema_version"`
+	UmbralCapsule          string    `json:"umbral_capsule"`
+	UmbralCiphertext       string    `json:"umbral_ciphertext"`
 }
 
 type VerifyKeywordsRequest struct {
@@ -352,6 +355,23 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if entry.UmbralCapsule == "" || entry.UmbralCiphertext == "" {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "missing umbral capsule/ciphertext"})
+			continue
+		}
+
+		capsuleBytes, err := hex.DecodeString(entry.UmbralCapsule)
+		if err != nil {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "invalid umbral_capsule hex"})
+			continue
+		}
+
+		ciphertextBytes, err := hex.DecodeString(entry.UmbralCiphertext)
+		if err != nil {
+			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "invalid umbral_ciphertext hex"})
+			continue
+		}
+
 		embeddingVector, err := json.Marshal(entry.Vector)
 		if err != nil {
 			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "failed to marshal embedding vector"})
@@ -389,10 +409,12 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			    embedding_model_id = $2,
 			    embedding_schema_version = $3,
 			    near_dup_matches = $4,
+			    umbral_capsule = $5,
+			    umbral_ciphertext = $6,
 			    verified_at = NOW(),
 			    updated_at = NOW()
-			WHERE org_id = $5 AND submission_hash = $6 AND status = 'pending_keyword'
-		`, embeddingVector, entry.EmbeddingModelID, entry.EmbeddingSchemaVersion, nearDupMatchesJSON, orgID, entry.SubmissionHash)
+			WHERE org_id = $7 AND submission_hash = $8 AND status = 'pending_keyword'
+		`, embeddingVector, entry.EmbeddingModelID, entry.EmbeddingSchemaVersion, nearDupMatchesJSON, capsuleBytes, ciphertextBytes, orgID, entry.SubmissionHash)
 		if err != nil {
 			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Error: "internal error"})
 			continue

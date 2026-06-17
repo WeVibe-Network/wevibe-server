@@ -8,14 +8,9 @@ option go_package = "github.com/wevibe-network/wevibe-server/wevibe-hub/internal
 // This service runs as a separate process to maintain GPL-3.0 / Apache-2.0 license boundary.
 // All byte fields are serialized Umbral types using MessagePack (DefaultSerialize/DefaultDeserialize).
 service UmbralSidecar {
-  // GenerateKeyPair generates a new random Umbral keypair (epoch keypair).
-  // Called by the leader during epoch creation.
-  rpc GenerateKeyPair(GenerateKeyPairRequest) returns (GenerateKeyPairResponse);
-
-  // GenerateKFrags generates re-encryption key fragments for a member.
-  // Called by the leader when adding a member or rotating epochs.
-  // The sidecar stores the kfrag internally, keyed by (org_id, epoch_id, member_pubkey).
-  rpc GenerateKFrags(GenerateKFragsRequest) returns (GenerateKFragsResponse);
+  // StoreKFrag stores a pre-generated kfrag for (org_id, epoch_id, member_pubkey).
+  // Used when kfrags are generated on the leader machine.
+  rpc StoreKFrag(StoreKFragRequest) returns (StoreKFragResponse);
 
   // ReEncrypt applies a stored kfrag to a capsule, producing a cfrag.
   // Called by the hub during memory retrieval.
@@ -35,38 +30,14 @@ service UmbralSidecar {
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
-message GenerateKeyPairRequest {}
-
-message GenerateKeyPairResponse {
-  // Serialized Umbral SecretKey (32 bytes, big-endian).
-  // SENSITIVE — must be handled as secret material by the caller.
-  bytes secret_key = 1;
-  // Serialized Umbral PublicKey (33 bytes, compressed secp256k1 point).
-  bytes public_key = 2;
-}
-
-message GenerateKFragsRequest {
-  // Org identifier — used as storage key prefix.
+message StoreKFragRequest {
   string org_id = 1;
-  // Epoch identifier — used as storage key component.
   uint64 epoch_id = 2;
-  // Serialized Umbral SecretKey of the epoch (delegating key).
-  // SENSITIVE — the sidecar uses this transiently and does NOT store it.
-  bytes delegating_sk = 3;
-  // Serialized Umbral PublicKey of the member (receiving key).
-  bytes receiving_pk = 4;
-  // Serialized Umbral SecretKey used for signing kfrags.
-  // SENSITIVE — the sidecar uses this transiently and does NOT store it.
-  bytes signer_sk = 5;
-  // Serialized Umbral PublicKey corresponding to signer_sk (verifying key).
-  bytes verifying_pk = 6;
+  bytes member_pk = 3;
+  bytes kfrag = 4;
 }
 
-message GenerateKFragsResponse {
-  // Serialized VerifiedKeyFrag. Stored internally by the sidecar.
-  // Returned to caller for backup/audit purposes only.
-  bytes kfrag = 1;
-}
+message StoreKFragResponse {}
 
 message ReEncryptRequest {
   // Identifies which stored kfrag to use.

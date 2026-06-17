@@ -19,8 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	UmbralSidecar_GenerateKeyPair_FullMethodName = "/umbral.v1.UmbralSidecar/GenerateKeyPair"
-	UmbralSidecar_GenerateKFrags_FullMethodName  = "/umbral.v1.UmbralSidecar/GenerateKFrags"
+	UmbralSidecar_StoreKFrag_FullMethodName      = "/umbral.v1.UmbralSidecar/StoreKFrag"
 	UmbralSidecar_ReEncrypt_FullMethodName       = "/umbral.v1.UmbralSidecar/ReEncrypt"
 	UmbralSidecar_DeleteKFrags_FullMethodName    = "/umbral.v1.UmbralSidecar/DeleteKFrags"
 	UmbralSidecar_DeleteOrgKFrags_FullMethodName = "/umbral.v1.UmbralSidecar/DeleteOrgKFrags"
@@ -35,13 +34,9 @@ const (
 // This service runs as a separate process to maintain GPL-3.0 / Apache-2.0 license boundary.
 // All byte fields are serialized Umbral types using MessagePack (DefaultSerialize/DefaultDeserialize).
 type UmbralSidecarClient interface {
-	// GenerateKeyPair generates a new random Umbral keypair (epoch keypair).
-	// Called by the leader during epoch creation.
-	GenerateKeyPair(ctx context.Context, in *GenerateKeyPairRequest, opts ...grpc.CallOption) (*GenerateKeyPairResponse, error)
-	// GenerateKFrags generates re-encryption key fragments for a member.
-	// Called by the leader when adding a member or rotating epochs.
-	// The sidecar stores the kfrag internally, keyed by (org_id, epoch_id, member_pubkey).
-	GenerateKFrags(ctx context.Context, in *GenerateKFragsRequest, opts ...grpc.CallOption) (*GenerateKFragsResponse, error)
+	// StoreKFrag stores a pre-generated kfrag for (org_id, epoch_id, member_pubkey).
+	// Used when kfrags are generated on the leader machine.
+	StoreKFrag(ctx context.Context, in *StoreKFragRequest, opts ...grpc.CallOption) (*StoreKFragResponse, error)
 	// ReEncrypt applies a stored kfrag to a capsule, producing a cfrag.
 	// Called by the hub during memory retrieval.
 	// Returns an error if no kfrag exists for the specified (org_id, epoch_id, member_pubkey).
@@ -65,20 +60,10 @@ func NewUmbralSidecarClient(cc grpc.ClientConnInterface) UmbralSidecarClient {
 	return &umbralSidecarClient{cc}
 }
 
-func (c *umbralSidecarClient) GenerateKeyPair(ctx context.Context, in *GenerateKeyPairRequest, opts ...grpc.CallOption) (*GenerateKeyPairResponse, error) {
+func (c *umbralSidecarClient) StoreKFrag(ctx context.Context, in *StoreKFragRequest, opts ...grpc.CallOption) (*StoreKFragResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GenerateKeyPairResponse)
-	err := c.cc.Invoke(ctx, UmbralSidecar_GenerateKeyPair_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *umbralSidecarClient) GenerateKFrags(ctx context.Context, in *GenerateKFragsRequest, opts ...grpc.CallOption) (*GenerateKFragsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GenerateKFragsResponse)
-	err := c.cc.Invoke(ctx, UmbralSidecar_GenerateKFrags_FullMethodName, in, out, cOpts...)
+	out := new(StoreKFragResponse)
+	err := c.cc.Invoke(ctx, UmbralSidecar_StoreKFrag_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -133,13 +118,9 @@ func (c *umbralSidecarClient) Health(ctx context.Context, in *HealthRequest, opt
 // This service runs as a separate process to maintain GPL-3.0 / Apache-2.0 license boundary.
 // All byte fields are serialized Umbral types using MessagePack (DefaultSerialize/DefaultDeserialize).
 type UmbralSidecarServer interface {
-	// GenerateKeyPair generates a new random Umbral keypair (epoch keypair).
-	// Called by the leader during epoch creation.
-	GenerateKeyPair(context.Context, *GenerateKeyPairRequest) (*GenerateKeyPairResponse, error)
-	// GenerateKFrags generates re-encryption key fragments for a member.
-	// Called by the leader when adding a member or rotating epochs.
-	// The sidecar stores the kfrag internally, keyed by (org_id, epoch_id, member_pubkey).
-	GenerateKFrags(context.Context, *GenerateKFragsRequest) (*GenerateKFragsResponse, error)
+	// StoreKFrag stores a pre-generated kfrag for (org_id, epoch_id, member_pubkey).
+	// Used when kfrags are generated on the leader machine.
+	StoreKFrag(context.Context, *StoreKFragRequest) (*StoreKFragResponse, error)
 	// ReEncrypt applies a stored kfrag to a capsule, producing a cfrag.
 	// Called by the hub during memory retrieval.
 	// Returns an error if no kfrag exists for the specified (org_id, epoch_id, member_pubkey).
@@ -163,11 +144,8 @@ type UmbralSidecarServer interface {
 // pointer dereference when methods are called.
 type UnimplementedUmbralSidecarServer struct{}
 
-func (UnimplementedUmbralSidecarServer) GenerateKeyPair(context.Context, *GenerateKeyPairRequest) (*GenerateKeyPairResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GenerateKeyPair not implemented")
-}
-func (UnimplementedUmbralSidecarServer) GenerateKFrags(context.Context, *GenerateKFragsRequest) (*GenerateKFragsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GenerateKFrags not implemented")
+func (UnimplementedUmbralSidecarServer) StoreKFrag(context.Context, *StoreKFragRequest) (*StoreKFragResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method StoreKFrag not implemented")
 }
 func (UnimplementedUmbralSidecarServer) ReEncrypt(context.Context, *ReEncryptRequest) (*ReEncryptResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReEncrypt not implemented")
@@ -202,38 +180,20 @@ func RegisterUmbralSidecarServer(s grpc.ServiceRegistrar, srv UmbralSidecarServe
 	s.RegisterService(&UmbralSidecar_ServiceDesc, srv)
 }
 
-func _UmbralSidecar_GenerateKeyPair_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GenerateKeyPairRequest)
+func _UmbralSidecar_StoreKFrag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StoreKFragRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(UmbralSidecarServer).GenerateKeyPair(ctx, in)
+		return srv.(UmbralSidecarServer).StoreKFrag(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: UmbralSidecar_GenerateKeyPair_FullMethodName,
+		FullMethod: UmbralSidecar_StoreKFrag_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UmbralSidecarServer).GenerateKeyPair(ctx, req.(*GenerateKeyPairRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _UmbralSidecar_GenerateKFrags_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GenerateKFragsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(UmbralSidecarServer).GenerateKFrags(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: UmbralSidecar_GenerateKFrags_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(UmbralSidecarServer).GenerateKFrags(ctx, req.(*GenerateKFragsRequest))
+		return srv.(UmbralSidecarServer).StoreKFrag(ctx, req.(*StoreKFragRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -318,12 +278,8 @@ var UmbralSidecar_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*UmbralSidecarServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GenerateKeyPair",
-			Handler:    _UmbralSidecar_GenerateKeyPair_Handler,
-		},
-		{
-			MethodName: "GenerateKFrags",
-			Handler:    _UmbralSidecar_GenerateKFrags_Handler,
+			MethodName: "StoreKFrag",
+			Handler:    _UmbralSidecar_StoreKFrag_Handler,
 		},
 		{
 			MethodName: "ReEncrypt",

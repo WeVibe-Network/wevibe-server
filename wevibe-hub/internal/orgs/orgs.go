@@ -41,10 +41,15 @@ func CreateOrg(ctx context.Context, pool *pgxpool.Pool, orgID string, req protoc
 		return nil, fmt.Errorf("insert org: %w", err)
 	}
 
+	umbralPKBytes, err := hex.DecodeString(req.UmbralPK)
+	if err != nil {
+		return nil, fmt.Errorf("invalid umbral_pk hex: %w", err)
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO epoch_manifests (org_id, epoch_id, pk_mod, umbral_pk, signed_by, signature)
 		VALUES ($1, 0, $2, $3, $4, $5)
-	`, orgID, req.PkMod, req.UmbralPK, req.LeaderPubkey, req.Signature)
+	`, orgID, req.PkMod, umbralPKBytes, req.LeaderPubkey, req.Signature)
 	if err != nil {
 		return nil, fmt.Errorf("insert epoch manifest: %w", err)
 	}
@@ -267,10 +272,15 @@ func RotateEpoch(ctx context.Context, pool *pgxpool.Pool, orgID string, req prot
 		return fmt.Errorf("update epoch: %w", err)
 	}
 
+	umbralPKBytes, err := hex.DecodeString(req.UmbralPK)
+	if err != nil {
+		return fmt.Errorf("invalid umbral_pk hex: %w", err)
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO epoch_manifests (org_id, epoch_id, pk_mod, umbral_pk, signed_by, signature)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, orgID, newEpoch, req.NewPkMod, req.UmbralPK, req.SignedBy, req.Signature)
+	`, orgID, newEpoch, req.NewPkMod, umbralPKBytes, req.SignedBy, req.Signature)
 	if err != nil {
 		return fmt.Errorf("insert manifest: %w", err)
 	}

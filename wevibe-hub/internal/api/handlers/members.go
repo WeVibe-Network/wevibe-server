@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -57,9 +56,8 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var prePubkeyBytes []byte
 	if req.PrePubkey != "" {
-		prePubkeyBytes, err = decodePrePubkey(req.PrePubkey)
+		_, err = decodePrePubkey(req.PrePubkey)
 		if err != nil {
 			http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
 			return
@@ -123,18 +121,6 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 	if err := envelopes.Store(r.Context(), pool, orgID, req.Pubkey, currentEpoch, req.EncEnvelope, req.SearchEnvelope, modEnv); err != nil {
 		http.Error(w, `{"error":"failed to store member envelope"}`, http.StatusInternalServerError)
 		return
-	}
-
-	if umbralService != nil && req.EpochSK != "" && len(prePubkeyBytes) == 33 {
-		epochSKBytes, err := hex.DecodeString(req.EpochSK)
-		if err != nil {
-			log.Printf("WARNING: failed to decode epoch_sk for kfrag generation: %v", err)
-		} else {
-			_, err := umbralService.RegisterMember(r.Context(), orgID, uint64(currentEpoch), epochSKBytes, prePubkeyBytes, epochSKBytes, epochSKBytes)
-			if err != nil {
-				log.Printf("ERROR: failed to generate kfrags for org=%s member=%s epoch=%d: %v", orgID, req.Pubkey, currentEpoch, err)
-			}
-		}
 	}
 
 	// Admission does not consume hub credits. Recall stays gated by
@@ -382,13 +368,14 @@ func LinkWallet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type enableMemberRecallRequest struct {
-	SignedBy string `json:"signed_by"`
-	Free     bool   `json:"free"`
-}
-
 type disableMemberRecallRequest struct {
 	SignedBy string `json:"signed_by"`
+}
+
+type storeMemberKFragRequest struct {
+	EpochID   uint64 `json:"epoch_id"`
+	PrePubkey string `json:"pre_pubkey"`
+	Kfrag     string `json:"kfrag"`
 }
 
 func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
@@ -416,10 +403,26 @@ func EnableMemberRecall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req enableMemberRecallRequest
+	var req protocol.EnableMemberRecallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
 		return
+	}
+
+	if req.PrePubkey != "" {
+		prePubkeyBytes, err := decodePrePubkey(req.PrePubkey)
+		if err != nil {
+			http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
+			return
+		}
+
+		if err := members.SetPrePubkey(r.Context(), pool, orgID, memberPubkey, prePubkeyBytes); err == pgx.ErrNoRows {
+			http.Error(w, `{"error":"member not found"}`, http.StatusNotFound)
+			return
+		} else if err != nil {
+			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if req.Free {
@@ -489,6 +492,86 @@ func DisableMemberRecall(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"membership_active": false})
+}
+
+func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	memberPubkey := chi.URLParam(r, "pubkey")
+	if orgID == "" || memberPubkey == "" {
+		http.Error(w, `{"error":"org_id and pubkey required"}`, http.StatusBadRequest)
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
+		return
+	}
+
+	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
+	if err != nil {
+		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
+		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
+	if err != nil || role != "leader" {
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+
+	var req storeMemberKFragRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+
+	prePubkey, err := decodePrePubkey(req.PrePubkey)
+	if err != nil {
+		http.Error(w, `{"error":"pre_pubkey must be valid hex and exactly 33 bytes"}`, http.StatusBadRequest)
+		return
+	}
+
+	kfrag, err := hex.DecodeString(req.Kfrag)
+	if err != nil {
+		http.Error(w, `{"error":"kfrag must be valid hex"}`, http.StatusBadRequest)
+		return
+	}
+
+	if umbralService == nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if err := umbralService.StoreKFrag(r.Context(), orgID, req.EpochID, prePubkey, kfrag); err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func RegisterPreKey(w http.ResponseWriter, r *http.Request) {

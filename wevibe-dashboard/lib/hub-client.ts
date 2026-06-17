@@ -446,14 +446,13 @@ export interface CreateOrgRequest {
   enc_envelope: string;
   search_envelope: string;
   mod_envelope: string;
+  umbral_pk: string;
   pk_mod: string;
   signature: string;
 }
 
 export interface CreateOrgResponse extends OrgSummary {
   hub_serving_key_address: string;
-  epoch_sk?: string;
-  epoch_pk?: string;
 }
 
 export interface HubServingAddressResponse {
@@ -669,6 +668,8 @@ export interface VerifyEntry {
   vector: number[];
   embedding_model_id: string;
   embedding_schema_version: string;
+  umbral_capsule: string;
+  umbral_ciphertext: string;
 }
 
 export interface OrgHealth {

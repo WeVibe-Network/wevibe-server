@@ -1,5 +1,7 @@
 # WeVibe Infra PDP
 
+> **Status — ASPIRATIONAL / FUTURE-STATE:** This document describes target-state infrastructure. The current alpha deployment runs via Docker Compose (`wevibe-server/docker-compose.yml`); see `wevibe-server/README.md`.
+
 ## Stack
 
 - **Orchestration:** Kubernetes (EKS/GKE/AKS) or Nomad.

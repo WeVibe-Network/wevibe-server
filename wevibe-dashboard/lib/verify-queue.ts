@@ -15,6 +15,7 @@ import { getMcpClient } from './mcp-client';
 export interface VerificationJobInput {
   orgId: string;
   submissionHash: string;
+  epochId: number;
   selected: KeywordWeight[];
   excluded: KeywordSuggestionPayload[];
   ciphertextHex: string;
@@ -76,11 +77,15 @@ type EmbedResult = {
   vector: number[] | null;
   embedding_model_id: string;
   embedding_schema_version: string;
+  umbral_capsule: string | null;
+  umbral_ciphertext: string | null;
   error?: string;
 };
 
-type EmbedResultWithVector = Omit<EmbedResult, 'vector'> & {
+type EmbedResultWithVector = Omit<EmbedResult, 'vector' | 'umbral_capsule' | 'umbral_ciphertext'> & {
   vector: number[];
+  umbral_capsule: string;
+  umbral_ciphertext: string;
 };
 
 const STORAGE_VERSION = 1;
@@ -234,16 +239,18 @@ function parseVerificationJobInput(raw: unknown): VerificationJobInput | null {
 
   const orgId = normalizeNonEmptyString(raw.orgId);
   const submissionHash = normalizeNonEmptyString(raw.submissionHash);
+  const epochIdRaw = typeof raw.epochId === 'number' ? raw.epochId : Number(raw.epochId);
   const ciphertextHex = normalizeNonEmptyString(raw.ciphertextHex);
   const wrappedDekMod = normalizeNonEmptyString(raw.wrappedDekMod);
 
-  if (!orgId || !submissionHash || !ciphertextHex || !wrappedDekMod) {
+  if (!orgId || !submissionHash || !Number.isFinite(epochIdRaw) || !ciphertextHex || !wrappedDekMod) {
     return null;
   }
 
   return {
     orgId,
     submissionHash,
+    epochId: epochIdRaw,
     selected: normalizeKeywordWeights(raw.selected),
     excluded: normalizeExcludedSuggestions(raw.excluded),
     ciphertextHex,
@@ -690,6 +697,7 @@ function loadPersistedState(): void {
       cachedInputs.set(job.submissionHash, {
         orgId: job.orgId,
         submissionHash: job.submissionHash,
+        epochId: job.epochId,
         selected: job.selected,
         excluded: job.excluded,
         ciphertextHex: job.ciphertextHex,
@@ -766,9 +774,21 @@ function ensureSingleEmbedResult(
     );
   }
 
+  const umbralCapsule = normalizeNonEmptyString(candidate.umbral_capsule);
+  const umbralCiphertext = normalizeNonEmptyString(candidate.umbral_ciphertext);
+  if (!umbralCapsule || !umbralCiphertext) {
+    throw new Error(
+      typeof candidate.error === 'string' && candidate.error.trim().length > 0
+        ? candidate.error
+        : 'Embedding failed; no umbral capsule returned',
+    );
+  }
+
   return {
     ...candidate,
     vector: candidate.vector,
+    umbral_capsule: umbralCapsule,
+    umbral_ciphertext: umbralCiphertext,
   };
 }
 
@@ -832,6 +852,7 @@ async function runJob(job: VerificationJob): Promise<void> {
         ciphertext_hex: job.ciphertextHex,
         wrapped_dek_mod: job.wrappedDekMod,
         stack_hint: job.stackHint,
+        epoch_id: job.epochId,
       }],
     });
 
@@ -849,6 +870,8 @@ async function runJob(job: VerificationJob): Promise<void> {
       vector: embed.vector,
       embedding_model_id: embed.embedding_model_id,
       embedding_schema_version: embed.embedding_schema_version,
+      umbral_capsule: embed.umbral_capsule,
+      umbral_ciphertext: embed.umbral_ciphertext,
     }]);
 
     if (!Array.isArray(verifyResult) || verifyResult.length !== 1) {
@@ -879,6 +902,7 @@ async function runJob(job: VerificationJob): Promise<void> {
       cachedInputs.set(job.submissionHash, {
         orgId: job.orgId,
         submissionHash: job.submissionHash,
+        epochId: job.epochId,
         selected: job.selected,
         excluded: job.excluded,
         ciphertextHex: job.ciphertextHex,
@@ -971,6 +995,7 @@ export function enqueueVerificationBatch(inputs: VerificationJobInput[]): void {
     failed.delete(input.submissionHash);
     jobs.push({
       ...input,
+      epochId: input.epochId,
       batchId,
       status: 'queued',
       stage: null,
@@ -1029,6 +1054,7 @@ export function retryVerification(submissionHash: string): void {
 
   jobs.push({
     ...cachedInput,
+    epochId: cachedInput.epochId,
     batchId,
     status: 'queued',
     stage: null,

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,6 +123,11 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.TrimSpace(req.UmbralPK) == "" {
+		http.Error(w, `{"error":"umbral_pk is required"}`, http.StatusBadRequest)
+		return
+	}
+
 	canonical := verify.CreateOrgMessage(req.LeaderPubkey, req.LeaderX25519Pubkey, req.OrgName, req.Domain, req.EncEnvelope, req.SearchEnvelope, req.ModEnvelope, req.PkMod, req.FeeModel)
 	if err := verify.RequestSignature(req.LeaderPubkey, req.Signature, canonical); err != nil {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
@@ -138,20 +142,6 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	if existingOrgID != "" {
 		http.Error(w, fmt.Sprintf(`{"error":"leader already owns an org","org_id":%q}`, existingOrgID), http.StatusConflict)
 		return
-	}
-
-	var epochSK string
-	var epochPK string
-	if umbralService != nil {
-		sk, pk, err := umbralService.GenerateEpochKeyPair(r.Context())
-		if err != nil {
-			log.Printf("WARNING: failed to generate epoch keypair: %v", err)
-		} else {
-			req.UmbralPK = pk
-			epochSK = hex.EncodeToString(sk)
-			epochPK = hex.EncodeToString(pk)
-			log.Printf("generated epoch keypair for org=%s epoch=0", orgID)
-		}
 	}
 
 	org, err := orgs.CreateOrg(r.Context(), pool, orgID, req)
@@ -188,14 +178,10 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 		*protocol.OrgInfo
 		HubServingKeyAddress string `json:"hub_serving_key_address"`
 		LeaderWalletAddress  string `json:"leader_wallet_address"`
-		EpochSK              string `json:"epoch_sk,omitempty"`
-		EpochPK              string `json:"epoch_pk,omitempty"`
 	}{
 		OrgInfo:              org,
 		HubServingKeyAddress: req.HubServingKey,
 		LeaderWalletAddress:  req.LeaderWallet,
-		EpochSK:              epochSK,
-		EpochPK:              epochPK,
 	}
 	json.NewEncoder(w).Encode(resp)
 }
@@ -297,19 +283,6 @@ func RotateEpoch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var epochSK string
-	var epochPK string
-	if umbralService != nil {
-		sk, pk, err := umbralService.GenerateEpochKeyPair(r.Context())
-		if err != nil {
-			log.Printf("WARNING: failed to generate epoch keypair for rotation: %v", err)
-		} else {
-			req.UmbralPK = pk
-			epochSK = hex.EncodeToString(sk)
-			epochPK = hex.EncodeToString(pk)
-		}
-	}
-
 	if err := orgs.RotateEpoch(r.Context(), pool, orgID, req); err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
@@ -319,10 +292,6 @@ func RotateEpoch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
-	}
-
-	if epochPK != "" {
-		log.Printf("generated epoch keypair for org=%s epoch=%d", orgID, newEpoch)
 	}
 
 	if chainClient != nil {
@@ -348,8 +317,6 @@ func RotateEpoch(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":         "ok",
 		"buffered_moved": bufferedCount,
-		"epoch_sk":       epochSK,
-		"epoch_pk":       epochPK,
 	})
 }
 

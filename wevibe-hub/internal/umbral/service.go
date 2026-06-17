@@ -24,35 +24,14 @@ func NewService(client *client) *Service {
 	return &Service{client: client}
 }
 
-func (s *Service) GenerateEpochKeyPair(ctx context.Context) (secretKey, publicKey []byte, err error) {
-	resp, err := s.client.GenerateKeyPair(ctx)
-	if err != nil {
-		if st, ok := status.FromError(err); ok && st.Code() == codes.Unavailable {
-			return nil, nil, fmt.Errorf("%w: %v", ErrSidecarUnavailable, err)
-		}
-		return nil, nil, fmt.Errorf("generate key pair: %w", err)
-	}
-	return resp.SecretKey, resp.PublicKey, nil
-}
-
-func (s *Service) RegisterMember(ctx context.Context, orgID string, epochID uint64, delegatingSK, receivingPK, signerSK, verifyingPK []byte) ([]byte, error) {
-	req := &umbralpb.GenerateKFragsRequest{
-		OrgId:        orgID,
-		EpochId:      epochID,
-		DelegatingSk: delegatingSK,
-		ReceivingPk:  receivingPK,
-		SignerSk:     signerSK,
-		VerifyingPk:  verifyingPK,
-	}
-	resp, err := s.client.GenerateKFrags(ctx, req)
-	if err != nil {
-		if st, ok := status.FromError(err); ok && st.Code() == codes.Unavailable {
-			return nil, fmt.Errorf("%w: %v", ErrSidecarUnavailable, err)
-		}
-		return nil, fmt.Errorf("generate kfrags: %w", err)
-	}
-	log.Printf("umbral: registered kfrag for org=%s epoch=%d", orgID, epochID)
-	return resp.Kfrag, nil
+func (s *Service) StoreKFrag(ctx context.Context, orgID string, epochID uint64, memberPK, kfrag []byte) error {
+	_, err := s.client.sidecar.StoreKFrag(ctx, &umbralpb.StoreKFragRequest{
+		OrgId:    orgID,
+		EpochId:  epochID,
+		MemberPk: memberPK,
+		Kfrag:    kfrag,
+	})
+	return err
 }
 
 func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID uint64, memberPK, capsule []byte) ([]byte, error) {
@@ -77,7 +56,7 @@ func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID 
 
 func (s *Service) OnMemberRemoved(ctx context.Context, orgID string, memberPK []byte) (uint32, error) {
 	req := &umbralpb.DeleteKFragsRequest{
-		OrgId:   orgID,
+		OrgId:    orgID,
 		MemberPk: memberPK,
 	}
 	resp, err := s.client.DeleteKFrags(ctx, req)

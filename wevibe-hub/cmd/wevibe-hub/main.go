@@ -229,6 +229,7 @@ func main() {
 			r.Get("/members/{pubkey}", handlers.GetMember)
 			r.Post("/members/{pubkey}/enable-recall", handlers.EnableMemberRecall)
 			r.Post("/members/{pubkey}/disable-recall", handlers.DisableMemberRecall)
+			r.Post("/members/{pubkey}/kfrag", handlers.StoreMemberKFrag)
 			r.Post("/members/{pubkey}/pre-key", handlers.RegisterPreKey)
 			r.Get("/members/{pubkey}/pre-key", handlers.GetPreKey)
 			r.Post("/members/wallet", handlers.LinkWallet)

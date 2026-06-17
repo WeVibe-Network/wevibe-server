@@ -651,13 +651,13 @@ internal/umbral/
 └── service.go           # Business logic layer — 6 methods fully implemented (CO-218)
 ```
 
-**Key methods (all implemented in CO-218):**
-- `GenerateEpochKeyPair(ctx) (secretKey, publicKey []byte, error)` — generates new Umbral epoch keypair via sidecar
-- `RegisterMember(ctx, orgID, epochID, delegatingSK, receivingPK, signerSK, verifyingPK) (kfrag []byte, error)` — generates and stores kfrag for new member
+**Key methods (D-LEADER-SIDE-UMBRAL-MINT — the hub NEVER mints epoch keys or kfrags):**
+- `StoreKFrag(ctx, orgID, epochID, memberPK, kfrag) error` — stores a FINISHED kfrag minted leader-side (via leader-signed `POST /v1/orgs/{orgID}/members/{pubkey}/kfrag`)
 - `ReEncryptForMember(ctx, orgID, epochID, memberPK, capsule) (cfrag []byte, error)` — core retrieval re-encryption
 - `OnMemberRemoved(ctx, orgID, memberPK) (deletedCount uint32, error)` — deletes all kfrags for a removed member
 - `RemoveOrgKFrags(ctx, orgID) (deletedCount uint32, error)` — deletes all kfrags for org dissolution
 - `Health(ctx) error` — checks sidecar health
+- RIPPED: `GenerateEpochKeyPair` + `RegisterMember` (hub-side mint, invariant-violating) and the sidecar `GenerateKeyPair`/`GenerateKFrags` gRPC RPCs.
 
 **Error handling:**
 - `ErrSidecarUnavailable` — returned when sidecar gRPC is unavailable (wraps codes.Unavailable)
@@ -684,13 +684,11 @@ internal/umbral/
 Run with: `go test -tags=integration -run TestSidecar ./internal/umbral/`
 Tests: `TestSidecarIntegration`, `TestSidecarIntegration_DeleteOrgKFrags`, `TestSidecarReEncryptNeedsCapsule`
 
-**Handler (fully functional since CO-218):**
-- `internal/api/handlers/reencrypt.go`
-  - `ReEncrypt(w, r)` — POST /v1/internal/reencrypt — internal re-encryption endpoint (was 501, now functional)
-  - `GenerateEpochKeyPair(w, r)` — POST /v1/internal/epoch-keypair
-  - `GenerateKFrags(w, r)` — POST /v1/internal/orgs/{orgID}/kfrags
-- `internal/api/handlers/members.go` — InviteMember calls RegisterMember if `epoch_sk` in request; RemoveMember calls OnMemberRemoved after DB commit
-- `internal/api/handlers/orgs.go` — CreateOrg and RotateEpoch call GenerateEpochKeyPair, return epoch_sk/epoch_pk in response
+**In-process handler integration (no standalone PRE HTTP routes; hub never mints — D-LEADER-SIDE-UMBRAL-MINT):**
+- `internal/api/handlers/orgs.go` — `CreateOrg` persists the leader-supplied `umbral_pk` (hex) in `epoch_manifests`; neither `CreateOrg` nor `RotateEpoch` generates epoch keys.
+- `internal/api/handlers/members.go` — `StoreMemberKFrag` (`POST /v1/orgs/{orgID}/members/{pubkey}/kfrag`, leader-signed) calls `umbralService.StoreKFrag` to store the leader-minted finished kfrag. `InviteMember` no longer mints kfrags.
+- `internal/chain/watcher.go` — on a member-removed chain event, calls `umbralService.OnMemberRemoved` (deletes the removed member's kfrags)
+- `internal/api/handlers/retrieval.go` — `QueryMemories` calls `umbralService.ReEncryptForMember` during retrieval
 
 ## PRE Approval Storage + Member PRE Keys (CO-221)
 
@@ -712,7 +710,7 @@ Tests: `TestSidecarIntegration`, `TestSidecarIntegration_DeleteOrgKFrags`, `Test
 **Member PRE key endpoints:**
 - `POST /v1/orgs/{orgID}/members/{pubkey}/pre-key` — register PRE pubkey (self or leader)
 - `GET /v1/orgs/{orgID}/members/{pubkey}/pre-key` — fetch registered PRE pubkey
-- `InviteMember` accepts optional `pre_pubkey`; kfrag generation at invite requires both `epoch_sk` and `pre_pubkey`
+- `POST /v1/orgs/{orgID}/members/{pubkey}/kfrag` — leader-signed `StoreKFrag {epoch_id, pre_pubkey, kfrag}`; the leader mints the kfrag locally (its epoch_sk is K_master-derived) and the hub only stores the finished kfrag. `InviteMember` accepts optional `pre_pubkey` (→ SetPrePubkey) and does NOT mint kfrags.
 
 ## Keyword Weight Decay (CO-240)
 

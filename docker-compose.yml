@@ -248,6 +248,7 @@ services:
       WEVIBE_HUB_URL: http://wevibe-hub:4440
       OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
       WEVIBE_KEYSTORE_PATH: /root/.wevibe/keys
+      WEVIBE_MCP_HTTP_ONLY: "1"
     ports:
       # Host port 4452 (container 4450) to coexist with a host-side wevibe MCP on 4450
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:4452:4450"

@@ -1,7 +1,4 @@
-import { deriveIdentityX25519Keypair, signWithIdentity } from './wevibe-auth';
-import { createOrgCanonical } from './wevibe-signing';
-
-// Browser-only helper module. This file depends on browser APIs (btoa + WebCrypto via createOrgCanonical).
+// Browser-only helper module.
 
 type WasmModule = typeof import('wevibe-sdk-wasm');
 
@@ -18,57 +15,6 @@ export interface IdentityBundle {
   edPub: Uint8Array;
   xPriv: Uint8Array;
   xPub: Uint8Array;
-}
-
-export interface BuildOrgSetupArgs {
-  orgName: string;
-  domain: string;
-  leaderEd25519PubHex: string;
-  leaderWallet: string;
-}
-
-export interface BuildOrgSetupPayload {
-  leader_pubkey: string;
-  leader_x25519_pubkey: string;
-  leader_wallet: string;
-  org_name: string;
-  domain: string;
-  fee_model: null;
-  pk_mod: string;
-  signature: string;
-  enc_envelope: string;
-  search_envelope: string;
-  mod_envelope: string;
-}
-
-export interface BuildOrgSetupResult {
-  payload: BuildOrgSetupPayload;
-  recoveryPhrase: string;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-// Pack an epoch key as [epoch:u32 little-endian][key:32] = 36 bytes, matching
-// the canonical format the MCP produces (packEpochKeyPair in org-client.ts) and
-// parses in loadMemberships (36-byte chunks). Sealing a bare 32-byte key here
-// would make the MCP's enc/search envelope parser yield zero epoch keys.
-function packEpochKey(epoch: number, key: Uint8Array): Uint8Array {
-  const buf = new Uint8Array(36);
-  new DataView(buf.buffer).setUint32(0, epoch, true);
-  buf.set(key, 4);
-  return buf;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
 }
 
 function requireBytes(value: unknown, name: string): Uint8Array {
@@ -166,66 +112,4 @@ export async function mnemonicToSeed(phrase: string): Promise<Uint8Array> {
 export async function signRaw(priv: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
   const wasm = await ensureWasm();
   return wasm.sign(priv, data);
-}
-
-export async function buildOrgSetup(args: BuildOrgSetupArgs): Promise<BuildOrgSetupResult> {
-  const x25519Keys = await deriveIdentityX25519Keypair();
-
-  let masterKey: Uint8Array | null = null;
-  let epoch0: EpochKeys | null = null;
-  let moderatorIdentity: IdentityBundle | null = null;
-
-  try {
-    masterKey = await generateDek();
-    epoch0 = await deriveEpochKeys(masterKey, 0);
-    moderatorIdentity = await generateIdentity();
-
-    const encEnvelope = bytesToBase64(await sealToPubkey(packEpochKey(0, epoch0.encKey), x25519Keys.pub));
-    const searchEnvelope = bytesToBase64(await sealToPubkey(packEpochKey(0, epoch0.searchKey), x25519Keys.pub));
-    const modEnvelope = bytesToBase64(await sealToPubkey(moderatorIdentity.xPriv, x25519Keys.pub));
-    const pkMod = bytesToHex(moderatorIdentity.xPub);
-
-    const leaderPubkey = args.leaderEd25519PubHex;
-    const leaderX25519Pubkey = bytesToHex(x25519Keys.pub);
-
-    const canonical = await createOrgCanonical(
-      leaderPubkey,
-      leaderX25519Pubkey,
-      args.orgName,
-      args.domain,
-      encEnvelope,
-      searchEnvelope,
-      modEnvelope,
-      pkMod,
-      null,
-    );
-
-    const signature = await signWithIdentity(canonical);
-    const recoveryPhrase = await masterKeyToMnemonic(masterKey);
-
-    return {
-      payload: {
-        leader_pubkey: leaderPubkey,
-        leader_x25519_pubkey: leaderX25519Pubkey,
-        leader_wallet: args.leaderWallet,
-        org_name: args.orgName,
-        domain: args.domain,
-        fee_model: null,
-        pk_mod: pkMod,
-        signature,
-        enc_envelope: encEnvelope,
-        search_envelope: searchEnvelope,
-        mod_envelope: modEnvelope,
-      },
-      recoveryPhrase,
-    };
-  } finally {
-    masterKey?.fill(0);
-    epoch0?.encKey.fill(0);
-    epoch0?.searchKey.fill(0);
-    epoch0?.auditKey.fill(0);
-    moderatorIdentity?.edPriv.fill(0);
-    moderatorIdentity?.xPriv.fill(0);
-    x25519Keys.priv.fill(0);
-  }
 }

@@ -1,5 +1,7 @@
 # WeVibe Infra Whitepaper
 
+> **Status — ASPIRATIONAL / FUTURE-STATE:** This document describes target-state infrastructure. The current alpha deployment runs via Docker Compose (`wevibe-server/docker-compose.yml`); see `wevibe-server/README.md`.
+
 Version: 0.3 · Sprint 24
 
 ## Goals

@@ -566,6 +566,7 @@ export function LeaderPipelinePanel() {
       batchInputs.push({
         orgId,
         submissionHash: submission.submission_hash,
+        epochId: submission.epoch_id,
         selected: selectedList,
         excluded: toExcludedSuggestionPayload(deselectedItems),
         ciphertextHex: submission.ciphertext_hex as string,

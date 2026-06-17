@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { listMembers, enableMemberRecall, disableMemberRecall, type MemberRecord } from '@/lib/hub-client'
+import { requestProvisionRecall } from '@/lib/org-bridge'
 import { getIdentity } from '@/lib/wevibe-auth'
 import { connectWallet } from '@/lib/wallet-connect'
 import {
@@ -224,6 +225,14 @@ export default function MembersPage() {
     const id = toast.loading('Enabling free recall…')
     try {
       await enableMemberRecall(orgId, pubkey, true)
+      const ownIdentity = await getIdentity()
+      if (ownIdentity && ownIdentity.pubkeyHex === pubkey) {
+        try {
+          await requestProvisionRecall(orgId)
+        } catch (provisionErr) {
+          toast.error(`Recall enabled, but kfrag provisioning failed: ${(provisionErr as Error).message}`, { id })
+        }
+      }
       await refreshMembers()
       toast.success('Free recall enabled for this member', { id })
     } catch (err) {
