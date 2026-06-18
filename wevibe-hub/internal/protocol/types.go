@@ -274,6 +274,7 @@ type QueryRequest struct {
 	EmbeddingModelID       string              `json:"embedding_model_id,omitempty"`
 	EmbeddingSchemaVersion string              `json:"embedding_schema_version,omitempty"`
 	Limit                  int                 `json:"limit"`
+	SessionID              string              `json:"session_id,omitempty"`
 	IncludeDormant         bool                `json:"include_dormant,omitempty"`
 	AgentSig               string              `json:"agent_sig"`
 }

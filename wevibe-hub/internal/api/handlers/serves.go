@@ -71,7 +71,7 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req serves.RecordServeRequest
+	var req serves.RecordServeRequest // session_id is decoded via RecordServeRequest JSON tags.
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return

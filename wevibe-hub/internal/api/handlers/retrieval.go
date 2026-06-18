@@ -140,6 +140,31 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[recall] qdrant returned %d candidates contested=%v org=%s", len(results), contested, req.OrgID)
 
+	if req.SessionID != "" && len(results) > 0 {
+		rows, err := pool.Query(ctx, `
+			SELECT memory_cid FROM session_served_memories
+			WHERE org_id = $1 AND session_id = $2 AND served_at > NOW() - INTERVAL '24 hours'
+		`, req.OrgID, req.SessionID)
+		if err == nil {
+			served := make(map[string]struct{})
+			for rows.Next() {
+				var cid string
+				if rows.Scan(&cid) == nil {
+					served[cid] = struct{}{}
+				}
+			}
+			rows.Close()
+			filtered := results[:0]
+			for _, m := range results {
+				if _, ok := served[m.CID]; ok {
+					continue
+				}
+				filtered = append(filtered, m)
+			}
+			results = filtered
+		}
+	}
+
 	contentHashes := make([][]byte, 0, len(results))
 	cidToIndex := make(map[string]int, len(results))
 	for i, res := range results {

@@ -26,6 +26,7 @@ type RecordServeRequest struct {
 	ContributorID     string `json:"contributor_id"`
 	ModelID           string `json:"model_id"`
 	TurnCount         int    `json:"turn_count"`
+	SessionID         string `json:"session_id,omitempty"`
 	// MatchedKeywords is the intersection of the served memory's keywords and
 	// the query's keyword set, computed at retrieval time. Required, non-empty.
 	// Per DECISIONS.md D-4.2 Implementation Clarifications (DMO-007).
@@ -177,6 +178,15 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, req RecordServeRequest
 			return nil, fmt.Errorf("duplicate serve event: already recorded for this org/epoch/key/memory")
 		}
 		return nil, fmt.Errorf("insert serve event: %w", err)
+	}
+
+	if req.SessionID != "" {
+		_, _ = pool.Exec(ctx, `
+			INSERT INTO session_served_memories (org_id, session_id, memory_cid)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (org_id, session_id, memory_cid) DO NOTHING
+		`, req.OrgID, req.SessionID, req.MemoryContentHash)
+		_, _ = pool.Exec(ctx, `DELETE FROM session_served_memories WHERE served_at < NOW() - INTERVAL '24 hours'`)
 	}
 
 	var record ServeEventRecord

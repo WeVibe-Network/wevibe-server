@@ -438,6 +438,16 @@ CREATE INDEX IF NOT EXISTS idx_serve_events_org_status ON serve_events(org_id, s
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
 
+CREATE TABLE IF NOT EXISTS session_served_memories (
+    org_id      TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    session_id  TEXT        NOT NULL,
+    memory_cid  TEXT        NOT NULL,
+    served_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, session_id, memory_cid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_served_served_at ON session_served_memories(served_at);
+
 -- ── Chain watcher state ───────────────────────────────────────────────────
 -- Restart-safe cursor for the hub ChainWatcher (watcher.go). The watcher reads
 -- last_seen_block_height on Start() and catches up from there; it UPDATEs this row
