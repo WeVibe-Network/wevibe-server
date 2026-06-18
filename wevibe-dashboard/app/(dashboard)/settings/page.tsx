@@ -38,9 +38,14 @@ const EXTRACTION_MODEL_MAX_BYTES = 256;
 const EXTRACTION_SYSTEM_PROMPT_MAX_BYTES = 16384;
 const EXTRACTION_NUM_CTX_MAX = 131072;
 const EXTRACTION_TOTAL_STRING_BYTES_MAX = 24576;
+type RiskAppetite = 'lowest' | 'neutral';
 
 function byteLengthUtf8(value: string): number {
   return new TextEncoder().encode(value).length;
+}
+
+function normalizeRiskAppetite(value: unknown): RiskAppetite {
+  return value === 'lowest' ? 'lowest' : 'neutral';
 }
 
 function normalizeHubEndpoints(value: unknown): string[] {
@@ -86,6 +91,9 @@ export default function SettingsPage() {
   const [maxRequests, setMaxRequests] = useState(10);
   const [windowAmount, setWindowAmount] = useState(1);
   const [windowUnit, setWindowUnit] = useState<'1' | '60' | '3600'>('60');
+  const [riskAppetiteLoading, setRiskAppetiteLoading] = useState(true);
+  const [savingRiskAppetite, setSavingRiskAppetite] = useState(false);
+  const [riskAppetite, setRiskAppetite] = useState<RiskAppetite>('neutral');
   const [hubServingAddress, setHubServingAddress] = useState('');
   const [hubEndpoints, setHubEndpoints] = useState<string[]>([]);
   const [hubResponsePubkey, setHubResponsePubkey] = useState('');
@@ -331,6 +339,37 @@ export default function SettingsPage() {
   }, [activeOrg, isLeader]);
 
   useEffect(() => {
+    let cancelled = false;
+    setRiskAppetiteLoading(true);
+
+    void fetch('/api/settings/risk-appetite', { cache: 'no-store' })
+      .then((response) => response.json() as Promise<{ risk_appetite?: unknown }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+
+        setRiskAppetite(normalizeRiskAppetite(data.risk_appetite));
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setRiskAppetite('neutral');
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRiskAppetiteLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!activeOrg) {
       return;
     }
@@ -535,6 +574,43 @@ export default function SettingsPage() {
       setSavingRecallRateLimit(false);
     }
   }, [activeOrg, maxRequests, windowAmount, windowUnit]);
+
+  const handleRiskAppetiteChange = useCallback(async (nextValue: RiskAppetite) => {
+    const previousValue = riskAppetite;
+    setRiskAppetite(nextValue);
+    setSavingRiskAppetite(true);
+
+    const toastId = txToast('Recall risk appetite');
+
+    try {
+      const response = await fetch('/api/settings/risk-appetite', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ risk_appetite: nextValue }),
+      });
+
+      const payload = await response.json().catch(() => null) as {
+        risk_appetite?: unknown;
+        error?: unknown;
+      } | null;
+
+      if (!response.ok) {
+        const message = payload && typeof payload.error === 'string'
+          ? payload.error
+          : `Failed to save recall risk appetite (${response.status}).`;
+        throw new Error(message);
+      }
+
+      const normalizedValue = normalizeRiskAppetite(payload?.risk_appetite);
+      setRiskAppetite(normalizedValue);
+      txSuccess(toastId, `Recall risk appetite set to ${normalizedValue}.`);
+    } catch (err) {
+      setRiskAppetite(previousValue);
+      txError(toastId, err instanceof Error ? err.message : 'Failed to save recall risk appetite.');
+    } finally {
+      setSavingRiskAppetite(false);
+    }
+  }, [riskAppetite]);
 
   const handleServingKeySave = useCallback(async () => {
     if (!activeOrg) {
@@ -1492,6 +1568,36 @@ export default function SettingsPage() {
               </section>
             </>
           )}
+
+          <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-wv-text">Recall Risk Appetite</h2>
+            </div>
+            <p className="mt-1 text-sm text-wv-dim">
+              Local to this device. &apos;Neutral&apos; recalls all eligible memories. &apos;Lowest&apos; recalls only negative-signal (mistakes to avoid) memories — the strictest filter.
+            </p>
+
+            <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+              <label htmlFor="recall-risk-appetite" className="block text-sm font-medium text-wv-text">
+                Mode
+              </label>
+              <select
+                id="recall-risk-appetite"
+                value={riskAppetite}
+                onChange={(event) => {
+                  const nextValue = normalizeRiskAppetite(event.target.value);
+                  void handleRiskAppetiteChange(nextValue);
+                }}
+                disabled={riskAppetiteLoading || savingRiskAppetite}
+                className="mt-2 w-full max-w-xs rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+              >
+                <option value="neutral">Neutral</option>
+                <option value="lowest">Lowest</option>
+              </select>
+            </div>
+
+            {riskAppetiteLoading && <p className="mt-4 text-xs text-wv-dim">Loading recall risk appetite…</p>}
+          </section>
 
           <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
             <div className="flex items-center gap-2">
