@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 )
@@ -91,4 +92,57 @@ func SetRecallRateLimit(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		log.Printf("[recall-rate-limit] ERROR encode response FAILED org=%s: %v", orgID, err)
 	}
+}
+
+func GetRecallRateLimit(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	if orgID == "" {
+		WriteError(w, http.StatusBadRequest, "invalid_request", "org_id required")
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
+	if err := verifyTimestampSignature(*signed); err != nil {
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
+	// Any org member may read the configured recall rate limit.
+	if _, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey); err != nil {
+		WriteError(w, http.StatusForbidden, "forbidden", "not a member")
+		return
+	}
+
+	var maxRequests, windowSeconds int
+	err = pool.QueryRow(r.Context(), `
+		SELECT max_requests, window_seconds
+		FROM org_recall_rate_limits
+		WHERE org_id = $1
+	`, orgID).Scan(&maxRequests, &windowSeconds)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err == pgx.ErrNoRows {
+		_ = json.NewEncoder(w).Encode(map[string]any{"configured": false})
+		return
+	}
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, "internal_error", "internal error")
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"configured":     true,
+		"max_requests":   maxRequests,
+		"window_seconds": windowSeconds,
+	})
 }

@@ -263,6 +263,7 @@ func main() {
 
 			r.Post("/serves", handlers.RecordServeEvent)
 			r.Put("/recall-rate-limit", handlers.SetRecallRateLimit)
+			r.Get("/recall-rate-limit", handlers.GetRecallRateLimit)
 			r.Post("/extracted-sessions", handlers.RecordExtractedSession)
 			r.Get("/extracted-sessions", handlers.ListExtractedSessions)
 			r.Post("/denials", handlers.RecordDenialEvent)

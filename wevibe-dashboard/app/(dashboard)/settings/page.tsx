@@ -8,7 +8,9 @@ import {
   getHubServingAddress,
   getOrg,
   getOrgChainConfig,
+  getRecallRateLimit,
   listMembers,
+  setRecallRateLimit,
   updateExtractionProfile,
   type ExtractionPreset,
   type MemberRecord,
@@ -77,6 +79,13 @@ export default function SettingsPage() {
   const [chainConfigError, setChainConfigError] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);
   const [serveAttestationRequired, setServeAttestationRequired] = useState(false);
+  const [recallRateLimitLoading, setRecallRateLimitLoading] = useState(false);
+  const [recallRateLimitError, setRecallRateLimitError] = useState<string | null>(null);
+  const [savingRecallRateLimit, setSavingRecallRateLimit] = useState(false);
+  const [recallRateLimitConfigured, setRecallRateLimitConfigured] = useState<boolean | null>(null);
+  const [maxRequests, setMaxRequests] = useState(10);
+  const [windowAmount, setWindowAmount] = useState(1);
+  const [windowUnit, setWindowUnit] = useState<'1' | '60' | '3600'>('60');
   const [hubServingAddress, setHubServingAddress] = useState('');
   const [hubEndpoints, setHubEndpoints] = useState<string[]>([]);
   const [hubResponsePubkey, setHubResponsePubkey] = useState('');
@@ -350,6 +359,73 @@ export default function SettingsPage() {
     };
   }, [activeOrg]);
 
+  useEffect(() => {
+    if (!activeOrg || !isLeader) {
+      setRecallRateLimitLoading(false);
+      setRecallRateLimitError(null);
+      setRecallRateLimitConfigured(null);
+      setMaxRequests(10);
+      setWindowAmount(1);
+      setWindowUnit('60');
+      return;
+    }
+
+    let cancelled = false;
+    setRecallRateLimitLoading(true);
+    setRecallRateLimitError(null);
+    setRecallRateLimitConfigured(null);
+
+    void getRecallRateLimit(activeOrg.org_id)
+      .then((rateLimit) => {
+        if (cancelled) {
+          return;
+        }
+
+        setRecallRateLimitConfigured(rateLimit.configured);
+
+        if (!rateLimit.configured) {
+          setMaxRequests(10);
+          setWindowAmount(1);
+          setWindowUnit('60');
+          return;
+        }
+
+        if (typeof rateLimit.max_requests === 'number' && Number.isFinite(rateLimit.max_requests) && rateLimit.max_requests > 0) {
+          setMaxRequests(Math.floor(rateLimit.max_requests));
+        }
+
+        if (typeof rateLimit.window_seconds === 'number' && Number.isFinite(rateLimit.window_seconds) && rateLimit.window_seconds > 0) {
+          const windowSeconds = Math.floor(rateLimit.window_seconds);
+          if (windowSeconds % 3600 === 0) {
+            setWindowAmount(windowSeconds / 3600);
+            setWindowUnit('3600');
+          } else if (windowSeconds % 60 === 0) {
+            setWindowAmount(windowSeconds / 60);
+            setWindowUnit('60');
+          } else {
+            setWindowAmount(windowSeconds);
+            setWindowUnit('1');
+          }
+        }
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        setRecallRateLimitConfigured(null);
+        setRecallRateLimitError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRecallRateLimitLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrg, isLeader]);
+
   const handleTransferLeadership = useCallback(async () => {
     if (!activeOrg || !selectedTransferPubkey) {
       return;
@@ -416,6 +492,49 @@ export default function SettingsPage() {
       setSavingChainConfig(false);
     }
   }, [activeOrg, resolveOrgAccountForGas]);
+
+  const handleRecallRateLimitSave = useCallback(async () => {
+    if (!activeOrg) {
+      return;
+    }
+
+    const normalizedMaxRequests = Math.floor(maxRequests);
+    if (!Number.isFinite(normalizedMaxRequests) || normalizedMaxRequests < 1) {
+      setRecallRateLimitError('Requests must be a positive integer.');
+      return;
+    }
+
+    const normalizedWindowAmount = Math.floor(windowAmount);
+    if (!Number.isFinite(normalizedWindowAmount) || normalizedWindowAmount < 1) {
+      setRecallRateLimitError('Window amount must be a positive integer.');
+      return;
+    }
+
+    const windowSeconds = normalizedWindowAmount * Number(windowUnit);
+    if (!Number.isFinite(windowSeconds) || windowSeconds < 1) {
+      setRecallRateLimitError('Window duration must be at least 1 second.');
+      return;
+    }
+
+    const toastId = txToast('Recall rate limit');
+
+    setSavingRecallRateLimit(true);
+    setRecallRateLimitError(null);
+
+    try {
+      await setRecallRateLimit(activeOrg.org_id, normalizedMaxRequests, windowSeconds);
+      setMaxRequests(normalizedMaxRequests);
+      setWindowAmount(normalizedWindowAmount);
+      setRecallRateLimitConfigured(true);
+      txSuccess(toastId, 'Recall rate limit saved.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setRecallRateLimitError(message);
+      txError(toastId, message);
+    } finally {
+      setSavingRecallRateLimit(false);
+    }
+  }, [activeOrg, maxRequests, windowAmount, windowUnit]);
 
   const handleServingKeySave = useCallback(async () => {
     if (!activeOrg) {
@@ -850,6 +969,99 @@ export default function SettingsPage() {
 
             {chainConfigLoading && <p className="mt-4 text-xs text-wv-dim">Loading chain config…</p>}
           </section>
+
+          {isLeader && activeOrg && (
+            <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-semibold text-wv-text">Recall Rate Limit</h2>
+              </div>
+              <p className="mt-1 text-sm text-wv-dim">
+                Leader-only. Caps how many recall queries each member can make in the window. No limit set = unlimited.
+              </p>
+
+              {recallRateLimitError && (
+                <div className="mt-4 rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
+                  {recallRateLimitError}
+                </div>
+              )}
+
+              <div className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-4">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div>
+                    <label htmlFor="recall-max-requests" className="block text-sm font-medium text-wv-text">
+                      Requests
+                    </label>
+                    <input
+                      id="recall-max-requests"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={maxRequests}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(event.target.value, 10);
+                        setMaxRequests(Number.isFinite(parsed) ? parsed : 0);
+                      }}
+                      disabled={savingRecallRateLimit || recallRateLimitLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="recall-window-amount" className="block text-sm font-medium text-wv-text">
+                      per
+                    </label>
+                    <input
+                      id="recall-window-amount"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={windowAmount}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(event.target.value, 10);
+                        setWindowAmount(Number.isFinite(parsed) ? parsed : 0);
+                      }}
+                      disabled={savingRecallRateLimit || recallRateLimitLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="recall-window-unit" className="block text-sm font-medium text-wv-text">
+                      unit
+                    </label>
+                    <select
+                      id="recall-window-unit"
+                      value={windowUnit}
+                      onChange={(event) => setWindowUnit(event.target.value as '1' | '60' | '3600')}
+                      disabled={savingRecallRateLimit || recallRateLimitLoading}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                    >
+                      <option value="1">second</option>
+                      <option value="60">minute</option>
+                      <option value="3600">hour</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRecallRateLimitSave}
+                    disabled={savingRecallRateLimit || recallRateLimitLoading || !orgLoaded}
+                    className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
+                  >
+                    {savingRecallRateLimit ? 'Saving…' : 'Save'}
+                  </button>
+
+                  {recallRateLimitConfigured === false && (
+                    <p className="text-xs text-wv-dim">Currently unlimited (no limit configured).</p>
+                  )}
+                </div>
+              </div>
+
+              {recallRateLimitLoading && <p className="mt-4 text-xs text-wv-dim">Loading recall rate limit…</p>}
+            </section>
+          )}
 
           {isLeader && (
             <>

@@ -1134,6 +1134,62 @@ export async function cancelJoinApproval(orgId: string, requestId: string): Prom
   });
 }
 
+export async function getRecallRateLimit(orgId: string): Promise<{
+  configured: boolean;
+  max_requests?: number;
+  window_seconds?: number;
+}> {
+  const authHeaders = await buildAuthHeaders();
+  const response = await fetch(`${getHubUrl()}/v1/orgs/${orgId}/recall-rate-limit`, {
+    headers: {
+      ...authHeaders,
+    },
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText })) as {
+      error?: string;
+      code?: string;
+      detail?: string;
+    };
+    throw new HubError(err.error ?? `failed to load rate limit: ${response.status}`, {
+      code: err.code,
+      detail: err.detail,
+      status: response.status,
+    });
+  }
+
+  return response.json();
+}
+
+export async function setRecallRateLimit(orgId: string, maxRequests: number, windowSeconds: number): Promise<void> {
+  const authHeaders = await buildAuthHeaders();
+  const response = await fetch(`${getHubUrl()}/v1/orgs/${orgId}/recall-rate-limit`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders,
+    },
+    body: JSON.stringify({
+      max_requests: maxRequests,
+      window_seconds: windowSeconds,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: response.statusText })) as {
+      error?: string;
+      code?: string;
+      detail?: string;
+    };
+    throw new HubError(err.error ?? `failed to set rate limit: ${response.status}`, {
+      code: err.code,
+      detail: err.detail,
+      status: response.status,
+    });
+  }
+}
+
 export async function enableMemberRecall(orgId: string, pubkey: string, free?: boolean): Promise<void> {
   const identity = await getIdentity();
   if (!identity) {
