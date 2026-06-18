@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
@@ -108,6 +110,34 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[recall] DENY inactive membership org=%s agent=%s", req.OrgID, agentLogID)
 		WriteError(w, http.StatusForbidden, "membership_inactive", "membership not active — subscribe to query")
 		return
+	}
+
+	var maxRequests int
+	var windowSeconds int
+	err = pool.QueryRow(ctx, `
+		SELECT max_requests, window_seconds
+		FROM org_recall_rate_limits
+		WHERE org_id = $1
+	`, req.OrgID).Scan(&maxRequests, &windowSeconds)
+	if err == nil {
+		if maxRequests > 0 {
+			recentCount, countErr := getRecentMemberQueryCount(ctx, pool, req.OrgID, req.AgentPubkey, windowSeconds)
+			if countErr != nil {
+				log.Printf("[recall] ERROR rate limit count queries FAILED org=%s agent=%s windowSeconds=%d: %v (fail-open)", req.OrgID, agentLogID, windowSeconds, countErr)
+			} else if recentCount >= maxRequests {
+				log.Printf("[recall] DENY recall rate limit reached org=%s agent=%s count=%d max=%d windowSeconds=%d", req.OrgID, agentLogID, recentCount, maxRequests, windowSeconds)
+				WriteError(
+					w,
+					http.StatusTooManyRequests,
+					"rate_limited",
+					"recall rate limit exceeded",
+					fmt.Sprintf("max %d requests per %d seconds", maxRequests, windowSeconds),
+				)
+				return
+			}
+		}
+	} else if err != pgx.ErrNoRows {
+		log.Printf("[recall] ERROR rate limit load config FAILED org=%s: %v (fail-open)", req.OrgID, err)
 	}
 
 	currentEpoch, err := orgs.GetCurrentEpoch(ctx, pool, req.OrgID)
@@ -406,6 +436,21 @@ func getTodayMemberQueryCount(ctx context.Context, pool *pgxpool.Pool, orgID, pu
 		  AND agent_pubkey = $2
 		  AND created_at >= date_trunc('day', NOW())
 	`, orgID, pubkey).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func getRecentMemberQueryCount(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string, windowSeconds int) (int, error) {
+	var count int
+	err := pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM usage_receipts
+		WHERE org_id = $1
+		  AND agent_pubkey = $2
+		  AND created_at > NOW() - make_interval(secs => $3)
+	`, orgID, pubkey, windowSeconds).Scan(&count)
 	if err != nil {
 		return 0, err
 	}

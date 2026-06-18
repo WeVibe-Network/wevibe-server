@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS orgs (
 CREATE INDEX IF NOT EXISTS idx_orgs_leader ON orgs(leader_pubkey);
 CREATE INDEX IF NOT EXISTS idx_orgs_status  ON orgs(status);
 
+CREATE TABLE IF NOT EXISTS org_recall_rate_limits (
+    org_id         TEXT        PRIMARY KEY REFERENCES orgs(org_id) ON DELETE CASCADE,
+    max_requests   INTEGER     NOT NULL,
+    window_seconds INTEGER     NOT NULL,
+    updated_by     TEXT        NOT NULL DEFAULT '',
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ── Members ────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS members (
