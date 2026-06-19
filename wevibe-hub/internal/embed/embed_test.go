@@ -38,7 +38,7 @@ func writeDashboardConfigJSON(t *testing.T, settings map[string]any) string {
 func TestResolveEmbeddingConfig_OpenRouter(t *testing.T) {
 	configPath := writeDashboardConfigJSON(t, map[string]any{
 		"embedding_provider":         "openrouter",
-		"embedding_openrouter_model": "text-embedding-3-large",
+		"embedding_openrouter_model": "nomic-embed-text:v1.5",
 		"embedding_api_key":          "openrouter-test-key",
 	})
 	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
@@ -54,7 +54,7 @@ func TestResolveEmbeddingConfig_OpenRouter(t *testing.T) {
 	if config.APIKey != "openrouter-test-key" {
 		t.Fatalf("expected openrouter API key, got %q", config.APIKey)
 	}
-	if config.Model != "text-embedding-3-large" {
+	if config.Model != "nomic-embed-text:v1.5" {
 		t.Fatalf("expected openrouter model, got %q", config.Model)
 	}
 }
@@ -62,7 +62,7 @@ func TestResolveEmbeddingConfig_OpenRouter(t *testing.T) {
 func TestResolveEmbeddingConfig_LMStudio(t *testing.T) {
 	configPath := writeDashboardConfigJSON(t, map[string]any{
 		"embedding_provider":       "lm_studio",
-		"embedding_lmstudio_model": "text-embedding-3-large",
+		"embedding_lmstudio_model": "nomic-embed-text:v1.5",
 		"lmstudio_url":             "http://127.0.0.1:1234/v1",
 	})
 	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
@@ -78,7 +78,7 @@ func TestResolveEmbeddingConfig_LMStudio(t *testing.T) {
 	if config.APIKey != "lm-studio" {
 		t.Fatalf("expected lm_studio API key, got %q", config.APIKey)
 	}
-	if config.Model != "text-embedding-3-large" {
+	if config.Model != "nomic-embed-text:v1.5" {
 		t.Fatalf("expected lm_studio model, got %q", config.Model)
 	}
 }
@@ -86,7 +86,7 @@ func TestResolveEmbeddingConfig_LMStudio(t *testing.T) {
 func TestResolveEmbeddingConfig_Ollama(t *testing.T) {
 	configPath := writeDashboardConfigJSON(t, map[string]any{
 		"embedding_provider":     "ollama",
-		"embedding_ollama_model": "nomic-embed-text",
+		"embedding_ollama_model": "nomic-embed-text:v1.5",
 		"ollama_url":             "http://localhost:11434/",
 	})
 	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
@@ -102,7 +102,7 @@ func TestResolveEmbeddingConfig_Ollama(t *testing.T) {
 	if config.APIKey != "ollama" {
 		t.Fatalf("expected ollama API key, got %q", config.APIKey)
 	}
-	if config.Model != "nomic-embed-text" {
+	if config.Model != "nomic-embed-text:v1.5" {
 		t.Fatalf("expected ollama model, got %q", config.Model)
 	}
 }
@@ -119,7 +119,7 @@ func TestResolveEmbeddingConfig_MissingFileFails(t *testing.T) {
 func TestResolveEmbeddingConfig_UnknownProviderFails(t *testing.T) {
 	configPath := writeDashboardConfigJSON(t, map[string]any{
 		"embedding_provider":         "unknown_provider",
-		"embedding_openrouter_model": "text-embedding-3-large",
+		"embedding_openrouter_model": "nomic-embed-text:v1.5",
 	})
 	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
 
@@ -151,8 +151,8 @@ func TestResolveEmbeddingConfig_BadJSONFails(t *testing.T) {
 }
 
 func TestGetEmbedding_Dim(t *testing.T) {
-	if EMBED_DIM != 3072 {
-		t.Errorf("expected EMBED_DIM to be 3072, got %d", EMBED_DIM)
+	if EMBED_DIM != 768 {
+		t.Errorf("expected EMBED_DIM to be 768, got %d", EMBED_DIM)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestGetEmbedding_Live(t *testing.T) {
 	if os.Getenv("WEVIBE_DASHBOARD_CONFIG") == "" {
 		configPath := writeDashboardConfigJSON(t, map[string]any{
 			"embedding_provider":         "openrouter",
-			"embedding_openrouter_model": "text-embedding-3-large",
+			"embedding_openrouter_model": "nomic-embed-text:v1.5",
 			"embedding_api_key":          os.Getenv("OPENROUTER_API_KEY"),
 		})
 		t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
@@ -222,7 +222,7 @@ func TestGetEmbedding_Retry429ThenSuccess(t *testing.T) {
 
 	configPath := writeDashboardConfigJSON(t, map[string]any{
 		"embedding_provider":       "lm_studio",
-		"embedding_lmstudio_model": "text-embedding-3-large",
+		"embedding_lmstudio_model": "nomic-embed-text:v1.5",
 		"lmstudio_url":             server.URL,
 	})
 	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)
@@ -234,8 +234,8 @@ func TestGetEmbedding_Retry429ThenSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEmbedding returned error: %v", err)
 	}
-	if modelID != "text-embedding-3-large" {
-		t.Fatalf("expected model ID text-embedding-3-large, got %q", modelID)
+	if modelID != "nomic-embed-text:v1.5" {
+		t.Fatalf("expected model ID nomic-embed-text:v1.5, got %q", modelID)
 	}
 	if len(vec) != EMBED_DIM {
 		t.Fatalf("expected embedding length %d, got %d", EMBED_DIM, len(vec))
@@ -270,7 +270,7 @@ func TestGetEmbedding_Retry429ExhaustedFails(t *testing.T) {
 
 	configPath := writeDashboardConfigJSON(t, map[string]any{
 		"embedding_provider":       "lm_studio",
-		"embedding_lmstudio_model": "text-embedding-3-large",
+		"embedding_lmstudio_model": "nomic-embed-text:v1.5",
 		"lmstudio_url":             server.URL,
 	})
 	t.Setenv("WEVIBE_DASHBOARD_CONFIG", configPath)

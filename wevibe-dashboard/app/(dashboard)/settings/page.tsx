@@ -1954,7 +1954,7 @@ function OrgLlamaConfig() {
                     type="text"
                     value={settings.embedding_ollama_model}
                     onChange={e => setSettings(s => s ? { ...s, embedding_ollama_model: e.target.value } : s)}
-                    placeholder="nomic-embed-text"
+                    placeholder="nomic-embed-text:v1.5"
                     className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
                   />
                   {ollamaModelsError && (
@@ -2045,7 +2045,7 @@ function OrgLlamaConfig() {
                 value={settings.embedding_openrouter_model}
                 onChange={nextValue => setSettings(s => s ? { ...s, embedding_openrouter_model: nextValue } : s)}
                 options={embeddingOpenRouterModels}
-                placeholder="openai/text-embedding-3-large"
+                placeholder="(not recommended — must match hub 768-d)"
                 className="mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
               />
               {embeddingOpenRouterModels.length > 0 ? (

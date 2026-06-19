@@ -99,8 +99,9 @@ type SubmissionKeywordVotes struct {
 
 var keywordFormatRegex = regexp.MustCompile(protocol.KeywordFormatRegex)
 
-// Calibrated with text-embedding-3-large observed data: true duplicates landed >=0.84
-// and topical cross-matches <=0.78, so near-duplicate matching uses a 0.80 floor.
+// Canonical embedding model is nomic-embed-text:v1.5 (768-d).
+// The >=0.84 duplicate signal and near-duplicate floor calibration were established on the prior 4x-dimension model
+// and are pending re-validation against nomic-embed-text:v1.5.
 const nearDupProbeLimit = 25
 const nearDupFloor = 0.80
 

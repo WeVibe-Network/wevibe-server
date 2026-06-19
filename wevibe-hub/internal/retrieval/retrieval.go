@@ -41,7 +41,7 @@ func OrgCollectionName(orgID string) string {
 	return "org_" + orgID + "_memories"
 }
 
-const EMBED_DIM = 3072
+const EMBED_DIM = 768
 const contestedThreshold = 0.20
 
 const (

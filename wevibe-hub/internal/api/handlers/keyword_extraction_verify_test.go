@@ -223,7 +223,7 @@ func TestVerifyKeywords_VectorDimensionGate_BatchRejectsLegacyAndEmptyVectors(t 
 	router := chi.NewRouter()
 	router.Post("/v1/orgs/{orgID}/verify-keywords", handlers.VerifyKeywords)
 
-	const legacyEmbeddingDim = 768
+	const legacyEmbeddingDim = embed.EMBED_DIM * 4
 	validVector := make([]float32, embed.EMBED_DIM)
 	validVector[0] = 0.25
 	validVector[embed.EMBED_DIM-1] = 0.75

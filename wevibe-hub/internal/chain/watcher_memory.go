@@ -118,7 +118,7 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 
 		modelID := strings.TrimSpace(embeddingModelID.String)
 		if modelID == "" {
-			modelID = "nomic-embed-text"
+			modelID = "nomic-embed-text:v1.5"
 		}
 		schemaVersion := strings.TrimSpace(embeddingSchemaVersion.String)
 		if schemaVersion == "" {

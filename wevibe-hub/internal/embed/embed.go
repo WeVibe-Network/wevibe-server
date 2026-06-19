@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const EMBED_DIM = 3072
+const EMBED_DIM = 768
 
 const (
 	maxEmbeddingAttempts = 4

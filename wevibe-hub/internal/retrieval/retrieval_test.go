@@ -208,8 +208,8 @@ func TestOrgCollectionName(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	if EMBED_DIM != 3072 {
-		t.Errorf("expected EMBED_DIM to be 3072, got %d", EMBED_DIM)
+	if EMBED_DIM != 768 {
+		t.Errorf("expected EMBED_DIM to be 768, got %d", EMBED_DIM)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestQueryPoints_EmbeddingModelFilterAppliedConditionally(t *testing.T) {
 	orgID := "filter-org"
 	vector := make([]float32, EMBED_DIM)
 
-	_, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "text-embedding-3-large", 5, false, 0, 0)
+	_, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "nomic-embed-text:v1.5", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints with embedding model id failed: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestQueryPoints_EmbeddingModelFilterAppliedConditionally(t *testing.T) {
 		}
 	}
 
-	assertEmbeddingModelFilterCondition(t, captured[0].body, "text-embedding-3-large", true)
+	assertEmbeddingModelFilterCondition(t, captured[0].body, "nomic-embed-text:v1.5", true)
 	assertEmbeddingModelFilterCondition(t, captured[1].body, "", false)
 }
 
