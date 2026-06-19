@@ -111,7 +111,7 @@ func TestQueryByKeywords_WithQdrant(t *testing.T) {
 	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	ctx := context.Background()
-	_, _, err = QueryByKeywords(ctx, client, "test-org", []int32{1}, []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 1.0}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
+	_, _, _, err = QueryByKeywords(ctx, client, "test-org", []int32{1}, []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 1.0}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestAddAndQueryRoundtrip(t *testing.T) {
 		t.Fatalf("AddToIndex failed: %v", err)
 	}
 
-	results, _, err := QueryByKeywords(ctx, client, "roundtrip-org",
+	results, _, _, err := QueryByKeywords(ctx, client, "roundtrip-org",
 		[]int32{0},
 		[]protocol.KeywordWithWeight{{Keyword: uniqueToken, Weight: 1.0}},
 		vec,
@@ -245,12 +245,12 @@ func TestQueryPoints_EmbeddingModelFilterAppliedConditionally(t *testing.T) {
 	orgID := "filter-org"
 	vector := make([]float32, EMBED_DIM)
 
-	_, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "text-embedding-3-large", 5, false, 0, 0)
+	_, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "text-embedding-3-large", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints with embedding model id failed: %v", err)
 	}
 
-	_, _, err = client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
+	_, _, _, err = client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints without embedding model id failed: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestQueryPointsMissingCollectionReturnsEmpty(t *testing.T) {
 	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	vector := make([]float32, EMBED_DIM)
-	results, contested, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
+	results, contested, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints returned unexpected error: %v", err)
 	}

@@ -159,7 +159,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[recall] qdrant QueryByKeywords start org=%s agent=%s vecDim=%d kw=%d model=%s limit=%d includeDormant=%v", req.OrgID, agentLogID, len(req.Vector), len(req.KeywordWeights), req.EmbeddingModelID, req.Limit, req.IncludeDormant)
-	results, contested, err := retrieval.QueryByKeywords(
+	results, contested, scorecard, err := retrieval.QueryByKeywords(
 		ctx, qdrantClient, req.OrgID, accessibleEpochs,
 		req.KeywordWeights, req.Vector, req.EmbeddingModelID, uint64(req.Limit), req.IncludeDormant, req.RelevanceFloor, req.SurfaceBudget,
 	)
@@ -169,6 +169,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[recall] qdrant returned %d candidates contested=%v org=%s", len(results), contested, req.OrgID)
+	persistRecallQueryLog(req, scorecard, contested)
 
 	if req.SessionID != "" && len(results) > 0 {
 		rows, err := pool.Query(ctx, `
@@ -547,4 +548,55 @@ func truncateForLog(value string, max int) string {
 		return value
 	}
 	return value[:max]
+}
+
+func persistRecallQueryLog(req protocol.QueryRequest, scorecard []retrieval.CandidateScore, contested bool) {
+	if pool == nil {
+		return
+	}
+
+	returnedCount := 0
+	for _, score := range scorecard {
+		if score.Disposition == "returned" {
+			returnedCount++
+		}
+	}
+
+	entry := retrieval.QueryLogEntry{
+		OrgID:            req.OrgID,
+		AgentPubkey:      req.AgentPubkey,
+		SessionID:        req.SessionID,
+		KeywordWeights:   req.KeywordWeights,
+		RelevanceFloor:   req.RelevanceFloor,
+		SurfaceBudget:    req.SurfaceBudget,
+		EmbeddingModelID: req.EmbeddingModelID,
+		VectorDim:        len(req.Vector),
+		LimitN:           req.Limit,
+		CandidateCount:   len(scorecard),
+		ReturnedCount:    returnedCount,
+		Contested:        contested,
+	}
+
+	scorecardCopy := cloneCandidateScores(scorecard)
+	go func(entry retrieval.QueryLogEntry, scores []retrieval.CandidateScore) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := retrieval.PersistRecallQuery(ctx, pool, entry, scores); err != nil {
+			log.Printf("[recall-log] persist failed: %v", err)
+		}
+	}(entry, scorecardCopy)
+}
+
+func cloneCandidateScores(scores []retrieval.CandidateScore) []retrieval.CandidateScore {
+	if len(scores) == 0 {
+		return nil
+	}
+
+	cloned := make([]retrieval.CandidateScore, len(scores))
+	for i, score := range scores {
+		cloned[i] = score
+		cloned[i].MatchedKeywords = append([]string{}, score.MatchedKeywords...)
+	}
+
+	return cloned
 }

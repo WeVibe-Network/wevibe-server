@@ -456,6 +456,42 @@ CREATE TABLE IF NOT EXISTS session_served_memories (
 
 CREATE INDEX IF NOT EXISTS idx_session_served_served_at ON session_served_memories(served_at);
 
+CREATE TABLE IF NOT EXISTS query_log (
+    query_id           TEXT             PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+    org_id             TEXT             NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    agent_pubkey       TEXT             NOT NULL,
+    session_id         TEXT             NOT NULL DEFAULT '',
+    query_text         TEXT,                 -- v1: always NULL (hub never receives raw query); reserved for future opt-in MCP forward
+    keyword_weights    JSONB            NOT NULL DEFAULT '[]'::jsonb,
+    relevance_floor    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    surface_budget     INTEGER          NOT NULL DEFAULT 0,
+    embedding_model_id TEXT             NOT NULL DEFAULT '',
+    vector_dim         INTEGER          NOT NULL DEFAULT 0,
+    limit_n            INTEGER          NOT NULL DEFAULT 0,
+    candidate_count    INTEGER          NOT NULL DEFAULT 0,
+    returned_count     INTEGER          NOT NULL DEFAULT 0,
+    contested          BOOLEAN          NOT NULL DEFAULT FALSE,
+    created_at         TIMESTAMPTZ      NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS query_candidate_scores (
+    query_id          TEXT             NOT NULL REFERENCES query_log(query_id) ON DELETE CASCADE,
+    memory_cid        TEXT             NOT NULL,
+    keyword_score     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    vector_score      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    gamma             DOUBLE PRECISION NOT NULL DEFAULT 0,
+    delta             DOUBLE PRECISION NOT NULL DEFAULT 0,
+    capped_boost      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    combined_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    matched_keywords  TEXT[]           NOT NULL DEFAULT '{}',
+    rank_position     INTEGER          NOT NULL DEFAULT -1,   -- 0-based for returned; -1 otherwise
+    disposition       TEXT             NOT NULL CHECK (disposition IN ('returned','below_floor','over_budget_unsampled')),
+    PRIMARY KEY (query_id, memory_cid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_log_org_created ON query_log (org_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_query_candidate_scores_query ON query_candidate_scores (query_id);
+
 -- ── Chain watcher state ───────────────────────────────────────────────────
 -- Restart-safe cursor for the hub ChainWatcher (watcher.go). The watcher reads
 -- last_seen_block_height on Start() and catches up from there; it UPDATEs this row

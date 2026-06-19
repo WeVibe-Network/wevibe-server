@@ -58,6 +58,19 @@ type scoredResult struct {
 	memoryCreatedEpoch uint64
 }
 
+type CandidateScore struct {
+	CID             string
+	KeywordScore    float64
+	VectorScore     float64
+	Gamma           float64
+	Delta           float64
+	CappedBoost     float64
+	CombinedScore   float64
+	MatchedKeywords []string
+	RankPosition    int
+	Disposition     string
+}
+
 type ProbabilisticRanker struct {
 	Temperature       float64
 	NewMemBoostMult   float64
@@ -403,7 +416,7 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 	return nil
 }
 
-func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int) ([]protocol.MemoryResult, bool, error) {
+func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
 	filterConditions := []map[string]any{
 		{"key": "org_id", "match": map[string]any{"value": orgID}},
 	}
@@ -458,7 +471,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	reqBody, err := json.Marshal(searchReq)
 	if err != nil {
 		log.Printf("[recall] qdrant search marshal FAILED org=%s collection=%s vecDim=%d: %v", orgID, OrgCollectionName(orgID), len(vector), err)
-		return nil, false, fmt.Errorf("marshal search request: %w", err)
+		return nil, false, nil, fmt.Errorf("marshal search request: %w", err)
 	}
 
 	collectionName := OrgCollectionName(orgID)
@@ -467,14 +480,14 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	req, err := c.newRequest(ctx, "POST", url, reqBody)
 	if err != nil {
 		log.Printf("[recall] qdrant search create request FAILED org=%s collection=%s url=%s: %v", orgID, collectionName, url, err)
-		return nil, false, fmt.Errorf("create request: %w", err)
+		return nil, false, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[recall] qdrant search http call FAILED org=%s collection=%s url=%s: %v", orgID, collectionName, url, err)
-		return nil, false, fmt.Errorf("execute search request: %w", err)
+		return nil, false, nil, fmt.Errorf("execute search request: %w", err)
 	}
 	defer resp.Body.Close()
 	log.Printf("[recall] qdrant search response org=%s collection=%s status=%d", orgID, collectionName, resp.StatusCode)
@@ -491,16 +504,16 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		log.Printf("[recall] qdrant search non-2xx org=%s collection=%s status=%d queryVecDim=%d body=%s", orgID, collectionName, resp.StatusCode, len(vector), body)
 		if resp.StatusCode == http.StatusNotFound && strings.Contains(body, "doesn't exist") {
 			log.Printf("[recall] qdrant collection not yet created org=%s collection=%s — returning empty result", orgID, collectionName)
-			return []protocol.MemoryResult{}, false, nil
+			return []protocol.MemoryResult{}, false, []CandidateScore{}, nil
 		}
 		if expectedDim, ok := extractExpectedVectorDim(body); ok {
 			log.Printf("[recall] qdrant vector dimensions org=%s collection=%s queryVecDim=%d expectedVecDim=%d", orgID, collectionName, len(vector), expectedDim)
 		}
 		var errResp map[string]any
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
-			return nil, false, fmt.Errorf("search failed: %v", errResp)
+			return nil, false, nil, fmt.Errorf("search failed: %v", errResp)
 		}
-		return nil, false, fmt.Errorf("search failed with status %d", resp.StatusCode)
+		return nil, false, nil, fmt.Errorf("search failed with status %d", resp.StatusCode)
 	}
 
 	var searchResp struct {
@@ -512,7 +525,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
 		log.Printf("[recall] qdrant search decode FAILED org=%s collection=%s: %v", orgID, collectionName, err)
-		return nil, false, fmt.Errorf("decode search response: %w", err)
+		return nil, false, nil, fmt.Errorf("decode search response: %w", err)
 	}
 
 	memoryIdentifiers := make([]string, 0, len(searchResp.Result))
@@ -531,7 +544,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 
 	pendingDenialCounts, err := getPendingDenialCounts(ctx, c.pendingDenialDB, orgID, memoryIdentifiers)
 	if err != nil {
-		return nil, false, fmt.Errorf("load pending denial counts: %w", err)
+		return nil, false, nil, fmt.Errorf("load pending denial counts: %w", err)
 	}
 
 	currentEpoch := uint64(0)
@@ -683,6 +696,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			memoryCreatedEpoch: richData.memoryCreatedEpoch,
 		})
 	}
+	allScoredResults := append([]scoredResult(nil), scoredResults...)
 
 	// D-RECALL-GOVERNOR: optional floor + budget before final sampling.
 	if relevanceFloor > 0 {
@@ -704,6 +718,38 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 	// D-9.4 power-law sampler. Source: wevibe-sim/ranking-fix.js:73-111.
 	rankedResults := ranker.probabilisticRank(scoredResults, int(cap))
+	rankedPositions := make(map[string]int, len(rankedResults))
+	for idx, sr := range rankedResults {
+		rankedPositions[sr.result.CID] = idx
+	}
+
+	candidateScores := make([]CandidateScore, 0, len(allScoredResults))
+	for _, sr := range allScoredResults {
+		candidate := CandidateScore{
+			CID:             sr.result.CID,
+			MatchedKeywords: append([]string{}, sr.result.MatchedKeywords...),
+			RankPosition:    -1,
+			Disposition:     "over_budget_unsampled",
+		}
+
+		if breakdown := sr.result.Breakdown; breakdown != nil {
+			candidate.KeywordScore = breakdown.KeywordScore
+			candidate.VectorScore = breakdown.VectorScore
+			candidate.Gamma = breakdown.Gamma
+			candidate.Delta = breakdown.Delta
+			candidate.CappedBoost = breakdown.CappedBoost
+			candidate.CombinedScore = breakdown.CombinedScore
+		}
+
+		if relevanceFloor > 0 && sr.weightedScore < relevanceFloor {
+			candidate.Disposition = "below_floor"
+		} else if rankPosition, ok := rankedPositions[sr.result.CID]; ok {
+			candidate.Disposition = "returned"
+			candidate.RankPosition = rankPosition
+		}
+
+		candidateScores = append(candidateScores, candidate)
+	}
 
 	var memoryResults []protocol.MemoryResult
 	var topScore, secondScore float64
@@ -726,7 +772,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		}
 	}
 
-	return memoryResults, contested, nil
+	return memoryResults, contested, candidateScores, nil
 }
 
 func extractExpectedVectorDim(body string) (int, bool) {
@@ -1069,7 +1115,7 @@ func QueryByKeywords(
 	includeDormant bool,
 	relevanceFloor float64,
 	surfaceBudget int,
-) ([]protocol.MemoryResult, bool, error) {
+) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
 	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget)
 }
 

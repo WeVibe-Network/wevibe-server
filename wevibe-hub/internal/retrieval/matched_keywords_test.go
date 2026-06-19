@@ -59,7 +59,7 @@ func TestQueryByKeywords_MatchedKeywordsPerResult(t *testing.T) {
 	})
 	defer cleanup()
 
-	results, _, err := QueryByKeywords(
+	results, _, _, err := QueryByKeywords(
 		context.Background(),
 		client,
 		"org-1",
@@ -94,7 +94,7 @@ func TestQueryByKeywords_MatchedKeywords_FullOverlap(t *testing.T) {
 	})
 	defer cleanup()
 
-	results, _, err := QueryByKeywords(
+	results, _, _, err := QueryByKeywords(
 		context.Background(),
 		client,
 		"org-1",
@@ -132,7 +132,7 @@ func TestQueryByKeywords_MatchedKeywords_NoOverlap_NotFiltered(t *testing.T) {
 	})
 	defer cleanup()
 
-	results, _, err := QueryByKeywords(
+	results, _, _, err := QueryByKeywords(
 		context.Background(),
 		client,
 		"org-1",
