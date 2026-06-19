@@ -25,6 +25,7 @@ type RankQuery struct {
 type RankOpts struct {
 	Gate               bool
 	KeywordBoostFactor float64
+	Delta              float64
 	NewMemBoost        bool
 	Grace              float64
 	BoostWindow        float64
@@ -43,6 +44,9 @@ type RankedRow struct {
 	Final          float64
 	VectorScore    float64
 	KeywordBoost   float64
+	Gamma          float64
+	Delta          float64
+	CappedBoost    float64
 	Matched        []string
 	KeywordMatches []RankKeywordMatch
 	UnmatchedQuery []string
@@ -180,7 +184,15 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 			continue
 		}
 
-		final := cand.VectorScore + boost*opts.KeywordBoostFactor
+		gammaBoost := boost * opts.KeywordBoostFactor
+		cappedBoost := gammaBoost
+		if opts.Delta > 0 {
+			deltaCap := opts.Delta * cand.VectorScore
+			if deltaCap < cappedBoost {
+				cappedBoost = deltaCap
+			}
+		}
+		final := cand.VectorScore + cappedBoost
 
 		if cand.PendingDenials > 0 {
 			final = math.Max(0, final-float64(cand.PendingDenials)*0.05)
@@ -201,6 +213,9 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 				Final:          final,
 				VectorScore:    cand.VectorScore,
 				KeywordBoost:   boost,
+				Gamma:          opts.KeywordBoostFactor,
+				Delta:          opts.Delta,
+				CappedBoost:    cappedBoost,
 				Matched:        matched,
 				KeywordMatches: matchedDetails,
 				UnmatchedQuery: unmatchedQueryKeywords(queryKeywords, matched),

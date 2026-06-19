@@ -435,6 +435,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	// boostFactor scales the keyword contribution relative to vector similarity.
 	// confidence_bps was killed by D-4.1 and is no longer part of ranking.
 	const keywordBoostFactor = 0.1
+	const keywordBoostDelta = 0.15
 
 	searchLimit := c.recallDepth
 	if searchLimit == 0 {
@@ -628,6 +629,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	out := ScoreAndRank(cands, RankQuery{KeywordWeights: queryWeightsMap}, RankOpts{
 		Gate:               false,
 		KeywordBoostFactor: keywordBoostFactor,
+		Delta:              keywordBoostDelta,
 		NewMemBoost:        ranker.NewMemBoostMult > 0 && ranker.NewMemBoostWindow > 0,
 		Grace:              float64(ranker.GraceEpochs),
 		BoostWindow:        float64(ranker.NewMemBoostWindow),
@@ -669,6 +671,9 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 				Breakdown: &protocol.ScoringBreakdown{
 					KeywordScore:   row.KeywordBoost,
 					VectorScore:    row.VectorScore,
+					Gamma:          row.Gamma,
+					Delta:          row.Delta,
+					CappedBoost:    row.CappedBoost,
 					CombinedScore:  row.Final,
 					KeywordMatches: keywordMatches,
 					UnmatchedQuery: unmatchedQuery,

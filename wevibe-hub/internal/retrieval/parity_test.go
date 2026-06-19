@@ -38,6 +38,7 @@ type parityQuerySpec struct {
 type parityOptsSpec struct {
 	Gate               bool    `json:"gate"`
 	KeywordBoostFactor float64 `json:"keywordBoostFactor"`
+	Delta              float64 `json:"delta"`
 	NewMemBoost        bool    `json:"newMemBoost"`
 	Grace              float64 `json:"grace"`
 	BoostWindow        float64 `json:"boostWindow"`
@@ -99,6 +100,7 @@ func TestRankingParity_AgainstSimFixtures(t *testing.T) {
 			opts := RankOpts{
 				Gate:               tc.Opts.Gate,
 				KeywordBoostFactor: tc.Opts.KeywordBoostFactor,
+				Delta:              tc.Opts.Delta,
 				NewMemBoost:        tc.Opts.NewMemBoost,
 				Grace:              tc.Opts.Grace,
 				BoostWindow:        tc.Opts.BoostWindow,
