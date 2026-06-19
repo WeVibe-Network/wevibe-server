@@ -25,6 +25,7 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'Members', href: '/members' },
         { label: 'Requests', href: '/join-requests' },
         { label: 'Epochs', href: '/epoch' },
+        { label: 'Recall Health', href: '/recall-inspect' },
         { label: 'Billing', href: '/billing' },
         { label: 'Recovery', href: '/recovery' },
         { label: 'Org Settings', href: '/settings' },

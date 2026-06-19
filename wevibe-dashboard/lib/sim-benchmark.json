@@ -1,0 +1,102 @@
+{
+  "source": "recall-sim/results/2026-06-19T09-05-08-936Z/matrix.json",
+  "generated_at": "2026-06-19T09:05:08.936Z",
+  "cells": [
+    {
+      "id": "C0",
+      "label": "prod-baseline",
+      "metrics": {
+        "recall_at_1": 0.38333333333333336,
+        "recall_at_5": 0.95,
+        "mrr": 0.6180555555555555,
+        "ndcg_at_5": 0.6999114015681617,
+        "mean_separation": 0.0009615544075087709,
+        "pct_lost_to_gate": 3.3333333333333335
+      }
+    },
+    {
+      "id": "C1",
+      "label": "baseline + prefix on",
+      "metrics": {
+        "recall_at_1": 0.43333333333333335,
+        "recall_at_5": 0.95,
+        "mrr": 0.6347222222222222,
+        "ndcg_at_5": 0.7119470450490452,
+        "mean_separation": -0.0007340118907844575,
+        "pct_lost_to_gate": 3.3333333333333335
+      }
+    },
+    {
+      "id": "C2",
+      "label": "baseline + gate off",
+      "metrics": {
+        "recall_at_1": 0.35,
+        "recall_at_5": 0.95,
+        "mrr": 0.6021428571428572,
+        "ndcg_at_5": 0.6858518923124817,
+        "mean_separation": 0.0007850112493562859,
+        "pct_lost_to_gate": 0
+      }
+    },
+    {
+      "id": "C3",
+      "label": "full proposal",
+      "metrics": {
+        "recall_at_1": 0.9666666666666667,
+        "recall_at_5": 1,
+        "mrr": 0.9833333333333333,
+        "ndcg_at_5": 0.9876976584523819,
+        "mean_separation": 0.0672034120061081,
+        "pct_lost_to_gate": 0
+      }
+    },
+    {
+      "id": "C4",
+      "label": "full-session anticipated_need",
+      "metrics": {
+        "recall_at_1": 0,
+        "recall_at_5": 0,
+        "mrr": 0,
+        "ndcg_at_5": 0,
+        "mean_separation": 0,
+        "pct_lost_to_gate": 0
+      }
+    },
+    {
+      "id": "A_MEM_RAW",
+      "label": "single-axis mem repr raw",
+      "metrics": {
+        "recall_at_1": 0.8666666666666667,
+        "recall_at_5": 0.9666666666666667,
+        "mrr": 0.9125,
+        "ndcg_at_5": 0.9264220887655114,
+        "mean_separation": 0.09253134422210545,
+        "pct_lost_to_gate": 3.3333333333333335
+      }
+    },
+    {
+      "id": "A_MEM_RETRIEVAL",
+      "label": "single-axis mem repr retrieval_card",
+      "metrics": {
+        "recall_at_1": 0.95,
+        "recall_at_5": 0.9666666666666667,
+        "mrr": 0.9555555555555556,
+        "ndcg_at_5": 0.9583333333333334,
+        "mean_separation": 0.09357151694872454,
+        "pct_lost_to_gate": 3.3333333333333335
+      }
+    },
+    {
+      "id": "A_QUERY_NEED",
+      "label": "single-axis query repr need_card",
+      "metrics": {
+        "recall_at_1": 0.65,
+        "recall_at_5": 1,
+        "mrr": 0.7916666666666667,
+        "ndcg_at_5": 0.8443822253596601,
+        "mean_separation": 0.018272775816912685,
+        "pct_lost_to_gate": 0
+      }
+    }
+  ]
+}

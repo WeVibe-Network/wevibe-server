@@ -1134,6 +1134,115 @@ export async function cancelJoinApproval(orgId: string, requestId: string): Prom
   });
 }
 
+export interface RecallQueryListItem {
+  query_id: string;
+  session_id: string;
+  relevance_floor: number;
+  surface_budget: number;
+  embedding_model_id: string;
+  vector_dim: number;
+  limit_n: number;
+  candidate_count: number;
+  returned_count: number;
+  contested: boolean;
+  created_at: string;
+}
+
+export interface RecallQueryKeywordWeight {
+  keyword: string;
+  weight: number;
+}
+
+export interface RecallQueryDetail {
+  query_id: string;
+  org_id: string;
+  agent_pubkey: string;
+  session_id: string;
+  query_text: string | null;
+  keyword_weights: RecallQueryKeywordWeight[];
+  relevance_floor: number;
+  surface_budget: number;
+  embedding_model_id: string;
+  vector_dim: number;
+  limit_n: number;
+  candidate_count: number;
+  returned_count: number;
+  contested: boolean;
+  created_at: string;
+}
+
+export interface RecallQueryCandidate {
+  memory_cid: string;
+  keyword_score: number;
+  vector_score: number;
+  gamma: number;
+  delta: number;
+  capped_boost: number;
+  combined_score: number;
+  matched_keywords: string[];
+  rank_position: number;
+  disposition: 'returned' | 'below_floor' | 'over_budget_unsampled';
+}
+
+export interface RecallQueryDetailResponse {
+  query: RecallQueryDetail;
+  candidates: RecallQueryCandidate[];
+}
+
+export async function listRecallQueries(orgId: string, opts?: {
+  limit?: number;
+  offset?: number;
+}): Promise<RecallQueryListItem[]> {
+  const limit = typeof opts?.limit === 'number' ? opts.limit : 50;
+  const offset = typeof opts?.offset === 'number' ? opts.offset : 0;
+  const searchParams = new URLSearchParams();
+  searchParams.set('limit', String(limit));
+  searchParams.set('offset', String(offset));
+  const query = searchParams.toString();
+  const resp = await hubFetch<{ queries?: RecallQueryListItem[] }>(
+    `/v1/orgs/${orgId}/recall-queries${query ? `?${query}` : ''}`,
+  );
+  return resp.queries ?? [];
+}
+
+export async function getRecallQueryDetail(orgId: string, queryId: string): Promise<RecallQueryDetailResponse> {
+  return hubFetch<RecallQueryDetailResponse>(`/v1/orgs/${orgId}/recall-queries/${encodeURIComponent(queryId)}`);
+}
+
+export interface RecallHealth {
+  window_hours: number | null;
+  query_count: number;
+  avg_returned: number;
+  avg_candidates: number;
+  zero_injection_pct: number;
+  contested_pct: number;
+  disposition: {
+    returned: number;
+    below_floor: number;
+    over_budget_unsampled: number;
+  };
+  score_separation: {
+    avg_returned_score: number | null;
+    avg_below_floor_score: number | null;
+    gap: number | null;
+  };
+  feedback: {
+    serve_count: number;
+    denial_count: number;
+    serve_denial_ratio: number | null;
+  };
+  pending_serve_backlog: number;
+}
+
+export async function getRecallHealth(orgId: string, hours?: number): Promise<RecallHealth> {
+  const searchParams = new URLSearchParams();
+  if (typeof hours === 'number' && hours > 0) {
+    searchParams.set('hours', String(hours));
+  }
+  const query = searchParams.toString();
+  return hubFetch<RecallHealth>(`/v1/orgs/${orgId}/recall-health${query ? `?${query}` : ''}`);
+}
+
 export async function getRecallRateLimit(orgId: string): Promise<{
   configured: boolean;
   max_requests?: number;
