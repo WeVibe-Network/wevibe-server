@@ -403,7 +403,7 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 	return nil
 }
 
-func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool) ([]protocol.MemoryResult, bool, error) {
+func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int) ([]protocol.MemoryResult, bool, error) {
 	filterConditions := []map[string]any{
 		{"key": "org_id", "match": map[string]any{"value": orgID}},
 	}
@@ -641,8 +641,20 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			continue
 		}
 
-		matchedKeywords := append([]string(nil), row.Matched...)
+		matchedKeywords := append([]string{}, row.Matched...)
 		sort.Strings(matchedKeywords)
+
+		keywordMatches := make([]protocol.KeywordMatchDetail, 0, len(row.KeywordMatches))
+		for _, match := range row.KeywordMatches {
+			keywordMatches = append(keywordMatches, protocol.KeywordMatchDetail{
+				Keyword:      match.Keyword,
+				QueryWeight:  match.QueryWeight,
+				MemoryWeight: match.MemoryWeight,
+				Product:      match.Product,
+			})
+		}
+
+		unmatchedQuery := append([]string{}, row.UnmatchedQuery...)
 
 		scoredResults = append(scoredResults, scoredResult{
 			result: protocol.MemoryResult{
@@ -654,27 +666,45 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 				ContentFlags:    richData.contentFlags,
 				Keywords:        richData.keywords,
 				MatchedKeywords: matchedKeywords,
+				Breakdown: &protocol.ScoringBreakdown{
+					KeywordScore:   row.KeywordBoost,
+					VectorScore:    row.VectorScore,
+					CombinedScore:  row.Final,
+					KeywordMatches: keywordMatches,
+					UnmatchedQuery: unmatchedQuery,
+				},
 			},
 			weightedScore:      row.Final,
 			memoryCreatedEpoch: richData.memoryCreatedEpoch,
 		})
 	}
 
-	if limit == 0 || limit > uint64(len(scoredResults)) {
-		limit = uint64(len(scoredResults))
+	// D-RECALL-GOVERNOR: optional floor + budget before final sampling.
+	if relevanceFloor > 0 {
+		filteredResults := make([]scoredResult, 0, len(scoredResults))
+		for _, sr := range scoredResults {
+			if sr.weightedScore >= relevanceFloor {
+				filteredResults = append(filteredResults, sr)
+			}
+		}
+		scoredResults = filteredResults
+	}
+
+	cap := limit
+	if surfaceBudget > 0 && (cap == 0 || uint64(surfaceBudget) < cap) {
+		cap = uint64(surfaceBudget)
+	}
+	if cap == 0 || cap > uint64(len(scoredResults)) {
+		cap = uint64(len(scoredResults))
 	}
 	// D-9.4 power-law sampler. Source: wevibe-sim/ranking-fix.js:73-111.
-	rankedResults := ranker.probabilisticRank(scoredResults, int(limit))
+	rankedResults := ranker.probabilisticRank(scoredResults, int(cap))
 
 	var memoryResults []protocol.MemoryResult
 	var topScore, secondScore float64
 	for i, sr := range rankedResults {
-		// CO-021: surface the post-decay final score so consumers (including
-		// the denial-loop smoke test) can observe the optimistic ledger.
-		// ScoringBreakdown is the pre-existing carrier for this value; only
-		// CombinedScore is populated here — the other fields are reserved for
-		// the full per-query scoring breakdown surface (not yet wired).
-		sr.result.Breakdown = &protocol.ScoringBreakdown{CombinedScore: sr.weightedScore}
+		// CO-021 surfaced CombinedScore. The full per-query breakdown fields are
+		// now threaded from ScoreAndRank without changing ranking behavior.
 		memoryResults = append(memoryResults, sr.result)
 		if i == 0 {
 			topScore = sr.weightedScore
@@ -1032,8 +1062,10 @@ func QueryByKeywords(
 	embeddingModelID string,
 	limit uint64,
 	includeDormant bool,
+	relevanceFloor float64,
+	surfaceBudget int,
 ) ([]protocol.MemoryResult, bool, error) {
-	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant)
+	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget)
 }
 
 type OrgMemoryPayload struct {

@@ -161,7 +161,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[recall] qdrant QueryByKeywords start org=%s agent=%s vecDim=%d kw=%d model=%s limit=%d includeDormant=%v", req.OrgID, agentLogID, len(req.Vector), len(req.KeywordWeights), req.EmbeddingModelID, req.Limit, req.IncludeDormant)
 	results, contested, err := retrieval.QueryByKeywords(
 		ctx, qdrantClient, req.OrgID, accessibleEpochs,
-		req.KeywordWeights, req.Vector, req.EmbeddingModelID, uint64(req.Limit), req.IncludeDormant,
+		req.KeywordWeights, req.Vector, req.EmbeddingModelID, uint64(req.Limit), req.IncludeDormant, req.RelevanceFloor, req.SurfaceBudget,
 	)
 	if err != nil {
 		log.Printf("[recall] qdrant QueryByKeywords FAILED org=%s: %v", req.OrgID, err)

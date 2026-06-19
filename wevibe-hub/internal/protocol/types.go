@@ -276,6 +276,8 @@ type QueryRequest struct {
 	Limit                  int                 `json:"limit"`
 	SessionID              string              `json:"session_id,omitempty"`
 	IncludeDormant         bool                `json:"include_dormant,omitempty"`
+	RelevanceFloor         float64             `json:"relevance_floor,omitempty"`
+	SurfaceBudget          int                 `json:"surface_budget,omitempty"`
 	AgentSig               string              `json:"agent_sig"`
 }
 

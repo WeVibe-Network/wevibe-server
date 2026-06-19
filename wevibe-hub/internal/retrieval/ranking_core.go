@@ -31,12 +31,21 @@ type RankOpts struct {
 	NewMemMult         float64
 }
 
+type RankKeywordMatch struct {
+	Keyword      string
+	QueryWeight  float64
+	MemoryWeight float64
+	Product      float64
+}
+
 type RankedRow struct {
-	ID           string
-	Final        float64
-	VectorScore  float64
-	KeywordBoost float64
-	Matched      []string
+	ID             string
+	Final          float64
+	VectorScore    float64
+	KeywordBoost   float64
+	Matched        []string
+	KeywordMatches []RankKeywordMatch
+	UnmatchedQuery []string
 }
 
 type DropCount struct {
@@ -86,9 +95,9 @@ func normalizeWeightMap(weights map[string]float64) map[string]float64 {
 	return normalized
 }
 
-func keywordScore(memoryWeights, queryWeights map[string]float64) (float64, []string) {
+func keywordScore(memoryWeights, queryWeights map[string]float64) (float64, []string, []RankKeywordMatch) {
 	if len(memoryWeights) == 0 || len(queryWeights) == 0 {
-		return 0, []string{}
+		return 0, []string{}, []RankKeywordMatch{}
 	}
 
 	keywords := make([]string, 0, len(memoryWeights))
@@ -99,6 +108,7 @@ func keywordScore(memoryWeights, queryWeights map[string]float64) (float64, []st
 
 	boost := 0.0
 	matched := make([]string, 0)
+	matchedDetails := make([]RankKeywordMatch, 0)
 
 	for _, keyword := range keywords {
 		queryWeight, ok := queryWeights[keyword]
@@ -106,15 +116,52 @@ func keywordScore(memoryWeights, queryWeights map[string]float64) (float64, []st
 			continue
 		}
 
-		boost += queryWeight * memoryWeights[keyword]
+		memoryWeight := memoryWeights[keyword]
+		product := queryWeight * memoryWeight
+		boost += product
 		matched = append(matched, keyword)
+		matchedDetails = append(matchedDetails, RankKeywordMatch{
+			Keyword:      keyword,
+			QueryWeight:  queryWeight,
+			MemoryWeight: memoryWeight,
+			Product:      product,
+		})
 	}
 
-	return boost, matched
+	return boost, matched, matchedDetails
+}
+
+func unmatchedQueryKeywords(sortedQueryKeywords []string, matched []string) []string {
+	if len(sortedQueryKeywords) == 0 {
+		return []string{}
+	}
+	if len(matched) == 0 {
+		return append([]string{}, sortedQueryKeywords...)
+	}
+
+	matchedSet := make(map[string]struct{}, len(matched))
+	for _, keyword := range matched {
+		matchedSet[keyword] = struct{}{}
+	}
+
+	unmatched := make([]string, 0, len(sortedQueryKeywords))
+	for _, keyword := range sortedQueryKeywords {
+		if _, ok := matchedSet[keyword]; ok {
+			continue
+		}
+		unmatched = append(unmatched, keyword)
+	}
+
+	return unmatched
 }
 
 func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOutput {
 	normalizedQueryWeights := normalizeWeightMap(query.KeywordWeights)
+	queryKeywords := make([]string, 0, len(normalizedQueryWeights))
+	for keyword := range normalizedQueryWeights {
+		queryKeywords = append(queryKeywords, keyword)
+	}
+	sort.Strings(queryKeywords)
 
 	rows := make([]rankedRowWithIndex, 0, len(cands))
 	drops := DropCount{Total: len(cands)}
@@ -126,7 +173,7 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 		}
 
 		candidateKeywordWeights := normalizeWeightMap(cand.KeywordWeights)
-		boost, matched := keywordScore(candidateKeywordWeights, normalizedQueryWeights)
+		boost, matched, matchedDetails := keywordScore(candidateKeywordWeights, normalizedQueryWeights)
 
 		if opts.Gate && len(normalizedQueryWeights) > 0 && len(matched) == 0 {
 			drops.Gate++
@@ -150,11 +197,13 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 
 		rows = append(rows, rankedRowWithIndex{
 			row: RankedRow{
-				ID:           cand.ID,
-				Final:        final,
-				VectorScore:  cand.VectorScore,
-				KeywordBoost: boost,
-				Matched:      matched,
+				ID:             cand.ID,
+				Final:          final,
+				VectorScore:    cand.VectorScore,
+				KeywordBoost:   boost,
+				Matched:        matched,
+				KeywordMatches: matchedDetails,
+				UnmatchedQuery: unmatchedQueryKeywords(queryKeywords, matched),
 			},
 			index: i,
 		})

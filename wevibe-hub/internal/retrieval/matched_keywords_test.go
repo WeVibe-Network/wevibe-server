@@ -69,6 +69,8 @@ func TestQueryByKeywords_MatchedKeywordsPerResult(t *testing.T) {
 		"",
 		10,
 		false,
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
@@ -102,6 +104,8 @@ func TestQueryByKeywords_MatchedKeywords_FullOverlap(t *testing.T) {
 		"",
 		10,
 		false,
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
@@ -138,6 +142,8 @@ func TestQueryByKeywords_MatchedKeywords_NoOverlap_NotFiltered(t *testing.T) {
 		"",
 		10,
 		false,
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
