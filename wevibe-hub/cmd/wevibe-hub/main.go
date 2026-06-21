@@ -72,6 +72,10 @@ func main() {
 	}
 	defer pool.Close()
 	handlers.SetPool(pool)
+	handlers.SetRecallMode(cfg.RecallMode)
+	if cfg.RecallMode == "test" {
+		log.Printf("!!! WEVIBE_RECALL_MODE=test — recall throttles bypassed !!!")
+	}
 
 	var chainClient *chain.GrpcClient
 	if !cfg.ChainEnabled {

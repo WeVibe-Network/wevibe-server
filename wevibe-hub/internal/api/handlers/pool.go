@@ -16,6 +16,7 @@ var chainClient *chain.GrpcClient
 var faucetURL string
 var umbralService *umbral.Service
 var socialClient *social.Client
+var recallMode string
 
 func SetPool(p *pgxpool.Pool) {
 	pool = p
@@ -27,6 +28,14 @@ func GetPool() *pgxpool.Pool {
 
 func SetQdrantClient(c *retrieval.QdrantClient) {
 	qdrantClient = c
+}
+
+func SetRecallMode(m string) {
+	recallMode = m
+}
+
+func recallModeIsTest() bool {
+	return recallMode == "test"
 }
 
 func SetNodePrivkey(key string) {

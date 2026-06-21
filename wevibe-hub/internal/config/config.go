@@ -28,6 +28,7 @@ type Config struct {
 	RetrievalNewMemBoostWindow uint64
 	RetrievalVectorNoiseSigma  float64
 	RetrievalRecallDepth       uint64
+	RecallMode                 string
 }
 
 func Load() Config {
@@ -43,6 +44,10 @@ func Load() Config {
 	}
 	if len(qdrantAPIKey) < 32 {
 		panic("QDRANT_API_KEY must be at least 32 characters")
+	}
+	recallMode := getEnvOrDefault("WEVIBE_RECALL_MODE", "prod")
+	if recallMode != "test" {
+		recallMode = "prod"
 	}
 	cfg := Config{
 		Port:                       port,
@@ -65,6 +70,7 @@ func Load() Config {
 		RetrievalNewMemBoostWindow: getEnvOrDefaultUint64("RETRIEVAL_NEW_MEM_BOOST_WINDOW", 30),
 		RetrievalVectorNoiseSigma:  getEnvOrDefaultFloat("RETRIEVAL_VECTOR_NOISE_SIGMA", 0.0),
 		RetrievalRecallDepth:       getEnvOrDefaultUint64("RETRIEVAL_RECALL_DEPTH", 5000),
+		RecallMode:                 recallMode,
 	}
 
 	if cfg.RetrievalTemperature <= 0 {

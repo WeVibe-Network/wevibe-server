@@ -61,10 +61,17 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Limit <= 0 {
-		req.Limit = 10
+		if recallModeIsTest() {
+			req.Limit = 1000
+		} else {
+			req.Limit = 3
+		}
 	}
 
 	ctx := r.Context()
+	if recallModeIsTest() {
+		log.Printf("[recall] TEST MODE bypass throttles org=%s agent=%s", req.OrgID, agentLogID)
+	}
 
 	member, err := members.GetMember(ctx, pool, req.OrgID, req.AgentPubkey)
 	if err != nil {
@@ -86,23 +93,25 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		trialDailyLimit, limitErr := getTrialDailyQueryLimit(ctx, pool, req.OrgID)
-		if limitErr != nil {
-			log.Printf("[recall] ERROR trial gate load limit FAILED org=%s: %v", req.OrgID, limitErr)
-			WriteError(w, http.StatusInternalServerError, "internal_error", "internal error", limitErr.Error())
-			return
-		}
+		if !recallModeIsTest() {
+			trialDailyLimit, limitErr := getTrialDailyQueryLimit(ctx, pool, req.OrgID)
+			if limitErr != nil {
+				log.Printf("[recall] ERROR trial gate load limit FAILED org=%s: %v", req.OrgID, limitErr)
+				WriteError(w, http.StatusInternalServerError, "internal_error", "internal error", limitErr.Error())
+				return
+			}
 
-		queryCount, countErr := getTodayMemberQueryCount(ctx, pool, req.OrgID, req.AgentPubkey)
-		if countErr != nil {
-			log.Printf("[recall] ERROR trial gate count queries FAILED org=%s agent=%s: %v", req.OrgID, agentLogID, countErr)
-			WriteError(w, http.StatusInternalServerError, "internal_error", "internal error", countErr.Error())
-			return
-		}
-		if queryCount >= trialDailyLimit {
-			log.Printf("[recall] DENY trial daily limit reached org=%s agent=%s count=%d limit=%d", req.OrgID, agentLogID, queryCount, trialDailyLimit)
-			WriteError(w, http.StatusForbidden, "trial_limit", "trial daily query limit reached")
-			return
+			queryCount, countErr := getTodayMemberQueryCount(ctx, pool, req.OrgID, req.AgentPubkey)
+			if countErr != nil {
+				log.Printf("[recall] ERROR trial gate count queries FAILED org=%s agent=%s: %v", req.OrgID, agentLogID, countErr)
+				WriteError(w, http.StatusInternalServerError, "internal_error", "internal error", countErr.Error())
+				return
+			}
+			if queryCount >= trialDailyLimit {
+				log.Printf("[recall] DENY trial daily limit reached org=%s agent=%s count=%d limit=%d", req.OrgID, agentLogID, queryCount, trialDailyLimit)
+				WriteError(w, http.StatusForbidden, "trial_limit", "trial daily query limit reached")
+				return
+			}
 		}
 	} else if !member.MembershipActive {
 		// Non-trial members must hold an active subscription. Trial members are
@@ -112,32 +121,34 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var maxRequests int
-	var windowSeconds int
-	err = pool.QueryRow(ctx, `
-		SELECT max_requests, window_seconds
-		FROM org_recall_rate_limits
-		WHERE org_id = $1
-	`, req.OrgID).Scan(&maxRequests, &windowSeconds)
-	if err == nil {
-		if maxRequests > 0 {
-			recentCount, countErr := getRecentMemberQueryCount(ctx, pool, req.OrgID, req.AgentPubkey, windowSeconds)
-			if countErr != nil {
-				log.Printf("[recall] ERROR rate limit count queries FAILED org=%s agent=%s windowSeconds=%d: %v (fail-open)", req.OrgID, agentLogID, windowSeconds, countErr)
-			} else if recentCount >= maxRequests {
-				log.Printf("[recall] DENY recall rate limit reached org=%s agent=%s count=%d max=%d windowSeconds=%d", req.OrgID, agentLogID, recentCount, maxRequests, windowSeconds)
-				WriteError(
-					w,
-					http.StatusTooManyRequests,
-					"rate_limited",
-					"recall rate limit exceeded",
-					fmt.Sprintf("max %d requests per %d seconds", maxRequests, windowSeconds),
-				)
-				return
+	if !recallModeIsTest() {
+		var maxRequests int
+		var windowSeconds int
+		err = pool.QueryRow(ctx, `
+			SELECT max_requests, window_seconds
+			FROM org_recall_rate_limits
+			WHERE org_id = $1
+		`, req.OrgID).Scan(&maxRequests, &windowSeconds)
+		if err == nil {
+			if maxRequests > 0 {
+				recentCount, countErr := getRecentMemberQueryCount(ctx, pool, req.OrgID, req.AgentPubkey, windowSeconds)
+				if countErr != nil {
+					log.Printf("[recall] ERROR rate limit count queries FAILED org=%s agent=%s windowSeconds=%d: %v (fail-open)", req.OrgID, agentLogID, windowSeconds, countErr)
+				} else if recentCount >= maxRequests {
+					log.Printf("[recall] DENY recall rate limit reached org=%s agent=%s count=%d max=%d windowSeconds=%d", req.OrgID, agentLogID, recentCount, maxRequests, windowSeconds)
+					WriteError(
+						w,
+						http.StatusTooManyRequests,
+						"rate_limited",
+						"recall rate limit exceeded",
+						fmt.Sprintf("max %d requests per %d seconds", maxRequests, windowSeconds),
+					)
+					return
+				}
 			}
+		} else if err != pgx.ErrNoRows {
+			log.Printf("[recall] ERROR rate limit load config FAILED org=%s: %v (fail-open)", req.OrgID, err)
 		}
-	} else if err != pgx.ErrNoRows {
-		log.Printf("[recall] ERROR rate limit load config FAILED org=%s: %v (fail-open)", req.OrgID, err)
 	}
 
 	currentEpoch, err := orgs.GetCurrentEpoch(ctx, pool, req.OrgID)
