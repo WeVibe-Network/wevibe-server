@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
@@ -31,17 +33,69 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("[recall] ERROR parse request body FAILED: %v", err)
 		WriteError(w, http.StatusBadRequest, "invalid_request", "bad request")
 		return
 	}
 
+	bodySignatureHex := r.Header.Get("X-Agent-Signature")
+	if bodySignatureHex == "" {
+		log.Printf("[recall] DENY missing X-Agent-Signature header")
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
+	bodySignatureBytes, err := hex.DecodeString(bodySignatureHex)
+	if err != nil || len(bodySignatureBytes) != ed25519.SignatureSize {
+		log.Printf("[recall] DENY invalid X-Agent-Signature format: %v", err)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
+	authenticatedAgentPubkey := auth.GetMemberPubkey(r.Context())
+	if authenticatedAgentPubkey == "" {
+		var pubkeyPayload struct {
+			AgentPubkey string `json:"agent_pubkey"`
+		}
+		if err := json.Unmarshal(bodyBytes, &pubkeyPayload); err != nil {
+			log.Printf("[recall] ERROR parse json FAILED bodyLen=%d: %v", len(bodyBytes), err)
+			WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
+			return
+		}
+		authenticatedAgentPubkey = pubkeyPayload.AgentPubkey
+	}
+
+	if authenticatedAgentPubkey == "" {
+		log.Printf("[recall] DENY missing authenticated agent pubkey for body-signature verification")
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
+	agentPubkeyBytes, err := hex.DecodeString(authenticatedAgentPubkey)
+	if err != nil || len(agentPubkeyBytes) != ed25519.PublicKeySize {
+		log.Printf("[recall] DENY invalid authenticated agent pubkey format: %v", err)
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
+	if !ed25519.Verify(ed25519.PublicKey(agentPubkeyBytes), bodyBytes, bodySignatureBytes) {
+		log.Printf("[recall] DENY X-Agent-Signature verification failed agent=%s", truncateForLog(authenticatedAgentPubkey, 12))
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
+		return
+	}
+
 	var req protocol.QueryRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		log.Printf("[recall] ERROR parse json FAILED bodyLen=%d: %v", len(body), err)
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		log.Printf("[recall] ERROR parse json FAILED bodyLen=%d: %v", len(bodyBytes), err)
 		WriteError(w, http.StatusBadRequest, "invalid_json", "invalid json")
+		return
+	}
+
+	if req.AgentPubkey != "" && req.AgentPubkey != authenticatedAgentPubkey {
+		log.Printf("[recall] DENY agent_pubkey mismatch body=%s auth=%s", truncateForLog(req.AgentPubkey, 12), truncateForLog(authenticatedAgentPubkey, 12))
+		WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -224,7 +278,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 			ctx, pool, nodePrivkeyHex,
 			req.OrgID, 0, accessibleEpochs,
 			req.AgentPubkey, map[string]any{"query": "memory_query"},
-			[]string{}, req.AgentSig,
+			[]string{}, bodySignatureHex,
 		)
 		if receiptErr != nil {
 			log.Printf("[recall] receipt CreateReceipt FAILED org=%s agent=%s zeroResults=true: %v", req.OrgID, agentLogID, receiptErr)
@@ -396,7 +450,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		ctx, pool, nodePrivkeyHex,
 		req.OrgID, 0, accessibleEpochs,
 		req.AgentPubkey, map[string]any{"query": "memory_query"},
-		extractCIDs(results), req.AgentSig,
+		extractCIDs(results), bodySignatureHex,
 	)
 	if err != nil {
 		log.Printf("[recall] receipt CreateReceipt FAILED org=%s agent=%s zeroResults=false: %v", req.OrgID, agentLogID, err)

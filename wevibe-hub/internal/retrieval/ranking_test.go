@@ -181,64 +181,6 @@ func TestProbabilisticRank_LimitGreaterThanCandidates(t *testing.T) {
 	requireSameCIDOrder(t, ranked, scored)
 }
 
-func TestApplyNewMemoryBoost_PeakAtAgeZero(t *testing.T) {
-	ranker := rankerWithSeed(1, 0.7)
-	rawScore := 1.0
-	got := ranker.applyNewMemoryBoost(rawScore, 100, 100)
-	want := 1.5
-	t.Logf("age=0 boosted score got=%.12f want=%.12f", got, want)
-	if !almostEqual(got, want, 1e-9) {
-		t.Fatalf("unexpected boosted score: got=%.12f want=%.12f", got, want)
-	}
-}
-
-func TestApplyNewMemoryBoost_HalfwayThroughWindow(t *testing.T) {
-	ranker := rankerWithSeed(2, 0.7)
-	rawScore := 1.0
-	got := ranker.applyNewMemoryBoost(rawScore, 100, 125)
-	want := 1.25
-	t.Logf("half-window boosted score got=%.12f want=%.12f", got, want)
-	if !almostEqual(got, want, 1e-9) {
-		t.Fatalf("unexpected boosted score: got=%.12f want=%.12f", got, want)
-	}
-}
-
-func TestApplyNewMemoryBoost_OutsideWindow_NoBoost(t *testing.T) {
-	ranker := rankerWithSeed(3, 0.7)
-	rawScore := 1.0
-	got := ranker.applyNewMemoryBoost(rawScore, 100, 160)
-	want := rawScore
-	t.Logf("outside-window score got=%.12f want=%.12f", got, want)
-	if !almostEqual(got, want, 1e-9) {
-		t.Fatalf("expected no boost outside window: got=%.12f want=%.12f", got, want)
-	}
-}
-
-func TestApplyNewMemoryBoost_ZeroRawScore(t *testing.T) {
-	ranker := rankerWithSeed(4, 0.7)
-	got := ranker.applyNewMemoryBoost(0, 100, 100)
-	t.Logf("zero raw score output=%.12f", got)
-	if got != 0 {
-		t.Fatalf("expected zero output for zero raw score, got %.12f", got)
-	}
-}
-
-func TestApplyNewMemoryBoost_DisabledViaZeroMult(t *testing.T) {
-	ranker := &ProbabilisticRanker{
-		Temperature:       0.7,
-		NewMemBoostMult:   0,
-		NewMemBoostWindow: 30,
-		GraceEpochs:       20,
-		RNG:               rand.New(rand.NewSource(5)),
-	}
-	rawScore := 0.77
-	got := ranker.applyNewMemoryBoost(rawScore, 100, 100)
-	t.Logf("zero-mult score got=%.12f want=%.12f", got, rawScore)
-	if !almostEqual(got, rawScore, 1e-9) {
-		t.Fatalf("expected raw score when multiplier is disabled: got=%.12f want=%.12f", got, rawScore)
-	}
-}
-
 func TestProbabilisticRank_TwoCandidates_ServePerEqualsOne(t *testing.T) {
 	scored := makeScoredResults([]float64{0.9, 0.1})
 	ranker := rankerWithSeed(55, 0.7)

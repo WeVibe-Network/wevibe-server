@@ -278,17 +278,14 @@ type QueryRequest struct {
 	IncludeDormant         bool                `json:"include_dormant,omitempty"`
 	RelevanceFloor         float64             `json:"relevance_floor,omitempty"`
 	SurfaceBudget          int                 `json:"surface_budget,omitempty"`
-	AgentSig               string              `json:"agent_sig"`
 }
 
 type MemoryResult struct {
 	CID              string              `json:"cid"`
 	OrgID            string              `json:"org_id"`
 	EpochID          int                 `json:"epoch_id"`
-	ConfidenceBps    uint64              `json:"confidence_bps,omitempty"`
 	LifecycleState   string              `json:"lifecycle_state,omitempty"`
 	MemoryType       string              `json:"memory_type"`
-	WrappedDekEnc    string              `json:"wrapped_dek_enc"`
 	UmbralCiphertext string              `json:"umbral_ciphertext,omitempty"`
 	Cfrag            string              `json:"cfrag,omitempty"`
 	Capsule          string              `json:"capsule,omitempty"`
@@ -297,7 +294,6 @@ type MemoryResult struct {
 	MatchedKeywords  []string            `json:"matched_keywords,omitempty"`
 	Breakdown        *ScoringBreakdown   `json:"scoring_breakdown,omitempty"`
 	ChainAttested    bool                `json:"chain_attested"`
-	RetrievalCount   int                 `json:"retrieval_count"`
 	AcceptanceCount  int                 `json:"acceptance_count"`
 	ContributorStats *ContributorStats   `json:"contributor_stats,omitempty"`
 }

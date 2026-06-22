@@ -3,9 +3,7 @@ package retrieval
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -45,12 +43,9 @@ const EMBED_DIM = 768
 const contestedThreshold = 0.20
 
 const (
-	DenialDecayBPS    = 500
-	ServeBoostBPS     = 100
-	MaxServesPerEpoch = 5
+	DenialDecayBPS = 500
+	ServeBoostBPS  = 100
 )
-
-var ErrInvalidOffset = errors.New("invalid offset token")
 
 type scoredResult struct {
 	result             protocol.MemoryResult
@@ -97,29 +92,6 @@ func getRanker() *ProbabilisticRanker {
 		GraceEpochs:       20,
 		RNG:               rand.New(rand.NewSource(1)),
 	}
-}
-
-func (r *ProbabilisticRanker) applyNewMemoryBoost(rawScore float64, memoryCreatedEpoch, currentEpoch uint64) float64 {
-	if rawScore == 0 || r.NewMemBoostMult <= 0 || r.NewMemBoostWindow == 0 {
-		return rawScore
-	}
-
-	window := float64(r.GraceEpochs + r.NewMemBoostWindow)
-	if window <= 0 {
-		return rawScore
-	}
-
-	age := float64(0)
-	if currentEpoch > memoryCreatedEpoch {
-		age = float64(currentEpoch - memoryCreatedEpoch)
-	}
-
-	fraction := 1.0 - age/window
-	if fraction < 0 {
-		fraction = 0
-	}
-
-	return rawScore * (1 + r.NewMemBoostMult*fraction)
 }
 
 func (r *ProbabilisticRanker) probabilisticRank(scored []scoredResult, limit int) []scoredResult {
@@ -929,57 +901,6 @@ func getPendingDenialCounts(ctx context.Context, db DBQueryer, orgID string, mem
 	return counts, nil
 }
 
-func applyPendingDenialDecay(score float64, pendingDenialCount int) float64 {
-	if pendingDenialCount <= 0 {
-		return score
-	}
-
-	adjustment := float64(pendingDenialCount) * (float64(DenialDecayBPS) / 10000.0)
-	adjustedScore := score - adjustment
-	if adjustedScore < 0 {
-		return 0
-	}
-
-	return adjustedScore
-}
-
-func (c *QdrantClient) CountPoints(ctx context.Context, orgID string) (int64, error) {
-	countReq := map[string]any{}
-
-	reqBody, err := json.Marshal(countReq)
-	if err != nil {
-		return 0, fmt.Errorf("marshal count request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/collections/%s/points/count", c.restURL, OrgCollectionName(orgID))
-	req, err := c.newRequest(ctx, "POST", url, reqBody)
-	if err != nil {
-		return 0, fmt.Errorf("create request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("execute count request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("count failed with status %d", resp.StatusCode)
-	}
-
-	var countResp struct {
-		Result struct {
-			Count int64 `json:"count"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&countResp); err != nil {
-		return 0, fmt.Errorf("decode count response: %w", err)
-	}
-
-	return countResp.Result.Count, nil
-}
-
 func getRESTStringSlice(payload map[string]any, key string) []string {
 	if v, ok := payload[key]; ok {
 		if arr, ok := v.([]any); ok {
@@ -1048,43 +969,6 @@ func getRESTStringFloatMap(payload map[string]any, key string) map[string]float6
 		}
 	}
 	return result
-}
-
-func computeKeywordScore(storedWeights map[string]float64, storedKeywords []string, queryWeights map[string]float64) (float64, []protocol.KeywordMatchDetail, []string) {
-	if len(queryWeights) == 0 || len(storedWeights) == 0 {
-		return 0, nil, nil
-	}
-
-	keywordBoost := 0.0
-
-	matchedKeywords := make([]protocol.KeywordMatchDetail, 0)
-	matchedQueryKws := make(map[string]bool)
-
-	for _, kw := range storedKeywords {
-		lowerKw := strings.ToLower(kw)
-		if queryWeight, ok := queryWeights[lowerKw]; ok {
-			if memWeight, ok := storedWeights[lowerKw]; ok {
-				product := queryWeight * memWeight
-				keywordBoost += product
-				matchedKeywords = append(matchedKeywords, protocol.KeywordMatchDetail{
-					Keyword:      kw,
-					QueryWeight:  queryWeight,
-					MemoryWeight: memWeight,
-					Product:      product,
-				})
-				matchedQueryKws[lowerKw] = true
-			}
-		}
-	}
-
-	unmatchedQuery := make([]string, 0)
-	for kw := range queryWeights {
-		if !matchedQueryKws[kw] {
-			unmatchedQuery = append(unmatchedQuery, kw)
-		}
-	}
-
-	return keywordBoost, matchedKeywords, unmatchedQuery
 }
 
 func AddToIndex(ctx context.Context, client *QdrantClient, entry protocol.IndexEntry) error {
@@ -1212,131 +1096,6 @@ func ScrollOrgMemoryPayloads(ctx context.Context, client *QdrantClient, orgID st
 	}
 
 	return memories, nil
-}
-
-func ScrollApprovedMemories(ctx context.Context, client *QdrantClient, orgID string, limit uint64, offset string) ([]protocol.MemoryResult, string, error) {
-	if client == nil {
-		return nil, "", fmt.Errorf("qdrant client unavailable")
-	}
-	if orgID == "" {
-		return nil, "", fmt.Errorf("org id required")
-	}
-
-	if limit == 0 {
-		limit = 50
-	}
-	if limit > 200 {
-		limit = 200
-	}
-
-	scrollReq := map[string]any{
-		"filter": map[string]any{
-			"must": []map[string]any{
-				{"key": "org_id", "match": map[string]any{"value": orgID}},
-			},
-		},
-		"with_payload": true,
-		"with_vectors": false,
-		"limit":        limit,
-	}
-
-	if offset != "" {
-		decoded, err := base64.RawURLEncoding.DecodeString(offset)
-		if err != nil {
-			return nil, "", ErrInvalidOffset
-		}
-
-		var offsetPayload map[string]any
-		if err := json.Unmarshal(decoded, &offsetPayload); err != nil {
-			return nil, "", ErrInvalidOffset
-		}
-		scrollReq["offset"] = offsetPayload
-	}
-
-	reqBody, err := json.Marshal(scrollReq)
-	if err != nil {
-		return nil, "", fmt.Errorf("marshal scroll request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/collections/%s/points/scroll", client.restURL, OrgCollectionName(orgID))
-	req, err := client.newRequest(ctx, "POST", url, reqBody)
-	if err != nil {
-		return nil, "", fmt.Errorf("create request: %w", err)
-	}
-
-	httpClient := &http.Client{Timeout: 10 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("execute scroll request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("scroll failed with status %d", resp.StatusCode)
-	}
-
-	var scrollResp struct {
-		Result struct {
-			Points []struct {
-				Payload map[string]any `json:"payload"`
-			} `json:"points"`
-			NextOffset map[string]any `json:"next_page_offset"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&scrollResp); err != nil {
-		return nil, "", fmt.Errorf("decode scroll response: %w", err)
-	}
-
-	memories := make([]protocol.MemoryResult, 0, len(scrollResp.Result.Points))
-	for _, point := range scrollResp.Result.Points {
-		payload := point.Payload
-		cid, _ := payload["cid"].(string)
-		if cid == "" {
-			continue
-		}
-
-		epochID := 0
-		if epoch, ok := payload["epoch_id"].(float64); ok {
-			epochID = int(epoch)
-		}
-
-		contentFlags := getRESTStringSlice(payload, "content_flags")
-		storedWeights := getRESTStringFloatMap(payload, "keyword_weights")
-		keywords := make([]protocol.KeywordWithWeight, 0, len(storedWeights))
-		for keyword, weight := range storedWeights {
-			keyword = strings.TrimSpace(keyword)
-			if keyword == "" {
-				continue
-			}
-			keywords = append(keywords, protocol.KeywordWithWeight{Keyword: keyword, Weight: weight})
-		}
-
-		lifecycleState, _ := payload["lifecycle_state"].(string)
-		lifecycleState = strings.ToUpper(strings.TrimSpace(lifecycleState))
-		memoryType, _ := payload["memory_type"].(string)
-		memoryType = strings.TrimSpace(memoryType)
-
-		memories = append(memories, protocol.MemoryResult{
-			CID:            cid,
-			OrgID:          orgID,
-			EpochID:        epochID,
-			LifecycleState: lifecycleState,
-			MemoryType:     memoryType,
-			ContentFlags:   contentFlags,
-			Keywords:       keywords,
-		})
-	}
-
-	var nextOffset string
-	if len(scrollResp.Result.NextOffset) > 0 {
-		encoded, err := json.Marshal(scrollResp.Result.NextOffset)
-		if err != nil {
-			return nil, "", fmt.Errorf("encode next offset: %w", err)
-		}
-		nextOffset = base64.RawURLEncoding.EncodeToString(encoded)
-	}
-
-	return memories, nextOffset, nil
 }
 
 func (c *QdrantClient) setPointKeywordWeights(ctx context.Context, orgID string, pointID any, weights map[string]float64) error {
