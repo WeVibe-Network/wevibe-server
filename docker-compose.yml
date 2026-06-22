@@ -92,6 +92,10 @@ services:
       dockerfile: wevibe-server/Dockerfile.umbral-sidecar
     container_name: wevibe-umbral
     restart: unless-stopped
+    environment:
+      WEVIBE_UMBRAL_KFRAG_STORE: /data/kfrags.json
+    volumes:
+      - wevibe_umbral_kfrags:/data
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 4460"]
       interval: 5s
@@ -279,3 +283,4 @@ volumes:
   wevibe_chain_data:
   wevibe_mcp_keys:
   wevibe_social_graph_data:
+  wevibe_umbral_kfrags:
