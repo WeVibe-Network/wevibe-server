@@ -19,7 +19,6 @@ import (
 
 const (
 	extractionProfileDefaultNumCtx        = 32768
-	extractionProfileDefaultModel         = "qwen3:4b"
 	extractionProfileRecommendedPresetID  = "balanced-reliable"
 	extractionProfileSystemPromptMaxBytes = 16384
 	extractionProfileNumCtxMax            = 131072
@@ -198,6 +197,15 @@ func SetExtractionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"system_prompt exceeds 16384 bytes"}`, http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.Model) == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "extraction model required",
+			"code":  "extraction_model_required",
+		})
+		return
+	}
 
 	resp := extractionProfileResponse{}
 	var updatedAt time.Time
@@ -235,6 +243,6 @@ func GetExtractionPresets(w http.ResponseWriter, r *http.Request) {
 		Presets:       extractionPresets,
 		RecommendedID: extractionProfileRecommendedPresetID,
 		DefaultNumCtx: extractionProfileDefaultNumCtx,
-		DefaultModel:  extractionProfileDefaultModel,
+		DefaultModel:  "",
 	})
 }

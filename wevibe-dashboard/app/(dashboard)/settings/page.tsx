@@ -1477,7 +1477,7 @@ export default function SettingsPage() {
                           markExtractionProfileCustom();
                           setExtractionModel(event.target.value);
                         }}
-                        placeholder="qwen3:4b"
+                        placeholder="e.g. the model id your provider serves"
                         disabled={savingExtractionProfile || extractionProfileLoading}
                         className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
                       />

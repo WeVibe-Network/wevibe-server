@@ -38,7 +38,6 @@ interface ExtractRequestBody {
 interface ExtractionProfileOverrides {
   prompt?: string;
   numCtx?: number;
-  model?: string;
   presetId: string | null;
 }
 
@@ -253,13 +252,6 @@ async function fetchOrgExtractionProfileOverrides(
       overrides.numCtx = responseBody.num_ctx;
     }
 
-    if (typeof responseBody.model === 'string') {
-      const model = responseBody.model.trim();
-      if (model.length > 0) {
-        overrides.model = model;
-      }
-    }
-
     if (typeof responseBody.preset_id === 'string') {
       const presetId = responseBody.preset_id.trim();
       if (presetId.length > 0) {
@@ -289,6 +281,17 @@ export async function POST(request: NextRequest) {
   if (!body.transcript || body.transcript.trim().length < 50) {
     return NextResponse.json(
       { error: 'Session transcript too short for extraction' },
+      { status: 400 },
+    );
+  }
+
+  const requestedModel = typeof body.model === 'string' ? body.model.trim() : '';
+  if (requestedModel.length === 0) {
+    return NextResponse.json(
+      {
+        error: 'extraction model not configured — set it in Settings',
+        code: 'extraction_model_not_configured',
+      },
       { status: 400 },
     );
   }
@@ -338,15 +341,7 @@ export async function POST(request: NextRequest) {
   const activeOrgId = settings.org_id.trim();
   const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId);
   const useLmStudio = settings.llm_provider === 'lm_studio';
-  const modelFromSettings = useLmStudio
-    ? settings.lmstudio_model.trim()
-    : settings.ollama_model.trim();
-  const resolvedLocalModel = profileOverrides?.model ?? modelFromSettings;
-  const openRouterModel = settings.openrouter_model.trim();
-  const useOpenRouter =
-    settings.llm_provider === 'openrouter'
-    && openRouterModel.length > 0;
-  const resolvedModel = useOpenRouter ? openRouterModel : resolvedLocalModel;
+  const useOpenRouter = settings.llm_provider === 'openrouter';
   const mcpExtractRequestBody: {
     transcript: string;
     project_context: {
@@ -354,9 +349,9 @@ export async function POST(request: NextRequest) {
       directory: string;
       stack?: string[];
     };
+    model: string;
     prompt?: string;
     num_ctx?: number;
-    model?: string;
     ollama_url?: string;
     provider?: string;
     api_key?: string;
@@ -365,6 +360,7 @@ export async function POST(request: NextRequest) {
   } = {
     transcript: body.transcript,
     project_context: projectContext,
+    model: requestedModel,
   };
 
   if (activeOrgId.length > 0) {
@@ -377,10 +373,6 @@ export async function POST(request: NextRequest) {
 
   if (profileOverrides?.numCtx && profileOverrides.numCtx > 0) {
     mcpExtractRequestBody.num_ctx = profileOverrides.numCtx;
-  }
-
-  if (resolvedModel.length > 0) {
-    mcpExtractRequestBody.model = resolvedModel;
   }
 
   if (useOpenRouter) {
@@ -469,7 +461,7 @@ export async function POST(request: NextRequest) {
     extraction_meta: {
       source: profileOverrides ? 'org-profile' : 'wevibe-default',
       preset_id: profileOverrides?.presetId ?? null,
-      model: resolvedModel,
+      model: requestedModel,
       provider: useOpenRouter ? 'openrouter' : useLmStudio ? 'lm_studio' : 'ollama',
       is_local: !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
