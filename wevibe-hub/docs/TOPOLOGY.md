@@ -449,26 +449,26 @@ sanitization_findings JSONB  -- Stored at submission time, pre-encryption
 
 ### Multi-Stage Approval Pipeline
 
-The hub implements a multi-stage memory lifecycle that decouples approval from keyword extraction from chain commitment:
+The hub implements a multi-stage memory lifecycle that decouples advisory moderation from keyword extraction from chain commitment:
 
-**Status values:** `pending` → `pending_keyword` → `pending_chain` → `committed` (terminal); `denied` (terminal reject)
+**Status values:** `pending_keyword` → `pending_chain` → `committed` (terminal); `denied` (terminal reject)
 
 **Flow:**
-1. **Contributor submits** (`pending`) — memory enters moderation queue
-2. **Moderator approves** (`pending_keyword`) — moderator stamps quality, records `moderator_pubkey` and `approved_at`
-3. **Leader triggers batch keyword extraction** (`pending_chain`) — LLM classifies per-memory against org vocabulary, hub verifies
+1. **Contributor submits** (`pending_keyword`) — memory enters the moderation queue directly at `pending_keyword` (no pre-keyword `pending` gate)
+2. **Moderators cast advisory votes** (`pending_keyword`) — advisory only; votes never gate or transition status. `moderator_pubkey`/`approved_at` record advisory metadata; status stays `pending_keyword` until the leader verifies
+3. **Leader verifies keywords / triggers batch keyword extraction** (`pending_chain`) — the leader's verify moves `pending_keyword` → `pending_chain`; LLM classifies per-memory against org vocabulary, hub verifies
 4. **Leader reviews/curates results** — selects/deselects keywords (default all-selected; selected = will commit), edits, or removes before chain commitment (re-run extraction was removed in CANONICALUX v1.2)
 5. **Leader triggers batch chain submission** (`pending_chain`) — chain tx is broadcast; status stays `pending_chain` until confirmation
 6. **ChainWatcher confirms tx** (`committed`) — `processApproveMemoryBookkeeping` performs Qdrant upsert/keyword writes and flips status to `committed`
 7. **Memory rejected at any stage** (`denied`) — terminal state; leader deny or report upheld
 
-**Vote flow:** Moderators cast approval votes on `pending` submissions. When quorum is reached (or leader override), status transitions to `pending_keyword`. Only `pending` submissions are votable — `pending_keyword`, `pending_chain`, `committed`, and `denied` block further voting.
+**Status flow:** Submissions land directly at `pending_keyword` on insert — there is no pre-keyword `pending` gate. Moderators cast **advisory** votes that never gate or transition status (moderation is advisory only, per D-MODERATION-ADVISORY). Status transitions are driven solely by the leader: the leader's keyword **verify** moves `pending_keyword` → `pending_chain`, the leader's **chain-commit** moves `pending_chain` → `committed`, and a leader **deny** moves a submission to `denied` (terminal).
 
 **Schema updates (CO-238, CO-020, CO-030):**
 ```sql
 -- pending_submissions additions
-status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'pending_keyword', 'pending_chain', 'committed', 'denied', 'ready', 'approved'))
+status TEXT NOT NULL DEFAULT 'pending_keyword'
+    CHECK (status IN ('pending_keyword', 'pending_chain', 'committed', 'denied'))
 moderator_pubkey TEXT           -- moderator who approved
 approved_at TIMESTAMPTZ          -- when approved
 extraction_result JSONB         -- hub-verified keywords + scores
@@ -553,7 +553,7 @@ The `last_chain_submission_at` field is now updated by the ChainWatcher when `Ms
 
 ## Moderation Queue (CO-238 update)
 
-**GET /v1/orgs/{orgID}/moderation/queue** now returns only `status = 'pending'` submissions.
+**GET /v1/orgs/{orgID}/moderation/queue** now returns only `status = 'pending_keyword'` submissions.
 
 **Queue metadata (CO-265):** each queue item includes `votes` and `voter_pubkeys` so clients can render advisory voting state.
 
