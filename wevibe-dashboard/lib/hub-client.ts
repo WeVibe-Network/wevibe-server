@@ -1382,7 +1382,7 @@ export interface MySubmission {
   org_id: string;
   epoch_id: number;
   contributor_pubkey: string;
-  status: string;
+  status: SubmissionStatus;
   memory_type: string;
   extraction_result?: KeywordWeight[] | null;
   extraction_feedback?: string | null;

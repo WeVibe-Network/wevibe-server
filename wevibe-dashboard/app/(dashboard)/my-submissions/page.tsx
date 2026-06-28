@@ -14,8 +14,6 @@ function truncateHash(hash: string): string {
 
 function statusVariant(status: string): 'default' | 'success' | 'warning' | 'error' {
   switch (status) {
-    case 'pending':
-      return 'warning';
     case 'pending_keyword':
       return 'warning';
     case 'pending_chain':
@@ -31,8 +29,6 @@ function statusVariant(status: string): 'default' | 'success' | 'warning' | 'err
 
 function statusLabel(status: string): string {
   switch (status) {
-    case 'pending':
-      return 'Pending Moderation';
     case 'pending_keyword':
       return 'Keywords Pending';
     case 'pending_chain':
