@@ -590,11 +590,10 @@ export async function rotateEpoch(orgId: string): Promise<{ status: string; buff
 export type MemoryType = 'memory';
 
 export type SubmissionStatus =
-  | 'pending_moderation'
   | 'pending_keyword'
   | 'pending_chain'
-  | 'on_chain'
-  | 'rejected';
+  | 'committed'
+  | 'denied';
 
 export interface KeywordWeight {
   keyword: string;
