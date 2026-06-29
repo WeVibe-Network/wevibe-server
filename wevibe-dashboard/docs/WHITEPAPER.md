@@ -29,7 +29,7 @@ wevibe-dashboard is the human interface for org leaders and moderators. It provi
 
 ## Roadmap
 
-- Integrate serve attestation review (view contested memories).
+- Integrate serve receipt review (view contested memories).
 - Multi-language localization.
 - Fine-grained audit log exports compatible with compliance tooling.
 

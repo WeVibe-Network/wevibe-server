@@ -244,7 +244,7 @@ Only the **read-only** chain config endpoint remains:
 
 **Handler:** `GetOrgChainConfig(w, r)` in `internal/api/handlers/chain_config.go`.
 
-**Chain config writes (Decision C, CO-011a.4):** there is no hub-side write path for chain configuration. Category B chain config (`serve_attestation_required`, `min_contributions_per_epoch`, `contest_stake_vibe`, `rep_tiers`) is built by the dashboard and broadcast via the relay endpoint wrapping `MsgSetOrgConfig` / `MsgSetRepTiers`. The hub holds NO off-chain mirror of these fields.
+**Chain config writes (Decision C, CO-011a.4):** there is no hub-side write path for chain configuration. Category B chain config (`serve_receipt_required`, `min_contributions_per_epoch`, `contest_stake_vibe`, `rep_tiers`) is built by the dashboard and broadcast via the relay endpoint wrapping `MsgSetOrgConfig` / `MsgSetRepTiers`. The hub holds NO off-chain mirror of these fields.
 
 **Category A vs Category B (Decision C):**
 
@@ -1033,7 +1033,7 @@ Hub records denial events (incorrect/harmful memory outputs reported by consumer
 4. Leader submits denial batch on-chain.
 5. `processDenialBatchBookkeeping` updates matching rows to `status='submitted'`; pending counts naturally drop and optimistic decay clears for settled denials.
 
-**Serve attestation parity:** serve and denial events share the same `serve_events` ledger/status lifecycle and are reconciled by watcher bookkeeping after on-chain confirmation.
+**Serve receipt parity:** serve and denial events share the same `serve_events` ledger/status lifecycle and are reconciled by watcher bookkeeping after on-chain confirmation.
 
 **Route registration (`cmd/wevibe-hub/main.go`):**
 - `POST /v1/orgs/{orgID}/denials`

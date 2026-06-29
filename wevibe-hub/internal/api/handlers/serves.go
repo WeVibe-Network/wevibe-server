@@ -252,7 +252,7 @@ func relayPendingEventsByOrgWithDeps(ctx context.Context, cc *chain.GrpcClient, 
 	// and bad memories never receive timely denial decay. Processing one epoch
 	// at a time keeps each epoch's denials landing immediately after its serves
 	// (within the settle lag) while preserving the invariant that a serve
-	// attestation is committed on-chain before its denial: for any epoch E we
+	// receipt is committed on-chain before its denial: for any epoch E we
 	// submit serves[E] before denials[E], and epochs are processed ascending so
 	// a denial can never be submitted before the serve it references
 	// (serveEpoch <= denialEpoch always).
@@ -392,7 +392,7 @@ func groupRecordsByEpoch(records []serves.ServeEventRecord) map[int]([]serves.Se
 
 // sortedUnionEpochs returns the ascending union of epoch keys across the two
 // maps. Ascending order guarantees a denial is never relayed before the serve
-// attestation it references (serveEpoch <= denialEpoch).
+// receipt it references (serveEpoch <= denialEpoch).
 func sortedUnionEpochs(a, b map[int][]serves.ServeEventRecord) []int {
 	seen := make(map[int]struct{}, len(a)+len(b))
 	for e := range a {

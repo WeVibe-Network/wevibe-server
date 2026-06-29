@@ -7,7 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Category B chain config (serve_attestation_required, min_contributions_per_epoch,
+// Category B chain config (serve_receipt_required, min_contributions_per_epoch,
 // contest_stake_vibe) is no longer written via the hub. Per Decision C
 // (CO-011a.4) the dashboard builds MsgSetOrgConfig and broadcasts
 // via the relay endpoint. The hub keeps the READ-ONLY GetOrgChainConfig handler so
@@ -39,7 +39,7 @@ func GetOrgChainConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"org_id":                      orgID,
-		"serve_attestation_required":  orgConfig.ServeAttestationRequired,
+		"serve_receipt_required":      orgConfig.ServeReceiptRequired,
 		"min_contributions_per_epoch": orgConfig.MinContributionsPerEpoch,
 		"contest_stake_vibe":          orgConfig.ContestStakeVibe,
 	})

@@ -214,7 +214,7 @@ export async function getOrgFinances(orgId: string): Promise<OrgFinances> {
 
 export interface OrgChainConfig {
   org_id: string;
-  serve_attestation_required: boolean;
+  serve_receipt_required: boolean;
   min_contributions_per_epoch: number;
   contest_stake_uvibe: number;
 }
@@ -288,7 +288,7 @@ export async function listExtractedSessions(orgId: string): Promise<ExtractedSes
 }
 
 // updateOrgChainConfig was removed in CO-011a.4. Category B chain config
-// (serve_attestation_required, min_contributions_per_epoch, contest_stake_vibe)
+// (serve_receipt_required, min_contributions_per_epoch, contest_stake_vibe)
 // is now broadcast directly via the relay using MsgSetOrgConfig.
 
 export interface OrgSummary {

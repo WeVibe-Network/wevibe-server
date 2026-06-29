@@ -83,7 +83,7 @@ export default function SettingsPage() {
   const [chainConfigLoading, setChainConfigLoading] = useState(false);
   const [chainConfigError, setChainConfigError] = useState<string | null>(null);
   const [savingChainConfig, setSavingChainConfig] = useState(false);
-  const [serveAttestationRequired, setServeAttestationRequired] = useState(false);
+  const [serveReceiptRequired, setServeReceiptRequired] = useState(false);
   const [recallRateLimitLoading, setRecallRateLimitLoading] = useState(false);
   const [recallRateLimitError, setRecallRateLimitError] = useState<string | null>(null);
   const [savingRecallRateLimit, setSavingRecallRateLimit] = useState(false);
@@ -381,7 +381,7 @@ export default function SettingsPage() {
     void getOrgChainConfig(activeOrg.org_id)
       .then(config => {
         if (cancelled) return;
-        setServeAttestationRequired(config.serve_attestation_required);
+        setServeReceiptRequired(config.serve_receipt_required);
       })
       .catch(err => {
         if (cancelled) return;
@@ -495,7 +495,7 @@ export default function SettingsPage() {
     }
   }, [activeOrg, resolveOrgAccountForGas, selectedTransferPubkey, transferMembers]);
 
-  const handleChainConfigSave = useCallback(async (nextServeAttestationRequired: boolean) => {
+  const handleChainConfigSave = useCallback(async (nextServeReceiptRequired: boolean) => {
     if (!activeOrg) {
       return;
     }
@@ -512,17 +512,17 @@ export default function SettingsPage() {
       const msgSetOrgConfig = buildSetOrgConfigMsg(
         walletConn.address,
         activeOrg.org_id,
-        nextServeAttestationRequired,
+        nextServeReceiptRequired,
         0,
         0,
       );
 
       const orgAccount = await resolveOrgAccountForGas();
       const result = await directBroadcast(walletConn.address, [msgSetOrgConfig], orgAccount);
-      setServeAttestationRequired(nextServeAttestationRequired);
+      setServeReceiptRequired(nextServeReceiptRequired);
       txSuccess(
         toastId,
-        `${nextServeAttestationRequired ? 'Serve attestations enabled' : 'Serve attestations disabled'}.`,
+        `${nextServeReceiptRequired ? 'Serve receipts enabled' : 'Serve receipts disabled'}.`,
         result.txHash,
       );
     } catch (err) {
@@ -993,30 +993,30 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-wv-text">Serve attestations</p>
-                      <InfoTooltip label="About serve attestations">
-                        Require cryptographic serve attestations before a memory can be served.
+                      <p className="text-sm font-medium text-wv-text">Serve receipts</p>
+                      <InfoTooltip label="About serve receipts">
+                        Require cryptographic serve receipts before a memory can be served.
                       </InfoTooltip>
                     </div>
                     <p className="mt-1 text-xs text-wv-dim">
                       Current on-chain state:{' '}
                       <span className="font-medium text-wv-text">
-                        {serveAttestationRequired ? 'Enabled' : 'Disabled'}
+                        {serveReceiptRequired ? 'Enabled' : 'Disabled'}
                       </span>
                     </p>
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => handleChainConfigSave(!serveAttestationRequired)}
+                    onClick={() => handleChainConfigSave(!serveReceiptRequired)}
                     disabled={chainConfigLoading || savingChainConfig || !orgLoaded}
                     className="inline-flex items-center justify-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
                   >
                     {savingChainConfig
                       ? 'Broadcasting…'
-                      : serveAttestationRequired
-                        ? 'Disable serve attestations'
-                        : 'Enable serve attestations'}
+                      : serveReceiptRequired
+                        ? 'Disable serve receipts'
+                        : 'Enable serve receipts'}
                   </button>
                 </div>
 

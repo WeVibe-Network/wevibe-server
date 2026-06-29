@@ -419,14 +419,14 @@ export function buildCloseOrgMsg(
 export function buildSetOrgConfigMsg(
   signer: string,
   orgId: string,
-  serveAttestationRequired: boolean,
+  serveReceiptRequired: boolean,
   minContributionsPerEpoch: number,
   contestStakeVibe: number,
 ): EncodeObject {
   const fields: number[] = [
     ...encodeStringField(0x0a, signer),
     ...encodeStringField(0x12, orgId),
-    ...encodeVarint(0x18), ...encodeVarint(serveAttestationRequired ? 1 : 0),
+    ...encodeVarint(0x18), ...encodeVarint(serveReceiptRequired ? 1 : 0),
     ...encodeVarint(0x20), ...encodeVarint(minContributionsPerEpoch),
     ...encodeVarint(0x28), ...encodeVarint(contestStakeVibe),
   ];

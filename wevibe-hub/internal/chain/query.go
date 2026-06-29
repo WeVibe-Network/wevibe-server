@@ -126,7 +126,7 @@ func (c *GrpcClient) GetOrgConfigFromChain(ctx context.Context, orgID string) (*
 
 	return &orgtypes.StoredOrgConfig{
 		OrgId:                    orgID,
-		ServeAttestationRequired: resp.ServeAttestationRequired,
+		ServeReceiptRequired:     resp.ServeReceiptRequired,
 		ContestStakeVibe:         resp.ContestStakeVibe,
 		MinContributionsPerEpoch: resp.MinContributionsPerEpoch,
 	}, nil
