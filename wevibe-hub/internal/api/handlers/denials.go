@@ -3,19 +3,12 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/serves"
 )
-
-type pendingDenial struct {
-	Nullifier  string    `json:"nullifier"`
-	MemoryHash string    `json:"memory_hash"`
-	CreatedAt  time.Time `json:"created_at"`
-	Reason     string    `json:"reason"`
-}
 
 func GetPendingDenialCount(w http.ResponseWriter, r *http.Request) {
 	if pool == nil {
@@ -84,36 +77,15 @@ func GetPendingDenials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := pool.Query(r.Context(), `
-		SELECT nullifier, memory_content_hash, created_at, reason
-		FROM serve_events
-		WHERE event_type = 'denial' AND status = 'pending' AND org_id = $1
-		ORDER BY created_at DESC
-		LIMIT 200
-	`, orgID)
+	records, err := serves.GetPendingDenials(r.Context(), pool, orgID, 200)
 	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	denials := make([]pendingDenial, 0)
-	for rows.Next() {
-		var denial pendingDenial
-		if err := rows.Scan(&denial.Nullifier, &denial.MemoryHash, &denial.CreatedAt, &denial.Reason); err != nil {
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-		denials = append(denials, denial)
-	}
-	if err := rows.Err(); err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"denials":     denials,
+		"denials":     records,
 		"total_count": totalCount,
 	})
 }

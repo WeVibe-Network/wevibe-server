@@ -1022,7 +1022,7 @@ Hub records denial events (incorrect/harmful memory outputs reported by consumer
 - `memory_content_hash` — memory identifier used for optimistic denial counting
 - `event_type` — `serve | denial`
 - `status` — `pending | submitted | failed`
-- `nullifier`, `reason`, `created_at`
+- `serve_fingerprint`, `nonce`, `reason`, `created_at`
 
 **Flow:**
 1. Consumer denial is recorded by `POST /v1/orgs/{orgID}/denials`.
