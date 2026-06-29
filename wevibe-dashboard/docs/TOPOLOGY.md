@@ -373,13 +373,14 @@ Ready for Keywords (amber) → Review Keywords (indigo) → Pending Denials (ros
 - `GET /v1/orgs/{orgID}` → `{ current_epoch: N }` (for epoch field)
 
 **Chain message:** `MsgSubmitDenialBatch` (typeUrl: `/wevibe.serve.v1.MsgSubmitDenialBatch`)
-- Fields: `signer`, `org_id`, `epoch`, `entries[]` (each: `memory_hash`, `nullifier`, `deny_key`, `reason`)
+- Fields: `signer`, `org_id`, `epoch`, `entries[]` (each: `memory_hash`, `serve_fingerprint`, `deny_key`, `reason`)
 - Wallet-direct via Keplr/Leap, NOT relayed through hub
 
 **lib/chain-client.ts additions (CO-017):**
 - `WEVIBE_MSG_TYPE_URLS` now includes `/wevibe.serve.v1.MsgSubmitDenialBatch`
 - `buildDenialBatchMsg(signer, orgId, epoch, entries)` — builds `EncodeObject` with manual protobuf encoding
-- `DenialEntry` interface: `{ memory_hash, nullifier, deny_key, reason }`
+- `DenialEntry` interface: `{ memory_hash, serve_fingerprint, deny_key, reason }`
+- Update: dashboard `buildDenialBatchMsg` / `buildServeBatchMsg` plus `DenialEntry` / `ServeEntryInput` were removed as dead + canon-misaligned; serve/denial settlement batching is the serving-key relay's responsibility, not the dashboard.
 
 **Protocol-js:** `@wevibe-network/protocol-js` does not export `MsgSubmitDenialBatch` — manual `EncodeObject` construction used.
 

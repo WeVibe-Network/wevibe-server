@@ -13,7 +13,6 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.memory.v1.MsgSubmitCommitment',
   '/wevibe.memory.v1.MsgApproveMemory',
   '/wevibe.memory.v1.MsgReportMemory',
-  '/wevibe.serve.v1.MsgSubmitServeBatch',
   '/wevibe.org.v1.MsgRegisterOrg',
   '/wevibe.org.v1.MsgAddMember',
   '/wevibe.org.v1.MsgRemoveMember',
@@ -26,7 +25,6 @@ export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.reputation.v1.MsgIncrementContribution',
   '/wevibe.reputation.v1.MsgIncrementServe',
   '/wevibe.reputation.v1.MsgRecordBan',
-  '/wevibe.serve.v1.MsgSubmitDenialBatch',
 ];
 
 export function getChainRpcEndpoint(): string {
@@ -84,24 +82,6 @@ function buildWevibeRegistry(): Registry {
 export async function getSigningClient(signer: OfflineSigner): Promise<SigningStargateClient> {
   const rpc = getChainRpcEndpoint();
   return SigningStargateClient.connectWithSigner(rpc, signer, { registry: buildWevibeRegistry() });
-}
-
-export interface DenialEntry {
-  memory_hash: string;
-  nullifier: string;
-  deny_key: string;
-  reason: string;
-}
-
-export interface ServeEntryInput {
-  memory_content_hash: Uint8Array;
-  serve_key: string;
-  contributor_id: string;
-  nullifier: Uint8Array;
-  model_id: string;
-  turn_count: number;
-  contributor_wallet: string;
-  matched_keywords: string[];
 }
 
 interface KeywordWeightInput {
@@ -473,79 +453,6 @@ export function buildSetServingInfoMsg(
 
   return {
     typeUrl: '/wevibe.org.v1.MsgSetServingInfo',
-    value: Uint8Array.from(fields),
-  };
-}
-
-export function buildDenialBatchMsg(
-  signer: string,
-  orgId: string,
-  epoch: number,
-  entries: DenialEntry[]
-): EncodeObject {
-  const fields: number[] = [
-    ...encodeStringField(0x0a, signer),
-    ...encodeStringField(0x12, orgId),
-    ...encodeVarint(0x18), ...encodeVarint(epoch),
-  ];
-
-  for (const entry of entries) {
-    fields.push(0x22);
-    const entryFields: number[] = [
-      ...encodeBytesField(0x0a, entry.memory_hash),
-      ...encodeBytesField(0x12, entry.nullifier),
-      ...encodeStringField(0x1a, entry.deny_key),
-      ...encodeStringField(0x22, entry.reason),
-    ];
-    fields.push(...encodeVarint(entryFields.length), ...entryFields);
-  }
-
-  return {
-    typeUrl: '/wevibe.serve.v1.MsgSubmitDenialBatch',
-    value: Uint8Array.from(fields),
-  };
-}
-
-export function buildServeBatchMsg(
-  signer: string,
-  orgId: string,
-  epoch: number,
-  entries: ServeEntryInput[],
-): EncodeObject {
-  for (const entry of entries) {
-    if (!entry.matched_keywords || entry.matched_keywords.length === 0) {
-      throw new Error('matched_keywords must be non-empty per D-4.2');
-    }
-    for (const kw of entry.matched_keywords) {
-      if (!kw || kw.trim() === '') {
-        throw new Error('matched_keywords entries must be non-empty strings');
-      }
-    }
-  }
-
-  const fields: number[] = [
-    ...encodeStringField(0x0a, signer),
-    ...encodeStringField(0x12, orgId),
-    ...encodeVarint(0x18), ...encodeVarint(epoch),
-  ];
-
-  for (const entry of entries) {
-    fields.push(0x22);
-    const entryFields: number[] = [
-      ...encodeBytesField(0x0a, Buffer.from(entry.memory_content_hash).toString('hex')),
-      ...encodeStringField(0x12, entry.serve_key),
-      ...encodeStringField(0x1a, entry.contributor_id),
-      ...encodeBytesField(0x22, Buffer.from(entry.nullifier).toString('hex')),
-      ...encodeStringField(0x2a, entry.model_id),
-      ...encodeVarint(0x30), ...encodeVarint(entry.turn_count),
-      ...encodeStringField(0x3a, entry.contributor_wallet),
-      ...encodeRepeatedStringField(0x42, entry.matched_keywords),
-    ];
-    fields.push(...encodeVarint(entryFields.length), ...entryFields);
-  }
-
-  return {
-    typeUrl: '/wevibe.serve.v1.MsgSubmitServeBatch',
     value: Uint8Array.from(fields),
   };
 }
