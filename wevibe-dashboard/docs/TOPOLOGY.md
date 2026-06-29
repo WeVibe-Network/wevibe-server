@@ -38,17 +38,6 @@ Browser (Next.js App)
 5. WebSocket stream pushes serve metrics, confidence decay alerts, and contest updates in real time.
 6. Rotation page uploads anchor manifest; hub validates and records metadata, while chain tx submission remains wallet-direct.
 
-## Sprint 32 — CO-033b Serve Batch Submit Path
-
-`app/(dashboard)/chain-submit/page.tsx` now runs a live serve-broadcast flow for `pending_chain` submissions:
-
-1. Fetch `GET /v1/orgs/{orgID}/submissions?status=pending_chain` via `lib/hub-client.ts::getSubmissionsByStatus`.
-2. Require non-empty `matched_keywords` on every pending row (no fallback to `extraction_result`).
-3. Build `/wevibe.serve.v1.MsgSubmitServeBatch` with `lib/chain-client.ts::buildServeBatchMsg`.
-4. Broadcast through `directBroadcast`.
-
-`buildServeBatchMsg` enforces the chain/hub contract that `matched_keywords` is required and non-empty, and emits repeated field-8 string entries for every keyword in each `ServeEntry`.
-
 ## CO-214 Removal Sync — Single Wallet-Direct Broadcast Path
 
 All chain-bound writes from the dashboard now use ONE path: wallet-sign + direct RPC broadcast. The hub is record/query infrastructure only and does not relay dashboard transactions.
@@ -64,7 +53,7 @@ All chain-bound writes from the dashboard now use ONE path: wallet-sign + direct
   3. Signs `TxRaw` bytes locally in the browser.
   4. Calls chain RPC `broadcast_tx_commit` directly (no hub relay hop).
   5. Enforces both `check_tx.code == 0` and `deliver_tx.code == 0`, then returns tx hash + deliver data.
-- `build*Msg` helpers produce encoded chain tx messages (`buildApproveMemoryMsg`, `buildReportMemoryMsg`, `buildRegisterOrgMsg`, `buildAddMemberMsg`, `buildRemoveMemberMsg`, `buildUpdateMemberRoleMsg`, `buildSetOrgConfigMsg`, `buildSetServingKeyMsg`, `buildServeBatchMsg`, `buildDenialBatchMsg`).
+- `build*Msg` helpers produce encoded chain tx messages (`buildSubmitCommitmentMsg`, `buildApproveMemoryMsg`, `buildReportMemoryMsg`, `buildRegisterOrgMsg`, `buildAddMemberMsg`, `buildRemoveMemberMsg`, `buildSetMemberCapabilitiesMsg`, `buildTransferLeadershipMsg`, `buildCloseOrgMsg`, `buildSetOrgConfigMsg`, `buildSetServingKeyMsg`, `buildSetServingInfoMsg`).
 
 ### Settings Page Save Flow (single path)
 
@@ -207,7 +196,7 @@ New page `app/(dashboard)/my-submissions/page.tsx` shows contributor submission 
 
 ### Content Sanitization & Preference Confidence Display (CO-239)
 
-**Sanitization findings badges:** The moderation page (`app/(dashboard)/moderation/page.tsx`) and chain-submit page (`app/(dashboard)/chain-submit/page.tsx`) display sanitization finding badges for any submission with `sanitization_findings`:
+**Sanitization findings badges:** The moderation page (`app/(dashboard)/moderation/page.tsx`) displays sanitization finding badges for any submission with `sanitization_findings`:
 
 - **Critical findings** (bidi override, control characters): Red badge with count
 - **Warning findings** (invisible unicode, homoglyphs, zalgo): Amber badge with count
@@ -317,16 +306,6 @@ The moderation page (`app/(dashboard)/moderation/page.tsx`) handles vote/approve
 - `required_approvals > 1`: each moderator casts a vote; hub advances state when quorum is reached
 - Deny rejects the submission immediately
 
-### Chain Submit Page
-
-New page at `app/(dashboard)/chain-submit/page.tsx` provides the batch pipeline UI with three sections:
-
-1. **Ready for Keywords** — memories in `pending_keyword` state that need keyword extraction via MCP
-2. **Review Keywords** — memories with extracted keywords pending moderator review and hub verification
-3. **Ready for Chain** — memories in `pending_chain` state, ready for batch chain submission
-
-Leader actions: Extract Keywords (calls MCP tool), Submit to Chain (builds `MsgApproveMemory` for the batch and dispatches via `directBroadcast`), Skip (advance without keywords).
-
 ### Keyword Extraction Flow
 
 1. Dashboard calls `wevibe_extract_memories` MCP tool (via `app/api/extract/route.ts`) which proxies to wevibe-mcp
@@ -348,43 +327,11 @@ New methods for keyword pipeline:
 - `listPendingKeywords(orgId)` — GET `/submissions/keywords/pending`
 - `listPendingChain(orgId)` — GET `/submissions/keywords/pending-chain`
 
-Batch chain submission itself is no longer a hub client method — see "lib/hub-client.ts surface" below for what CO-011a.4 removed. The chain-submit page now builds `MsgApproveMemory` (or the relevant batch message) and dispatches it through `directBroadcast`.
+Batch chain submission itself is no longer a hub client method — see "lib/hub-client.ts surface" below for what CO-011a.4 removed. Dashboard chain writes are built via `lib/chain-client.ts` message builders and dispatched through `directBroadcast`.
 
-## Sprint 30 — Denial Batch Panel (CO-017)
+## Serve/Denial Settlement Ownership (Current)
 
-### Denial-Batch Panel in Chain Submit Page
-
-`app/(dashboard)/chain-submit/page.tsx` now includes a fourth panel (rose theme) between the indigo "Review Keywords" panel and the emerald "Ready for Chain" panel:
-
-```
-Ready for Keywords (amber) → Review Keywords (indigo) → Pending Denials (rose) → Ready for Chain (emerald)
-```
-
-**Data flow:**
-1. Dashboard fetches pending denial count from `GET /v1/orgs/{orgID}/denials/pending-count`
-2. Panel displays count with "Batch Submit Denials" button
-3. Leader clicks → wallet popup triggers (Keplr/Leap — Category A per D-2026-05-25-A)
-4. `directBroadcast(walletAddress, [msg])` signs and broadcasts `MsgSubmitDenialBatch`
-5. `broadcast_tx_commit` returns `code === 0` on success (on-chain confirmation)
-
-**Hub endpoints consumed:**
-- `GET /v1/orgs/{orgID}/denials/pending-count` → `{ pending_count: N }`
-- `GET /v1/orgs/{orgID}/denials/pending` → `{ denials: [...], total_count: N }`
-- `GET /v1/orgs/{orgID}` → `{ current_epoch: N }` (for epoch field)
-
-**Chain message:** `MsgSubmitDenialBatch` (typeUrl: `/wevibe.serve.v1.MsgSubmitDenialBatch`)
-- Fields: `signer`, `org_id`, `epoch`, `entries[]` (each: `memory_hash`, `serve_fingerprint`, `deny_key`, `reason`)
-- Wallet-direct via Keplr/Leap, NOT relayed through hub
-
-**lib/chain-client.ts additions (CO-017):**
-- `WEVIBE_MSG_TYPE_URLS` now includes `/wevibe.serve.v1.MsgSubmitDenialBatch`
-- `buildDenialBatchMsg(signer, orgId, epoch, entries)` — builds `EncodeObject` with manual protobuf encoding
-- `DenialEntry` interface: `{ memory_hash, serve_fingerprint, deny_key, reason }`
-- Update: dashboard `buildDenialBatchMsg` / `buildServeBatchMsg` plus `DenialEntry` / `ServeEntryInput` were removed as dead + canon-misaligned; serve/denial settlement batching is the serving-key relay's responsibility, not the dashboard.
-
-**Protocol-js:** `@wevibe-network/protocol-js` does not export `MsgSubmitDenialBatch` — manual `EncodeObject` construction used.
-
-**Confirmation:** `broadcast_tx_commit` synchronous semantics — `code === 0` means block included. No WebSocket listener needed.
+Dashboard wallet-direct `directBroadcast` is limited to memory/org/member/config/serving-key writes. Dashboard `buildDenialBatchMsg` / `buildServeBatchMsg` plus `DenialEntry` / `ServeEntryInput` were removed as dead + canon-misaligned, and the dashboard does not call serve/denial ingest endpoints. Serve/denial recording + batch chain settlement is handled by the hub serving-key relay (D-RELAY-THROUGHPUT / D-S32-CO044) via `POST /v1/orgs/{org}/serves` and `POST /v1/orgs/{org}/denials`.
 
 ### Pipeline Health Page
 
@@ -537,7 +484,7 @@ The dashboard now uses a two-layer model without client delegate keys:
 - `getChainRpcEndpoint()` — reads `NEXT_PUBLIC_WEVIBE_CHAIN_RPC`, normalizes RPC URL for CosmJS.
 - `buildWevibeRegistry()` / `getSigningClient(signer)` — registry + signer client setup for WeVibe type URLs.
 - `directBroadcast(walletAddress, msgs)` — signs locally and sends `broadcast_tx_commit` to chain RPC; validates CheckTx + DeliverTx success.
-- Message builders: `buildSubmitCommitmentMsg`, `buildApproveMemoryMsg`, `buildReportMemoryMsg`, `buildRegisterOrgMsg`, `buildAddMemberMsg`, `buildRemoveMemberMsg`, `buildUpdateMemberRoleMsg`, `buildSetOrgConfigMsg`, `buildSetServingKeyMsg`, `buildServeBatchMsg`, `buildDenialBatchMsg`.
+- Message builders: `buildSubmitCommitmentMsg`, `buildApproveMemoryMsg`, `buildReportMemoryMsg`, `buildRegisterOrgMsg`, `buildAddMemberMsg`, `buildRemoveMemberMsg`, `buildSetMemberCapabilitiesMsg`, `buildTransferLeadershipMsg`, `buildCloseOrgMsg`, `buildSetOrgConfigMsg`, `buildSetServingKeyMsg`, `buildSetServingInfoMsg`.
 - `WEVIBE_MSG_TYPE_URLS` — TypeURL registry entries used by `buildWevibeRegistry`.
 
 **`lib/wevibe-signing.ts`** — canonical message builders for signed hub payloads.
@@ -556,7 +503,6 @@ Added to `package.json`: `@cosmjs/stargate`, `@cosmjs/proto-signing`, `@cosmjs/a
 /wevibe.memory.v1.MsgSubmitCommitment
 /wevibe.memory.v1.MsgApproveMemory
 /wevibe.memory.v1.MsgReportMemory
-/wevibe.serve.v1.MsgSubmitServeBatch
 /wevibe.org.v1.MsgRegisterOrg
 /wevibe.org.v1.MsgAddMember
 /wevibe.org.v1.MsgRemoveMember
@@ -566,7 +512,6 @@ Added to `package.json`: `@cosmjs/stargate`, `@cosmjs/proto-signing`, `@cosmjs/a
 /wevibe.reputation.v1.MsgIncrementContribution
 /wevibe.reputation.v1.MsgIncrementServe
 /wevibe.reputation.v1.MsgRecordBan
-/wevibe.serve.v1.MsgSubmitDenialBatch
 ```
 
 `directBroadcast` signs locally and submits via `broadcast_tx_commit` with wallet-owned authority.
