@@ -28,7 +28,6 @@ type extractionProfileResponse struct {
 	Found        bool   `json:"found"`
 	SystemPrompt string `json:"system_prompt"`
 	NumCtx       int    `json:"num_ctx"`
-	Model        string `json:"model"`
 	PresetID     string `json:"preset_id"`
 	UpdatedAt    string `json:"updated_at"`
 }
@@ -36,7 +35,6 @@ type extractionProfileResponse struct {
 type setExtractionProfileRequest struct {
 	SystemPrompt string `json:"system_prompt"`
 	NumCtx       int    `json:"num_ctx"`
-	Model        string `json:"model"`
 	PresetID     string `json:"preset_id"`
 }
 
@@ -52,7 +50,6 @@ type extractionPresetsResponse struct {
 	Presets       []extractionPreset `json:"presets"`
 	RecommendedID string             `json:"recommended_id"`
 	DefaultNumCtx int                `json:"default_num_ctx"`
-	DefaultModel  string             `json:"default_model"`
 }
 
 // Fragments are embedded from vendored copies synced via make sync-extraction-prompts.
@@ -116,10 +113,10 @@ func GetExtractionProfile(w http.ResponseWriter, r *http.Request) {
 	resp := extractionProfileResponse{}
 	var updatedAt time.Time
 	err := pool.QueryRow(r.Context(), `
-		SELECT system_prompt, num_ctx, model, preset_id, updated_at
+		SELECT system_prompt, num_ctx, preset_id, updated_at
 		FROM org_extraction_profile
 		WHERE org_id = $1
-	`, orgID).Scan(&resp.SystemPrompt, &resp.NumCtx, &resp.Model, &resp.PresetID, &updatedAt)
+	`, orgID).Scan(&resp.SystemPrompt, &resp.NumCtx, &resp.PresetID, &updatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -197,29 +194,19 @@ func SetExtractionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"system_prompt exceeds 16384 bytes"}`, http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Model) == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "extraction model required",
-			"code":  "extraction_model_required",
-		})
-		return
-	}
 
 	resp := extractionProfileResponse{}
 	var updatedAt time.Time
 	err = pool.QueryRow(r.Context(), `
-		INSERT INTO org_extraction_profile (org_id, system_prompt, num_ctx, model, preset_id)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO org_extraction_profile (org_id, system_prompt, num_ctx, preset_id)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (org_id) DO UPDATE
 		SET system_prompt = EXCLUDED.system_prompt,
 		    num_ctx = EXCLUDED.num_ctx,
-		    model = EXCLUDED.model,
 		    preset_id = EXCLUDED.preset_id,
 		    updated_at = NOW()
-		RETURNING system_prompt, num_ctx, model, preset_id, updated_at
-	`, orgID, req.SystemPrompt, req.NumCtx, req.Model, req.PresetID).Scan(&resp.SystemPrompt, &resp.NumCtx, &resp.Model, &resp.PresetID, &updatedAt)
+		RETURNING system_prompt, num_ctx, preset_id, updated_at
+	`, orgID, req.SystemPrompt, req.NumCtx, req.PresetID).Scan(&resp.SystemPrompt, &resp.NumCtx, &resp.PresetID, &updatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
@@ -243,6 +230,5 @@ func GetExtractionPresets(w http.ResponseWriter, r *http.Request) {
 		Presets:       extractionPresets,
 		RecommendedID: extractionProfileRecommendedPresetID,
 		DefaultNumCtx: extractionProfileDefaultNumCtx,
-		DefaultModel:  "",
 	})
 }
