@@ -11,6 +11,7 @@ export interface DashboardSettings {
   extraction_api_key: string;
   embedding_api_key: string;
   openrouter_model: string;
+  extraction_model_override: string;
   lmstudio_url: string;
   lmstudio_model: string;
   embedding_provider: 'ollama' | 'openrouter' | 'lm_studio';

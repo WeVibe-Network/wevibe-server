@@ -8,6 +8,7 @@ export interface ExtractionDraft {
   extractionMeta?: {
     provider?: string;
     model?: string;
+    session_model?: string;
     is_local?: boolean;
     num_ctx?: number;
     source?: string;

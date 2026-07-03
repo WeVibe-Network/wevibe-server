@@ -77,13 +77,19 @@ export function invalidateReadinessCache(): void {
   readinessCache = null;
 }
 
-export async function getCertifiedReadiness(s: DashboardSettings): Promise<CertifiedReadiness> {
+export async function getCertifiedReadiness(
+  s: DashboardSettings,
+  effectiveModel?: string,
+): Promise<CertifiedReadiness> {
   const provider = s.llm_provider;
-  const model = provider === 'openrouter'
+  const settingsModel = provider === 'openrouter'
     ? s.openrouter_model.trim()
     : provider === 'lm_studio'
       ? s.lmstudio_model.trim()
       : s.ollama_model.trim();
+  const model = typeof effectiveModel === 'string' && effectiveModel.trim().length > 0
+    ? effectiveModel.trim()
+    : settingsModel;
 
   const cfg = getProviderReadiness(s);
   if (!cfg.ready) {

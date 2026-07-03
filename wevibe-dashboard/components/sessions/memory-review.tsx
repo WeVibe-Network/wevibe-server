@@ -36,6 +36,7 @@ export interface MemoryReviewProps {
   extractionMeta?: {
     provider?: string;
     model?: string;
+    session_model?: string;
     is_local?: boolean;
     source?: string;
     preset_id?: string | null;
@@ -321,6 +322,14 @@ export default function MemoryReview({
   }, [activeOrg, memoryOrgs, onSubmitted, orgs, pubkeyHex, reviewMemories, selected, sessionId]);
 
   const extractedWith = useMemo(() => extractedWithLabel(extractionMeta), [extractionMeta]);
+  const sessionModel = typeof extractionMeta?.session_model === 'string'
+    ? extractionMeta.session_model.trim()
+    : '';
+  const extractionModel = typeof extractionMeta?.model === 'string'
+    ? extractionMeta.model.trim()
+    : '';
+  const showCardProvenance = extractionMeta !== null
+    && (sessionModel.length > 0 || extractionModel.length > 0);
 
   const sortedReviewMemories = useMemo(() => {
     const indexedMemories = reviewMemories.map((memory, originalIndex) => ({ memory, originalIndex }));
@@ -481,6 +490,13 @@ export default function MemoryReview({
                     </span>
                   )}
                 </div>
+
+                {showCardProvenance && (
+                  <p className="text-xs text-wv-dim">
+                    <span className="font-mono font-medium">Session:</span> {sessionModel || 'unknown'} ·{' '}
+                    <span className="font-mono font-medium">Extracted by:</span> {extractionModel || 'unknown'}
+                  </p>
+                )}
 
                 <p className="text-sm font-medium text-wv-text">
                   {memory.implement}

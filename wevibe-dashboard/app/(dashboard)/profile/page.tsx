@@ -27,6 +27,8 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
     extraction_api_key: value.extraction_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_api_key,
     embedding_api_key: value.embedding_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_api_key,
     openrouter_model: value.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
+    extraction_model_override:
+      value.extraction_model_override ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_model_override,
     lmstudio_url: value.lmstudio_url ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_url,
     lmstudio_model: value.lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_model,
     embedding_provider:
@@ -491,6 +493,7 @@ export default function ProfilePage() {
       || settings.lmstudio_url !== persistedSettings.lmstudio_url
       || settings.lmstudio_model !== persistedSettings.lmstudio_model
       || settings.openrouter_model !== persistedSettings.openrouter_model
+      || settings.extraction_model_override !== persistedSettings.extraction_model_override
       || openRouterApiKeyChanged
     ),
   );
@@ -940,6 +943,28 @@ export default function ProfilePage() {
                     </div>
                   </div>
                 )}
+
+                <div>
+                  <label htmlFor="profile-extraction-model-override" className="block text-sm font-medium text-wv-text">
+                    Override extraction model
+                  </label>
+                  <input
+                    id="profile-extraction-model-override"
+                    type="text"
+                    value={settings.extraction_model_override}
+                    onChange={event => setSettings(current => (
+                      current
+                        ? {
+                          ...current,
+                          extraction_model_override: event.target.value,
+                        }
+                        : current
+                    ))}
+                    placeholder="anthropic/claude-opus-4"
+                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                  />
+                  <p className="mt-2 text-xs text-wv-dim">Blank = use each session's own recorded model (default). Set a model id to force ALL extractions to run with that one fixed model.</p>
+                </div>
               </>
             ) : (
               <p className="text-sm text-wv-dim">

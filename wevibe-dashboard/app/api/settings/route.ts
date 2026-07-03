@@ -42,6 +42,8 @@ export async function PUT(request: NextRequest) {
         ? body.embedding_api_key
         : current.embedding_api_key,
     openrouter_model: body.openrouter_model ?? current.openrouter_model,
+    extraction_model_override:
+      body.extraction_model_override ?? current.extraction_model_override,
     lmstudio_url: body.lmstudio_url ?? current.lmstudio_url,
     lmstudio_model: body.lmstudio_model ?? current.lmstudio_model,
     embedding_provider: body.embedding_provider ?? current.embedding_provider,

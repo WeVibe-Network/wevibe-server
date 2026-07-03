@@ -285,17 +285,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const requestedModel = typeof body.model === 'string' ? body.model.trim() : '';
-  if (requestedModel.length === 0) {
-    return NextResponse.json(
-      {
-        error: 'extraction model not configured — set it in Settings',
-        code: 'extraction_model_not_configured',
-      },
-      { status: 400 },
-    );
-  }
-
   let sessionToken: string | null;
   try {
     sessionToken = await readMcpSessionToken();
@@ -330,7 +319,20 @@ export async function POST(request: NextRequest) {
   }
 
   const settings = loadSettings();
-  const readiness = await getCertifiedReadiness(settings);
+  const sessionModel = typeof body.model === 'string' ? body.model.trim() : '';
+  const overrideModel = settings.extraction_model_override.trim();
+  const effectiveModel = overrideModel.length > 0 ? overrideModel : sessionModel;
+  if (effectiveModel.length === 0) {
+    return NextResponse.json(
+      {
+        error: 'extraction model not configured — set it in Settings',
+        code: 'extraction_model_not_configured',
+      },
+      { status: 400 },
+    );
+  }
+
+  const readiness = await getCertifiedReadiness(settings, effectiveModel);
   if (!readiness.ready) {
     return NextResponse.json(
       { error: readiness.reason ?? 'Extraction model is not available.', code: 'provider_not_configured' },
@@ -360,7 +362,7 @@ export async function POST(request: NextRequest) {
   } = {
     transcript: body.transcript,
     project_context: projectContext,
-    model: requestedModel,
+    model: effectiveModel,
   };
 
   if (activeOrgId.length > 0) {
@@ -461,7 +463,8 @@ export async function POST(request: NextRequest) {
     extraction_meta: {
       source: profileOverrides ? 'org-profile' : 'wevibe-default',
       preset_id: profileOverrides?.presetId ?? null,
-      model: requestedModel,
+      model: effectiveModel,
+      session_model: sessionModel,
       provider: useOpenRouter ? 'openrouter' : useLmStudio ? 'lm_studio' : 'ollama',
       is_local: !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
