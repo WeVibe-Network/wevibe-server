@@ -29,6 +29,8 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
     openrouter_model: value.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
     extraction_model_override:
       value.extraction_model_override ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_model_override,
+    extraction_override_enabled:
+      value.extraction_override_enabled ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_override_enabled,
     lmstudio_url: value.lmstudio_url ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_url,
     lmstudio_model: value.lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_model,
     embedding_provider:
@@ -494,6 +496,7 @@ export default function ProfilePage() {
       || settings.lmstudio_model !== persistedSettings.lmstudio_model
       || settings.openrouter_model !== persistedSettings.openrouter_model
       || settings.extraction_model_override !== persistedSettings.extraction_model_override
+      || settings.extraction_override_enabled !== persistedSettings.extraction_override_enabled
       || openRouterApiKeyChanged
     ),
   );
@@ -945,12 +948,29 @@ export default function ProfilePage() {
                 )}
 
                 <div>
+                  <label className="mb-3 flex items-center gap-2 text-sm font-medium text-wv-text">
+                    <input
+                      id="profile-extraction-override-enabled"
+                      type="checkbox"
+                      checked={settings.extraction_override_enabled}
+                      onChange={event => setSettings(current => (
+                        current
+                          ? {
+                            ...current,
+                            extraction_override_enabled: event.target.checked,
+                          }
+                          : current
+                      ))}
+                    />
+                    Use fixed extraction model (override each session's own model)
+                  </label>
                   <label htmlFor="profile-extraction-model-override" className="block text-sm font-medium text-wv-text">
                     Override extraction model
                   </label>
                   <input
                     id="profile-extraction-model-override"
                     type="text"
+                    disabled={!settings.extraction_override_enabled}
                     value={settings.extraction_model_override}
                     onChange={event => setSettings(current => (
                       current
@@ -961,7 +981,7 @@ export default function ProfilePage() {
                         : current
                     ))}
                     placeholder="anthropic/claude-opus-4"
-                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
+                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:opacity-50"
                   />
                   <p className="mt-2 text-xs text-wv-dim">Blank = use each session's own recorded model (default). Set a model id to force ALL extractions to run with that one fixed model.</p>
                 </div>

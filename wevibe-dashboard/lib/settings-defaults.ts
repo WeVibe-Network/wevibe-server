@@ -8,6 +8,7 @@ export const DASHBOARD_SETTINGS_DEFAULTS: DashboardSettings = {
   embedding_api_key: '',
   openrouter_model: '',
   extraction_model_override: '',
+  extraction_override_enabled: false,
   lmstudio_url: 'http://127.0.0.1:1234/v1',
   lmstudio_model: '',
   embedding_provider: 'ollama',

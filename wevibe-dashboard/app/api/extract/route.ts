@@ -321,7 +321,10 @@ export async function POST(request: NextRequest) {
   const settings = loadSettings();
   const sessionModel = typeof body.model === 'string' ? body.model.trim() : '';
   const overrideModel = settings.extraction_model_override.trim();
-  const effectiveModel = overrideModel.length > 0 ? overrideModel : sessionModel;
+  const effectiveModel =
+    settings.extraction_override_enabled && overrideModel.length > 0
+      ? overrideModel
+      : sessionModel;
   if (effectiveModel.length === 0) {
     return NextResponse.json(
       {
