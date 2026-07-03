@@ -14,6 +14,7 @@ interface SearchableModelComboboxProps {
   onChange: (nextValue: string) => void;
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }
 
 export default function SearchableModelCombobox({
@@ -23,9 +24,17 @@ export default function SearchableModelCombobox({
   onChange,
   placeholder,
   className = 'mt-1 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]',
+  disabled = false,
 }: SearchableModelComboboxProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
+  const inputClassName = `${className} disabled:cursor-not-allowed disabled:opacity-50`;
+
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
 
   useEffect(() => {
     if (!open) {
@@ -56,13 +65,16 @@ export default function SearchableModelCombobox({
   const query = value.trim().toLowerCase();
 
   const filteredOptions = useMemo(() => {
-    if (query.length === 0) {
+    const tokens = query.split(/\s+/).filter(Boolean);
+
+    if (tokens.length === 0) {
       return options;
     }
 
-    return options.filter((option) => (
-      option.id.toLowerCase().includes(query) || option.name.toLowerCase().includes(query)
-    ));
+    return options.filter((option) => {
+      const haystack = `${option.id} ${option.name}`.toLowerCase();
+      return tokens.every((token) => haystack.includes(token));
+    });
   }, [options, query]);
 
   const hasExactMatch = useMemo(
@@ -76,21 +88,32 @@ export default function SearchableModelCombobox({
         id={id}
         type="text"
         value={value}
+        disabled={disabled}
         onChange={(event) => {
+          if (disabled) {
+            return;
+          }
+
           onChange(event.target.value);
           setOpen(true);
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={() => {
+          if (disabled) {
+            return;
+          }
+
+          setOpen(true);
+        }}
         autoComplete="off"
         placeholder={placeholder}
         role="combobox"
         aria-autocomplete="list"
         aria-controls={`${id}-options`}
-        aria-expanded={open}
-        className={className}
+        aria-expanded={disabled ? false : open}
+        className={inputClassName}
       />
 
-      {open && options.length > 0 ? (
+      {open && !disabled && options.length > 0 ? (
         <div
           id={`${id}-options`}
           role="listbox"

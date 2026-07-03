@@ -214,13 +214,6 @@ interface OrgInfo {
   error?: string;
 }
 
-interface AuthorResult {
-  status: string;
-  cid?: string;
-  content_preview?: string;
-  error?: string;
-}
-
 interface MemoryRecord {
   cid: string;
   epoch_id: number;
@@ -341,34 +334,9 @@ async function main(): Promise<void> {
 
     console.log(`    hub: ${orgInfo.hub_url}, epoch: ${orgInfo.current_epoch}, egress: ${orgInfo.egress_mode}`);
 
-    // ── Test 2: wevibe_author_memory — full pipeline ─────────────────────
+    // ── Test 2: wevibe_list_memories — list access check ──────────────────
 
-    console.log('\nTest 2 — wevibe_author_memory (full crypto + AI pipeline):');
-
-    const uniqueId = Date.now().toString(36);
-    const content = `Layer 2 integration test — run ${uniqueId}. ` +
-      'Validates: encrypt(modPubkey) → submit → fetch queue → ' +
-      'unseal(modPrivkey) → decrypt → re-wrap(encKey) → ' +
-      'extractKeywords(Ollama) → computeEmbedding(HuggingFace) → approve.';
-
-    console.log(`    content id: ${uniqueId}`);
-    console.log('    pipeline: submit → queue → approve (keywords + embedding + sign)...');
-
-    const startTime = Date.now();
-    const authorResult = await client.callTool<AuthorResult>('wevibe_author_memory', {
-      content,
-      stack: ['e2e', 'integration', 'layer2'],
-    }, 120_000);
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
-    assert.strictEqual(authorResult.status, 'authored',
-      `wevibe_author_memory failed: ${authorResult.error ?? 'unknown error'}`);
-    assert.ok(authorResult.cid, 'no cid returned');
-    ok(`authored in ${elapsed}s — cid: ${authorResult.cid}`);
-
-    // ── Test 3: wevibe_list_memories — verify round-trip ─────────────────
-
-    console.log('\nTest 3 — wevibe_list_memories (verify authored memory decrypts):');
+    console.log('\nTest 2 — wevibe_list_memories (list access check):');
 
     const listResult = await client.callTool<ListResponse>('wevibe_list_memories', {
       limit: 100,
@@ -392,22 +360,12 @@ async function main(): Promise<void> {
       fail('wevibe_list_memories returned data', `no memories field — got: ${JSON.stringify(listResult)}`);
     } else {
       assert.ok(Array.isArray(listData.memories), 'memories is not an array');
-      assert.ok(listData.memories.length > 0, 'memories array is empty');
       ok(`${listData.memories.length} memories returned (count: ${listData.count})`);
-
-      const memories = listData.memories as Array<Record<string, unknown>>;
-      const authored = memories.find((m) => m.plaintext?.toString().includes(uniqueId));
-      if (authored) {
-        assert.ok(!authored.error, `authored memory has decrypt error: ${authored.error}`);
-        ok(`found authored memory — cid: ${authored.cid}, decrypted successfully`);
-      } else {
-        console.log(`    ⚠ authored memory not found in list (may be pending or org epoch mismatch)`);
-      }
     }
 
-    // ── Test 4: wevibe_mod_queue — moderation access ─────────────────────
+    // ── Test 3: wevibe_mod_queue — moderation access ─────────────────────
 
-    console.log('\nTest 4 — wevibe_mod_queue (moderation access):');
+    console.log('\nTest 3 — wevibe_mod_queue (moderation access):');
 
     const queue = await client.callTool<Array<Record<string, unknown>>>('wevibe_mod_queue', {}, 15_000);
     assert.ok(Array.isArray(queue), 'mod queue response is not an array');

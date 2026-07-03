@@ -34,7 +34,6 @@ import InfoTooltip from '@/components/ui/tooltip';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
 
 const HUB_RESPONSE_PUBKEY_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
-const EXTRACTION_MODEL_MAX_BYTES = 256;
 const EXTRACTION_SYSTEM_PROMPT_MAX_BYTES = 16384;
 const EXTRACTION_NUM_CTX_MAX = 131072;
 const EXTRACTION_TOTAL_STRING_BYTES_MAX = 24576;
@@ -115,14 +114,12 @@ export default function SettingsPage() {
   const [savingExtractionProfile, setSavingExtractionProfile] = useState(false);
   const [extractionProfileUpdatedAt, setExtractionProfileUpdatedAt] = useState<string | null>(null);
   const [hasSavedExtractionProfile, setHasSavedExtractionProfile] = useState<boolean | null>(null);
-  const [extractionModel, setExtractionModel] = useState('');
   const [extractionNumCtx, setExtractionNumCtx] = useState('');
   const [extractionSystemPrompt, setExtractionSystemPrompt] = useState('');
   const [extractionPresets, setExtractionPresets] = useState<ExtractionPreset[]>([]);
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
-  const [extractionDefaultsMeta, setExtractionDefaultsMeta] = useState<{ num_ctx: number | null; model: string | null }>({
+  const [extractionDefaultsMeta, setExtractionDefaultsMeta] = useState<{ num_ctx: number | null }>({
     num_ctx: null,
-    model: null,
   });
   const [transferMembers, setTransferMembers] = useState<MemberRecord[]>([]);
   const [transferMembersLoading, setTransferMembersLoading] = useState(false);
@@ -255,12 +252,11 @@ export default function SettingsPage() {
       setExtractionProfileSuccess(null);
       setExtractionProfileUpdatedAt(null);
       setHasSavedExtractionProfile(null);
-      setExtractionModel('');
       setExtractionNumCtx('');
       setExtractionSystemPrompt('');
       setExtractionPresets([]);
       setSelectedPresetId(null);
-      setExtractionDefaultsMeta({ num_ctx: null, model: null });
+      setExtractionDefaultsMeta({ num_ctx: null });
       return;
     }
 
@@ -279,11 +275,6 @@ export default function SettingsPage() {
           return;
         }
 
-        const defaultsModel = typeof presetsResponse.default_model === 'string'
-          ? presetsResponse.default_model.trim()
-          : '';
-        const defaultModel = defaultsModel.length > 0 ? defaultsModel : null;
-
         const defaultNumCtx = Number.isFinite(presetsResponse.default_num_ctx)
           && presetsResponse.default_num_ctx > 0
           ? Math.floor(presetsResponse.default_num_ctx)
@@ -299,13 +290,12 @@ export default function SettingsPage() {
             : undefined
         ) ?? presets.find((preset) => preset.recommended);
 
-        setExtractionDefaultsMeta({ num_ctx: defaultNumCtx, model: defaultModel });
+        setExtractionDefaultsMeta({ num_ctx: defaultNumCtx });
         setExtractionPresets(presets);
 
         if (profileResponse.found) {
           setHasSavedExtractionProfile(true);
           setExtractionProfileUpdatedAt(profileResponse.updated_at || null);
-          setExtractionModel(profileResponse.model);
           setExtractionNumCtx(profileResponse.num_ctx > 0 ? String(profileResponse.num_ctx) : '');
           setExtractionSystemPrompt(profileResponse.system_prompt);
           const matchingPreset = presets.find((preset) => preset.system_prompt === profileResponse.system_prompt);
@@ -315,7 +305,6 @@ export default function SettingsPage() {
 
         setHasSavedExtractionProfile(false);
         setExtractionProfileUpdatedAt(null);
-        setExtractionModel(defaultModel ?? '');
         setExtractionNumCtx(defaultNumCtx !== null ? String(defaultNumCtx) : '');
         setExtractionSystemPrompt(recommendedPreset?.system_prompt ?? '');
         setSelectedPresetId(recommendedPreset?.id ?? null);
@@ -738,16 +727,8 @@ export default function SettingsPage() {
   }, [activeOrg, newHubEndpoints, newHubResponsePubkey, resolveOrgAccountForGas]);
 
   const extractionValidation = useMemo(() => {
-    const extractionModelBytes = byteLengthUtf8(extractionModel);
     const systemPromptBytes = byteLengthUtf8(extractionSystemPrompt);
-    const totalStringBytes = extractionModelBytes
-      + systemPromptBytes;
-
-    const extractionModelError = extractionModel.trim().length === 0
-      ? 'model is required.'
-      : extractionModelBytes > EXTRACTION_MODEL_MAX_BYTES
-        ? `model exceeds ${EXTRACTION_MODEL_MAX_BYTES} bytes.`
-        : null;
+    const totalStringBytes = systemPromptBytes;
     const systemPromptError = extractionSystemPrompt.trim().length === 0
       ? 'system_prompt is required.'
       : systemPromptBytes > EXTRACTION_SYSTEM_PROMPT_MAX_BYTES
@@ -775,8 +756,7 @@ export default function SettingsPage() {
       : null;
 
     const hasErrors = Boolean(
-      extractionModelError
-      || systemPromptError
+      systemPromptError
       || numCtxError
       || totalStringBytesError,
     );
@@ -785,19 +765,16 @@ export default function SettingsPage() {
       parsedNumCtx,
       hasErrors,
       bytes: {
-        extractionModel: extractionModelBytes,
         systemPrompt: systemPromptBytes,
       },
       totalStringBytes,
       errors: {
-        extractionModel: extractionModelError,
         systemPrompt: systemPromptError,
         numCtx: numCtxError,
         totalBytes: totalStringBytesError,
       },
     };
   }, [
-    extractionModel,
     extractionNumCtx,
     extractionSystemPrompt,
   ]);
@@ -810,8 +787,7 @@ export default function SettingsPage() {
     setSelectedPresetId(preset.id);
     setExtractionSystemPrompt(preset.system_prompt);
     setExtractionNumCtx(String(extractionDefaultsMeta.num_ctx ?? 32768));
-    setExtractionModel((previous) => extractionDefaultsMeta.model ?? previous);
-  }, [extractionDefaultsMeta.model, extractionDefaultsMeta.num_ctx]);
+  }, [extractionDefaultsMeta.num_ctx]);
 
   const handleExtractionProfileSave = useCallback(async () => {
     if (!activeOrg) {
@@ -833,7 +809,6 @@ export default function SettingsPage() {
         {
           system_prompt: extractionSystemPrompt,
           num_ctx: extractionValidation.parsedNumCtx,
-          model: extractionModel.trim(),
           preset_id: selectedPresetId ?? '',
         },
       );
@@ -843,7 +818,6 @@ export default function SettingsPage() {
       if (refreshedProfile.found) {
         setHasSavedExtractionProfile(true);
         setExtractionProfileUpdatedAt(refreshedProfile.updated_at || null);
-        setExtractionModel(refreshedProfile.model);
         setExtractionNumCtx(refreshedProfile.num_ctx > 0 ? String(refreshedProfile.num_ctx) : '');
         setExtractionSystemPrompt(refreshedProfile.system_prompt);
         const matchingPreset = extractionPresets.find((preset) => preset.system_prompt === refreshedProfile.system_prompt);
@@ -863,7 +837,6 @@ export default function SettingsPage() {
     }
   }, [
     activeOrg,
-    extractionModel,
     extractionPresets,
     extractionSystemPrompt,
     extractionValidation,
@@ -1466,30 +1439,6 @@ export default function SettingsPage() {
 
                   <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
-                      <label htmlFor="extraction-model" className="block text-sm font-medium text-wv-text">
-                        model
-                      </label>
-                      <input
-                        id="extraction-model"
-                        type="text"
-                        value={extractionModel}
-                        onChange={(event) => {
-                          markExtractionProfileCustom();
-                          setExtractionModel(event.target.value);
-                        }}
-                        placeholder="e.g. the model id your provider serves"
-                        disabled={savingExtractionProfile || extractionProfileLoading}
-                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:bg-wv-panel-3 disabled:text-wv-dim"
-                      />
-                      <p className={`mt-2 text-xs ${extractionValidation.errors.extractionModel ? 'text-wv-red' : 'text-wv-dim'}`}>
-                        {extractionValidation.bytes.extractionModel}/{EXTRACTION_MODEL_MAX_BYTES} bytes
-                      </p>
-                      {extractionValidation.errors.extractionModel && (
-                        <p className="mt-1 text-xs text-wv-red">{extractionValidation.errors.extractionModel}</p>
-                      )}
-                    </div>
-
-                    <div>
                       <label htmlFor="extraction-num-ctx" className="block text-sm font-medium text-wv-text">
                         num_ctx
                       </label>
@@ -1649,7 +1598,6 @@ function OrgLlamaConfig() {
           lmstudio_model: data.lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.lmstudio_model,
           extraction_api_key: data.extraction_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_api_key,
           embedding_api_key: data.embedding_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_api_key,
-          openrouter_model: data.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
           embedding_provider: data.embedding_provider ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_provider,
           embedding_ollama_model: data.embedding_ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_ollama_model,
           embedding_lmstudio_model: data.embedding_lmstudio_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_lmstudio_model,

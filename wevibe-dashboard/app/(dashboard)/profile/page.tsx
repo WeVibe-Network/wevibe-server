@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { PairPlugin } from '@/components/pairing/pair-plugin';
 import InfoTooltip from '@/components/ui/tooltip';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
+import Toggle from '@/components/ui/toggle';
 import { getConfig } from '@/lib/config';
 import { getProfile, type ProfileResponse } from '@/lib/hub-client';
 import { useIdentity } from '@/lib/identity-context';
@@ -26,7 +27,6 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
     ollama_model: value.ollama_model ?? DASHBOARD_SETTINGS_DEFAULTS.ollama_model,
     extraction_api_key: value.extraction_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_api_key,
     embedding_api_key: value.embedding_api_key ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_api_key,
-    openrouter_model: value.openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.openrouter_model,
     extraction_model_override:
       value.extraction_model_override ?? DASHBOARD_SETTINGS_DEFAULTS.extraction_model_override,
     extraction_override_enabled:
@@ -395,6 +395,11 @@ export default function ProfilePage() {
       return;
     }
 
+    if (settings.llm_provider === 'openrouter' && settings.extraction_api_key.trim().length === 0) {
+      setSettingsError('An OpenRouter API key is required when the provider is OpenRouter (a non-local provider). Add your key before saving.');
+      return;
+    }
+
     setSettingsSaving(true);
     setSettingsError(null);
 
@@ -485,6 +490,13 @@ export default function ProfilePage() {
     settings?.extraction_api_key && !settings.extraction_api_key.startsWith('••••'),
   );
 
+  const extractionOverrideOptions: SearchableModelOption[] = settings
+    ? settings.llm_provider === 'openrouter'
+      ? openRouterModels
+      : (settings.llm_provider === 'lm_studio' ? lmStudioModels : ollamaModels)
+        .map((model) => ({ id: model, name: model }))
+    : [];
+
   const isSettingsDirty = Boolean(
     settings
     && persistedSettings
@@ -494,7 +506,6 @@ export default function ProfilePage() {
       || settings.ollama_model !== persistedSettings.ollama_model
       || settings.lmstudio_url !== persistedSettings.lmstudio_url
       || settings.lmstudio_model !== persistedSettings.lmstudio_model
-      || settings.openrouter_model !== persistedSettings.openrouter_model
       || settings.extraction_model_override !== persistedSettings.extraction_model_override
       || settings.extraction_override_enabled !== persistedSettings.extraction_override_enabled
       || openRouterApiKeyChanged
@@ -899,90 +910,66 @@ export default function ProfilePage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="profile-openrouter-key" className="block text-sm font-medium text-wv-text">
-                        OpenRouter API Key
-                      </label>
-                      <input
-                        id="profile-openrouter-key"
-                        type="password"
-                        value={settings.extraction_api_key}
-                        onChange={event => setSettings(current => (
-                          current
-                            ? {
-                              ...current,
-                              extraction_api_key: event.target.value,
-                            }
-                            : current
-                        ))}
-                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="profile-openrouter-model" className="block text-sm font-medium text-wv-text">
-                        OpenRouter Model
-                      </label>
-                      <SearchableModelCombobox
-                        id="profile-openrouter-model"
-                        value={settings.openrouter_model}
-                        onChange={nextValue => setSettings(current => (
-                          current
-                            ? {
-                              ...current,
-                              openrouter_model: nextValue,
-                            }
-                            : current
-                        ))}
-                        options={openRouterModels}
-                        placeholder="anthropic/claude-sonnet-4"
-                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-                      />
-                      {openRouterModels.length > 0 ? (
-                        <p className="mt-2 text-xs text-wv-dim">Search OpenRouter public models or type any model id manually.</p>
-                      ) : openRouterModelsError ? (
-                        <p className="mt-2 text-xs text-wv-dim">Could not load OpenRouter models — enter a model id manually.</p>
-                      ) : null}
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <label className="mb-3 flex items-center gap-2 text-sm font-medium text-wv-text">
+                  <div>
+                    <label htmlFor="profile-openrouter-key" className="block text-sm font-medium text-wv-text">
+                      OpenRouter API Key
+                    </label>
                     <input
-                      id="profile-extraction-override-enabled"
-                      type="checkbox"
-                      checked={settings.extraction_override_enabled}
+                      id="profile-openrouter-key"
+                      type="password"
+                      value={settings.extraction_api_key}
                       onChange={event => setSettings(current => (
                         current
                           ? {
                             ...current,
-                            extraction_override_enabled: event.target.checked,
+                            extraction_api_key: event.target.value,
                           }
                           : current
                       ))}
+                      className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
                     />
-                    Use fixed extraction model (override each session's own model)
-                  </label>
+                  </div>
+                )}
+
+                <div>
+                  <div className="mb-3 flex items-center gap-2 text-sm font-medium text-wv-text">
+                    <Toggle
+                      id="profile-extraction-override-enabled"
+                      checked={settings.extraction_override_enabled}
+                      onChange={next => setSettings(current => (
+                        current
+                          ? {
+                            ...current,
+                            extraction_override_enabled: next,
+                          }
+                          : current
+                      ))}
+                      aria-labelledby="profile-extraction-override-toggle-label"
+                    />
+                    <span id="profile-extraction-override-toggle-label">Use fixed extraction model (override each session&apos;s own model)</span>
+                  </div>
                   <label htmlFor="profile-extraction-model-override" className="block text-sm font-medium text-wv-text">
                     Override extraction model
                   </label>
-                  <input
+                  <SearchableModelCombobox
                     id="profile-extraction-model-override"
-                    type="text"
-                    disabled={!settings.extraction_override_enabled}
                     value={settings.extraction_model_override}
-                    onChange={event => setSettings(current => (
+                    onChange={nextValue => setSettings(current => (
                       current
                         ? {
                           ...current,
-                          extraction_model_override: event.target.value,
+                          extraction_model_override: nextValue,
                         }
                         : current
                     ))}
+                    options={extractionOverrideOptions}
+                    disabled={!settings.extraction_override_enabled}
                     placeholder="anthropic/claude-opus-4"
                     className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:opacity-50"
                   />
+                  {settings.llm_provider === 'openrouter' && openRouterModelsError ? (
+                    <p className="mt-2 text-xs text-wv-dim">Could not load OpenRouter models — enter a model id manually.</p>
+                  ) : null}
                   <p className="mt-2 text-xs text-wv-dim">Blank = use each session's own recorded model (default). Set a model id to force ALL extractions to run with that one fixed model.</p>
                 </div>
               </>

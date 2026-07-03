@@ -10,7 +10,6 @@ export interface DashboardSettings {
   ollama_model: string;
   extraction_api_key: string;
   embedding_api_key: string;
-  openrouter_model: string;
   extraction_model_override: string;
   extraction_override_enabled: boolean;
   lmstudio_url: string;
@@ -38,13 +37,6 @@ export function getProviderReadiness(
       return {
         ready: false,
         reason: 'OpenRouter API key is not set — add it in Profile → Extraction Model and click Save.',
-      };
-    }
-
-    if (s.openrouter_model.trim().length === 0) {
-      return {
-        ready: false,
-        reason: 'OpenRouter model is not set — choose a model in Profile → Extraction Model and click Save.',
       };
     }
 

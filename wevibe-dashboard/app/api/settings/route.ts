@@ -41,7 +41,6 @@ export async function PUT(request: NextRequest) {
       body.embedding_api_key && !body.embedding_api_key.startsWith('••••')
         ? body.embedding_api_key
         : current.embedding_api_key,
-    openrouter_model: body.openrouter_model ?? current.openrouter_model,
     extraction_model_override:
       body.extraction_model_override ?? current.extraction_model_override,
     extraction_override_enabled:

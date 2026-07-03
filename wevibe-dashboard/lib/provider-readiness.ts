@@ -82,14 +82,14 @@ export async function getCertifiedReadiness(
   effectiveModel?: string,
 ): Promise<CertifiedReadiness> {
   const provider = s.llm_provider;
-  const settingsModel = provider === 'openrouter'
-    ? s.openrouter_model.trim()
-    : provider === 'lm_studio'
+  const settingsModel = provider === 'lm_studio'
       ? s.lmstudio_model.trim()
       : s.ollama_model.trim();
   const model = typeof effectiveModel === 'string' && effectiveModel.trim().length > 0
     ? effectiveModel.trim()
-    : settingsModel;
+    : provider === 'openrouter'
+      ? ''
+      : settingsModel;
 
   const cfg = getProviderReadiness(s);
   if (!cfg.ready) {

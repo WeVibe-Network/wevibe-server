@@ -227,7 +227,6 @@ export interface ExtractionProfile {
   found: boolean;
   system_prompt: string;
   num_ctx: number;
-  model: string;
   preset_id: string;
   updated_at: string;
 }
@@ -244,7 +243,6 @@ export interface ExtractionPresetsResponse {
   presets: ExtractionPreset[];
   recommended_id: string;
   default_num_ctx: number;
-  default_model: string;
 }
 
 export async function getExtractionProfile(orgId: string): Promise<ExtractionProfile> {
@@ -256,7 +254,6 @@ export async function updateExtractionProfile(
   profile: {
     system_prompt: string;
     num_ctx: number;
-    model: string;
     preset_id: string;
   },
 ): Promise<ExtractionProfile> {
