@@ -7,6 +7,7 @@ import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
 import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/lib/mcp-errors';
 import { getCertifiedReadiness } from '@/lib/provider-readiness';
 import { loadSettings } from '@/lib/settings';
+import { resolveSessionModelSlug } from '@/lib/session-model';
 import type {
   ClassifiedKeyword,
   MemoryCandidate,
@@ -324,7 +325,7 @@ export async function POST(request: NextRequest) {
   const effectiveModel =
     settings.extraction_override_enabled && overrideModel.length > 0
       ? overrideModel
-      : sessionModel;
+      : resolveSessionModelSlug(sessionModel);
   if (effectiveModel.length === 0) {
     return NextResponse.json(
       {

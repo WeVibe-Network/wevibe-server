@@ -21,6 +21,7 @@ import {
   recordExtractedSession,
 } from '@/lib/hub-client';
 import { useOrgContext } from '@/lib/org-context';
+import { resolveSessionModelSlug } from '@/lib/session-model';
 import {
   getDraft,
   loadDrafts,
@@ -682,7 +683,7 @@ export default function SessionsPage() {
               <div className="flex gap-2">
                 {isExtracted && <Badge variant="success">Extracted</Badge>}
                 {session.model && (
-                  <Badge>{session.model.split('/').pop()}</Badge>
+                  <Badge>{resolveSessionModelSlug(session.model).split('/').pop()}</Badge>
                 )}
                 <Badge variant="default">
                   {session.message_count} msgs
@@ -697,7 +698,7 @@ export default function SessionsPage() {
             <div className="space-y-1 rounded-xl border border-wv-line bg-wv-panel p-4 text-xs font-mono text-wv-dim">
               <p><span className="font-medium text-wv-dim">Created:</span> <ClientTime value={session.time_created} mode="datetime-compact" /></p>
               <p><span className="font-medium text-wv-dim">Updated:</span> <ClientTime value={session.time_updated} mode="datetime-compact" /></p>
-              <p><span className="font-medium text-wv-dim">Model:</span> {session.model || 'unknown'}</p>
+              <p><span className="font-medium text-wv-dim">Model:</span> {resolveSessionModelSlug(session.model) || 'unknown'}</p>
               <p><span className="font-medium text-wv-dim">Messages:</span> {sessionDetail?.message_count ?? session.message_count}</p>
             </div>
 
