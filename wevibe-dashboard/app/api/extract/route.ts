@@ -34,6 +34,7 @@ interface ExtractRequestBody {
   directory?: string;
   model?: string;
   stack?: string[];
+  session_id?: string;
 }
 
 interface ExtractionProfileOverrides {
@@ -363,6 +364,7 @@ export async function POST(request: NextRequest) {
     api_key?: string;
     base_url?: string;
     org_id?: string;
+    session_id?: string;
   } = {
     transcript: body.transcript,
     project_context: projectContext,
@@ -371,6 +373,10 @@ export async function POST(request: NextRequest) {
 
   if (activeOrgId.length > 0) {
     mcpExtractRequestBody.org_id = activeOrgId;
+  }
+
+  if (typeof body.session_id === 'string' && body.session_id.trim().length > 0) {
+    mcpExtractRequestBody.session_id = body.session_id;
   }
 
   if (profileOverrides?.prompt) {

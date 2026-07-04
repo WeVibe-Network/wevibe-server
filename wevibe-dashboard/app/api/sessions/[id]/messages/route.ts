@@ -6,6 +6,14 @@ import { homedir } from 'os';
 
 export const dynamic = 'force-dynamic';
 
+// Tool transcript bounds:
+// - edit/write keep full input/output so fix diffs are preserved.
+// - bash keeps command input uncapped via the existing command branch and caps output at 4000 chars.
+// - all other tools cap input/output at 2000 chars.
+const TOOL_INPUT_MAX = 2000;
+const TOOL_OUTPUT_MAX = 2000;
+const TOOL_OUTPUT_BASH_MAX = 4000;
+
 interface MessageRow {
   id: string;
   data: string;
@@ -62,6 +70,14 @@ function extractTranscript(rows: PartRow[]): string {
 
     if (partData.type === 'tool') {
       const tool = partData.tool ?? 'tool';
+      const toolName = String(tool);
+      const isFixTool = toolName === 'edit' || toolName === 'write';
+      const toolInputMax = isFixTool ? null : TOOL_INPUT_MAX;
+      const toolOutputMax = isFixTool
+        ? null
+        : toolName === 'bash'
+          ? TOOL_OUTPUT_BASH_MAX
+          : TOOL_OUTPUT_MAX;
       const state = (partData.state ?? {}) as {
         input?: unknown;
         output?: unknown;
@@ -78,26 +94,31 @@ function extractTranscript(rows: PartRow[]): string {
         inputStr = (input as { command: string }).command;
       } else {
         const inputJson = JSON.stringify(input);
-        inputStr = typeof inputJson === 'string' ? inputJson.slice(0, 300) : '';
+        if (typeof inputJson === 'string') {
+          inputStr = toolInputMax === null ? inputJson : inputJson.slice(0, toolInputMax);
+        } else {
+          inputStr = '';
+        }
       }
 
       const out = state.output;
       let outStr = '';
       if (typeof out === 'string') {
-        outStr = out.slice(0, 300);
+        outStr = toolOutputMax === null ? out : out.slice(0, toolOutputMax);
       } else if (out) {
         const outJson = JSON.stringify(out);
-        outStr = typeof outJson === 'string' ? outJson.slice(0, 300) : '';
+        if (typeof outJson === 'string') {
+          outStr = toolOutputMax === null ? outJson : outJson.slice(0, toolOutputMax);
+        }
       }
 
       lines.push(`[${role}:tool] ${String(tool)}(${inputStr})${outStr ? ` -> ${outStr}` : ''}`);
     }
   }
 
-  let transcript = lines.join('\n\n');
-  if (transcript.length > 120000) {
-    transcript = `${transcript.slice(0, 120000)}\n\n[transcript truncated]`;
-  }
+  // The extractor now budgets/chunks against the model context window (75% rule);
+  // truncating here would re-introduce transcript tail loss.
+  const transcript = lines.join('\n\n');
 
   return transcript;
 }

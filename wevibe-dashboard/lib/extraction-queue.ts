@@ -116,6 +116,7 @@ async function runJob(job: ExtractionJob): Promise<void> {
         title: job.title,
         directory: job.directory,
         model: job.model,
+        session_id: job.sessionId,
       }),
     });
 
