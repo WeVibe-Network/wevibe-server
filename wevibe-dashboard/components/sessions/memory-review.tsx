@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
 import type { SanitizationFinding } from '@/lib/hub-client';
+import { resolveSessionModelSlug } from '@/lib/session-model';
 import type { MemoryCandidate } from '@/lib/session-types';
 import { getConfig } from '@/lib/config';
 import { deleteDraft } from '@/lib/draft-store';
@@ -323,7 +324,7 @@ export default function MemoryReview({
 
   const extractedWith = useMemo(() => extractedWithLabel(extractionMeta), [extractionMeta]);
   const sessionModel = typeof extractionMeta?.session_model === 'string'
-    ? extractionMeta.session_model.trim()
+    ? resolveSessionModelSlug(extractionMeta.session_model)
     : '';
   const extractionModel = typeof extractionMeta?.model === 'string'
     ? extractionMeta.model.trim()

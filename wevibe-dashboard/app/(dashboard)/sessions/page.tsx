@@ -38,10 +38,6 @@ const SESSION_DEDUP_DETECTION_ENABLED = true;
 
 interface LlmSettingsSnapshot {
   llm_provider: 'ollama' | 'openrouter' | 'lm_studio';
-  ollama_model: string;
-  openrouter_model: string;
-  lmstudio_url: string;
-  lmstudio_model: string;
 }
 
 interface CertifiedReadiness {
@@ -56,11 +52,23 @@ interface CertifiedReadiness {
 
 const DEFAULT_LLM_SETTINGS: LlmSettingsSnapshot = {
   llm_provider: 'ollama',
-  ollama_model: 'qwen2.5:14b',
-  openrouter_model: '',
-  lmstudio_url: 'http://127.0.0.1:1234/v1',
-  lmstudio_model: '',
 };
+
+function extractionProviderDisplay(provider: 'ollama' | 'openrouter' | 'lm_studio'): string {
+  if (provider === 'openrouter') {
+    return 'OpenRouter (cloud)';
+  }
+
+  if (provider === 'lm_studio') {
+    return 'LM Studio (local)';
+  }
+
+  return 'Ollama (local)';
+}
+
+function extractionEtaText(provider: 'ollama' | 'openrouter' | 'lm_studio'): string {
+  return provider === 'openrouter' ? '~5–20s' : '~30–90s';
+}
 
 export default function SessionsPage() {
   const router = useRouter();
@@ -82,6 +90,7 @@ export default function SessionsPage() {
   const [draftsVersion, setDraftsVersion] = useState(0);
 
   const [llmSettings, setLlmSettings] = useState<LlmSettingsSnapshot>(DEFAULT_LLM_SETTINGS);
+  const [certifiedExtractionModel, setCertifiedExtractionModel] = useState('');
   const [providerReady, setProviderReady] = useState<boolean | null>(null);
   const [providerReadyReason, setProviderReadyReason] = useState<string | null>(null);
   const providerReadyToastReasonRef = useRef<string | null>(null);
@@ -114,19 +123,6 @@ export default function SessionsPage() {
     [failedSessionsById],
   );
 
-  const openRouterModel = llmSettings.openrouter_model.trim();
-  const ollamaModel = llmSettings.ollama_model.trim() || DEFAULT_LLM_SETTINGS.ollama_model;
-  const lmStudioModel = llmSettings.lmstudio_model.trim();
-  const useOpenRouter = llmSettings.llm_provider === 'openrouter'
-    && openRouterModel.length > 0;
-  const useLmStudio = llmSettings.llm_provider === 'lm_studio'
-    && lmStudioModel.length > 0;
-  const providerLabel = useOpenRouter
-    ? `OpenRouter (cloud) · ${openRouterModel}`
-    : useLmStudio
-      ? `LM Studio (local) · ${lmStudioModel}`
-      : `Ollama (local) · ${ollamaModel}`;
-  const etaText = useOpenRouter ? '~5–20s' : '~30–90s';
   const queueCtaLabel = queueSnapshot.activeCount > 0 ? 'Add to queue' : 'Extract';
   const canEnqueueExtraction = Boolean(pubkeyHex) && providerReady === true;
   const providerNotReadyMessage = providerReadyReason?.trim().length
@@ -285,35 +281,10 @@ export default function SessionsPage() {
         }
 
         const nextModel = readiness.model.trim();
+        setCertifiedExtractionModel(nextModel);
 
-        setLlmSettings((previous) => {
-          if (readiness.provider === 'openrouter') {
-            return {
-              llm_provider: 'openrouter',
-              ollama_model: previous.ollama_model || DEFAULT_LLM_SETTINGS.ollama_model,
-              openrouter_model: nextModel || previous.openrouter_model,
-              lmstudio_url: previous.lmstudio_url,
-              lmstudio_model: previous.lmstudio_model,
-            };
-          }
-
-          if (readiness.provider === 'lm_studio') {
-            return {
-              llm_provider: 'lm_studio',
-              ollama_model: previous.ollama_model || DEFAULT_LLM_SETTINGS.ollama_model,
-              openrouter_model: previous.openrouter_model,
-              lmstudio_url: previous.lmstudio_url || DEFAULT_LLM_SETTINGS.lmstudio_url,
-              lmstudio_model: nextModel || previous.lmstudio_model,
-            };
-          }
-
-          return {
-            llm_provider: 'ollama',
-            ollama_model: nextModel || DEFAULT_LLM_SETTINGS.ollama_model,
-            openrouter_model: previous.openrouter_model,
-            lmstudio_url: previous.lmstudio_url,
-            lmstudio_model: previous.lmstudio_model,
-          };
+        setLlmSettings({
+          llm_provider: readiness.provider,
         });
 
         const normalizedReason = readiness.reason?.trim().length
@@ -633,6 +604,9 @@ export default function SessionsPage() {
     const activeDraft = isActive && pubkeyHex ? getDraft(pubkeyHex, session.id) : null;
     const extractedMemoryCount = activeDraft?.memories.length ?? 0;
     const failureReason = getFailureReasonForSession(session.id);
+    const effectiveExtractionModel = certifiedExtractionModel || resolveSessionModelSlug(session.model);
+    const providerLabel = `${extractionProviderDisplay(llmSettings.llm_provider)} · ${effectiveExtractionModel}`;
+    const etaText = extractionEtaText(llmSettings.llm_provider);
     const inactiveCardStyle = isExtracted
       ? 'border-[rgba(54,211,153,0.45)] bg-[rgba(54,211,153,0.08)] hover:border-[rgba(54,211,153,0.6)]'
       : 'border-wv-line bg-wv-panel hover:border-wv-line-2';
