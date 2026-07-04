@@ -948,29 +948,33 @@ export default function ProfilePage() {
                     />
                     <span id="profile-extraction-override-toggle-label">Use fixed extraction model (override each session&apos;s own model)</span>
                   </div>
-                  <label htmlFor="profile-extraction-model-override" className="block text-sm font-medium text-wv-text">
-                    Override extraction model
-                  </label>
-                  <SearchableModelCombobox
-                    id="profile-extraction-model-override"
-                    value={settings.extraction_model_override}
-                    onChange={nextValue => setSettings(current => (
-                      current
-                        ? {
-                          ...current,
-                          extraction_model_override: nextValue,
-                        }
-                        : current
-                    ))}
-                    options={extractionOverrideOptions}
-                    disabled={!settings.extraction_override_enabled}
-                    placeholder="anthropic/claude-opus-4"
-                    className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:opacity-50"
-                  />
-                  {settings.llm_provider === 'openrouter' && openRouterModelsError ? (
-                    <p className="mt-2 text-xs text-wv-dim">Could not load OpenRouter models — enter a model id manually.</p>
-                  ) : null}
-                  <p className="mt-2 text-xs text-wv-dim">Blank = use each session's own recorded model (default). Set a model id to force ALL extractions to run with that one fixed model.</p>
+                  {settings.extraction_override_enabled && (
+                    <>
+                      <label htmlFor="profile-extraction-model-override" className="block text-sm font-medium text-wv-text">
+                        Override extraction model
+                      </label>
+                      <SearchableModelCombobox
+                        id="profile-extraction-model-override"
+                        value={settings.extraction_model_override}
+                        onChange={nextValue => setSettings(current => (
+                          current
+                            ? {
+                              ...current,
+                              extraction_model_override: nextValue,
+                            }
+                            : current
+                        ))}
+                        options={extractionOverrideOptions}
+                        disabled={!settings.extraction_override_enabled}
+                        placeholder="anthropic/claude-opus-4"
+                        className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)] disabled:cursor-not-allowed disabled:opacity-50"
+                      />
+                      {settings.llm_provider === 'openrouter' && openRouterModelsError ? (
+                        <p className="mt-2 text-xs text-wv-dim">Could not load OpenRouter models — enter a model id manually.</p>
+                      ) : null}
+                      <p className="mt-2 text-xs text-wv-dim">Blank = use each session's own recorded model (default). Set a model id to force ALL extractions to run with that one fixed model.</p>
+                    </>
+                  )}
                 </div>
               </>
             ) : (

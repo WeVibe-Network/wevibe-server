@@ -82,14 +82,29 @@ export async function getCertifiedReadiness(
   effectiveModel?: string,
 ): Promise<CertifiedReadiness> {
   const provider = s.llm_provider;
+  const hasEffectiveModel =
+    typeof effectiveModel === 'string' && effectiveModel.trim().length > 0;
+
+  // Extraction is session-bound by default (mirrors app/api/extract/route.ts):
+  // effective = (extraction_override_enabled && extraction_model_override) ? override : sessionModel.
+  // Global readiness (no effectiveModel passed) has no session model in scope, so with the
+  // override toggle OFF there is no fixed extraction model to validate — extraction is ready
+  // (each session brings its own model, validated at extract time). Only when the override is
+  // enabled do we validate the pinned override slug against the /profile provider.
+  if (!hasEffectiveModel && !s.extraction_override_enabled) {
+    return toCertifiedReadiness(provider, '', true, null, 'config', false);
+  }
+
   const settingsModel = provider === 'lm_studio'
       ? s.lmstudio_model.trim()
       : s.ollama_model.trim();
-  const model = typeof effectiveModel === 'string' && effectiveModel.trim().length > 0
-    ? effectiveModel.trim()
-    : provider === 'openrouter'
-      ? ''
-      : settingsModel;
+  const model = hasEffectiveModel
+    ? effectiveModel!.trim()
+    : s.extraction_override_enabled
+      ? s.extraction_model_override.trim()
+      : provider === 'openrouter'
+        ? ''
+        : settingsModel;
 
   const cfg = getProviderReadiness(s);
   if (!cfg.ready) {
