@@ -23,7 +23,7 @@ function toHex(bytes: Uint8Array): string {
 }
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', data);
+  const digest = await crypto.subtle.digest('SHA-256', data.buffer as ArrayBuffer);
   return toHex(new Uint8Array(digest));
 }
 
