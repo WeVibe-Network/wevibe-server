@@ -29,6 +29,7 @@ import {
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { useOrgContext } from '@/lib/org-context';
 import { useDashboardState } from '@/lib/use-dashboard-state';
+import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
 import { GuardCard } from '@/components/ui/states';
 import InfoTooltip from '@/components/ui/tooltip';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
@@ -851,6 +852,14 @@ export default function SettingsPage() {
           {activeOrg ? `Leader controls for ${activeOrg.org_name}.` : 'Select or create an org to manage its settings.'}
         </p>
       </header>
+
+      <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
+        <h2 className="text-lg font-semibold text-wv-text">Dashboard Server (:4451)</h2>
+        <p className="mt-1 text-sm text-wv-dim">
+          Manage the local encrypt/moderation/decrypt server used by this dashboard instance.
+        </p>
+        <DashboardServerControls variant="full" />
+      </section>
 
       {!activeOrg ? (
         <GuardCard title="Select or create an org to manage its settings." />

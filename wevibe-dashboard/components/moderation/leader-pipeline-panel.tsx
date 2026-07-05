@@ -44,6 +44,7 @@ import {
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
 import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
+import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
 import { useOrgContext } from '@/lib/org-context';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { toast } from 'sonner';
@@ -902,6 +903,9 @@ export function LeaderPipelinePanel() {
           <p className="mt-2">
             Open <a href="/settings" className="font-medium text-wv-amber underline-offset-2 hover:underline">Settings</a> and connect to your running `wevibe-mcp --dashboard` server.
           </p>
+          <div className="mt-4">
+            <DashboardServerControls variant="inline" />
+          </div>
         </div>
       </div>
     );

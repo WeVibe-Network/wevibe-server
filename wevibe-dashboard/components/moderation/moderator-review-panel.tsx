@@ -11,6 +11,7 @@ import {
 } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
 import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
+import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
 import { useOrgContext } from '@/lib/org-context';
 import { normalizeKeywordWeights, displayWeight } from '@/lib/keyword-weights';
 
@@ -275,6 +276,9 @@ export function ModeratorReviewPanel() {
           <p className="mt-2">
             Open <Link href="/settings" className="font-medium text-wv-amber underline-offset-2 hover:underline">Settings</Link> and connect to your running `wevibe-mcp --dashboard` server. Once connected, return here to moderate submissions.
           </p>
+          <div className="mt-4">
+            <DashboardServerControls variant="inline" />
+          </div>
         </div>
       </div>
     );
