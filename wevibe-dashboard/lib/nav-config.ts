@@ -108,6 +108,7 @@ export const GENERAL_NAV: SubTab[] = [
   { label: 'Faucet', href: '/faucet' },
   { label: 'Profile', href: '/profile' },
   { label: 'Pipeline Health', href: '/health' },
+  { label: 'Diagnostics', href: '/diagnostics' },
 ];
 
 const EMPTY_SECTIONS: MainSection[] = [];

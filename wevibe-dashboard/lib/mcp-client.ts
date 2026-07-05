@@ -3,6 +3,7 @@
  */
 
 import { getConfig } from '@/lib/config';
+import type { ConnectionError } from '@/lib/diagnostics-types';
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -50,6 +51,7 @@ type PendingRequest = {
 };
 
 export class WeVibeMcpClient {
+  private readonly baseUrl: string;
   private readonly sseUrl: string;
   private eventSource: EventSource | null = null;
   private messageUrl: string | null = null;
@@ -58,15 +60,22 @@ export class WeVibeMcpClient {
   private _connectPromise: Promise<void> | null = null;
   private _state: ConnectionState = 'disconnected';
   private readonly stateListeners = new Set<(state: ConnectionState) => void>();
+  private readonly errorListeners = new Set<(err: ConnectionError) => void>();
+  private _lastError: ConnectionError | null = null;
 
   constructor(baseUrl?: string) {
     const resolvedBaseUrl = baseUrl ?? getConfig().mcpUrl;
     const normalized = resolvedBaseUrl.replace(/\/$/, '');
+    this.baseUrl = normalized;
     this.sseUrl = `${normalized}/sse`;
   }
 
   get state(): ConnectionState {
     return this._state;
+  }
+
+  get lastError(): ConnectionError | null {
+    return this._lastError;
   }
 
   set onStateChange(fn: ((state: ConnectionState) => void) | null) {
@@ -83,6 +92,13 @@ export class WeVibeMcpClient {
     };
   }
 
+  addErrorListener(listener: (err: ConnectionError) => void): () => void {
+    this.errorListeners.add(listener);
+    return () => {
+      this.errorListeners.delete(listener);
+    };
+  }
+
   private setState(state: ConnectionState): void {
     this._state = state;
     for (const listener of [...this.stateListeners]) {
@@ -91,6 +107,63 @@ export class WeVibeMcpClient {
       } catch {
         // Listener errors should not break the client
       }
+    }
+  }
+
+  private toErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+    if (typeof error === 'string') {
+      return error;
+    }
+    return String(error);
+  }
+
+  private notifyErrorListeners(error: ConnectionError): void {
+    for (const listener of [...this.errorListeners]) {
+      try {
+        listener(error);
+      } catch {
+        // Listener errors should not break the client
+      }
+    }
+  }
+
+  private captureError(rawMessage: string): void {
+    const capturedAt = new Date().toISOString();
+    const capturedError: ConnectionError = {
+      message: rawMessage,
+      url: this.sseUrl,
+      at: capturedAt,
+    };
+
+    this._lastError = capturedError;
+    this.notifyErrorListeners(capturedError);
+
+    const updateWithProbeResult = (probeResult: string): void => {
+      if (!this._lastError || this._lastError.at !== capturedAt) {
+        return;
+      }
+
+      const enrichedError: ConnectionError = {
+        message: `${rawMessage} · /health probe: ${probeResult}`,
+        url: this.sseUrl,
+        at: capturedAt,
+      };
+
+      this._lastError = enrichedError;
+      this.notifyErrorListeners(enrichedError);
+    };
+
+    try {
+      fetch(`${this.baseUrl}/health`).then(response => {
+        updateWithProbeResult(`reachable (HTTP ${response.status})`);
+      }).catch((error: unknown) => {
+        updateWithProbeResult(this.toErrorMessage(error));
+      });
+    } catch (error) {
+      updateWithProbeResult(this.toErrorMessage(error));
     }
   }
 
@@ -124,14 +197,17 @@ export class WeVibeMcpClient {
     return new Promise<void>((resolve, reject) => {
       const eventSource = new EventSource(this.sseUrl);
       this.eventSource = eventSource;
+      const connectionTimeoutMs = 15000;
 
       const timeout = setTimeout(() => {
         eventSource.onerror = null;
         eventSource.close();
         this.eventSource = null;
         this.setState('error');
-        reject(new Error('Connection timed out'));
-      }, 15000);
+        const message = `MCP SSE connection to ${this.sseUrl} timed out after ${connectionTimeoutMs}ms (server unreachable)`;
+        this.captureError(message);
+        reject(new Error(message));
+      }, connectionTimeoutMs);
 
       const onEndpoint = (event: MessageEvent) => {
         eventSource.removeEventListener('endpoint', onEndpoint);
@@ -146,7 +222,9 @@ export class WeVibeMcpClient {
           eventSource.close();
           this.eventSource = null;
           this.setState('error');
-          reject(new Error(`Invalid endpoint URL: ${(error as Error).message}`));
+          const message = `Invalid MCP endpoint URL from ${this.sseUrl}: ${this.toErrorMessage(error)}`;
+          this.captureError(message);
+          reject(new Error(message));
           return;
         }
 
@@ -160,7 +238,9 @@ export class WeVibeMcpClient {
           eventSource.close();
           this.eventSource = null;
           this.setState('error');
-          reject(err);
+          const message = `MCP initialize handshake failed on ${this.sseUrl}: ${this.toErrorMessage(err)}`;
+          this.captureError(message);
+          reject(new Error(message));
         });
       };
 
@@ -177,7 +257,9 @@ export class WeVibeMcpClient {
           eventSource.close();
           this.eventSource = null;
           this.setState('error');
-          reject(new Error('SSE connection failed'));
+          const message = `MCP SSE connection to ${this.sseUrl} failed (server unreachable / connection refused)`;
+          this.captureError(message);
+          reject(new Error(message));
           return;
         }
         if (this._state === 'connected') {
@@ -185,9 +267,13 @@ export class WeVibeMcpClient {
             try {
               const origin = new URL(this.sseUrl).origin;
               this.messageUrl = origin + reconnectEvent.data;
-              this.initialize().catch(() => {});
-            } catch {
-              // Silent failure on reconnect
+              this.initialize().catch((error: unknown) => {
+                const message = `MCP SSE reconnect to ${this.sseUrl} failed: ${this.toErrorMessage(error)}`;
+                this.captureError(message);
+              });
+            } catch (error) {
+              const message = `MCP SSE reconnect to ${this.sseUrl} failed: ${this.toErrorMessage(error)}`;
+              this.captureError(message);
             }
           }, { once: true });
         }
@@ -297,8 +383,8 @@ export class WeVibeMcpClient {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method, params }),
-    }).catch(() => {
-      // Notifications are fire-and-forget
+    }).catch((error: unknown) => {
+      console.warn(`[mcp-client] notification ${method} failed:`, error);
     });
   }
 

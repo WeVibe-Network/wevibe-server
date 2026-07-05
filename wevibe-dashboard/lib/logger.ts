@@ -71,7 +71,7 @@ function findWorkspaceLogDir(startDir: string): string | undefined {
   }
 }
 
-function resolveLogDir(): string {
+export function resolveLogDir(): string {
   if (memoizedLogDir) {
     return memoizedLogDir;
   }

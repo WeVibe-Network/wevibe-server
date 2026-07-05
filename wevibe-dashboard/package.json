@@ -27,6 +27,7 @@
     "next": "15.5.19",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "react-error-boundary": "6.1.2",
     "sonner": "2.0.7",
     "wevibe-sdk-wasm": "file:./vendor/wevibe-sdk-wasm"
   },

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import { readConfigFromEnv } from '@/lib/config';
+import { ClientErrorCapture } from '@/components/diagnostics/client-error-capture';
 import { Toaster } from 'sonner';
 import './globals.css';
 
@@ -33,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           id="wevibe-config"
           dangerouslySetInnerHTML={{ __html: `window.__WEVIBE_CONFIG__=${JSON.stringify(cfg)}` }}
         />
-        {children}
+        <ClientErrorCapture>{children}</ClientErrorCapture>
         <Toaster richColors position="bottom-right" theme="dark" expand />
       </body>
     </html>
