@@ -192,13 +192,6 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		return fmt.Errorf("update orgs: %w", err)
 	}
 
-	_, err = w.db.Exec(ctx, `
-		DELETE FROM approval_votes WHERE org_id = $1 AND submission_hash = $2
-	`, orgID, contentHashHex)
-	if err != nil {
-		logger.Warn("failed to delete approval_votes", "error", err)
-	}
-
 	logger.Info("memory bookkeeping completed",
 		"cid", contentHashHex,
 		"epoch_id", epochID,
