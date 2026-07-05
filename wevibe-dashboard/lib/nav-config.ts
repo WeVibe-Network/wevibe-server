@@ -24,11 +24,17 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'Overview', href: '/my-org' },
         { label: 'Members', href: '/members' },
         { label: 'Requests', href: '/join-requests' },
-        { label: 'Epochs', href: '/epoch' },
-        { label: 'Recall Health', href: '/recall-inspect' },
+      ],
+    },
+    {
+      label: 'Org Settings',
+      key: 'org-settings',
+      sub: [
+        { label: 'General', href: '/org-settings' },
+        { label: 'Epochs', href: '/epochs' },
         { label: 'Billing', href: '/billing' },
         { label: 'Recovery', href: '/recovery' },
-        { label: 'Org Settings', href: '/settings' },
+        { label: 'Recall Health', href: '/recall-health' },
       ],
     },
     {
@@ -68,6 +74,11 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'Extracted', href: '/sessions/extracted' },
       ],
     },
+    {
+      label: 'Org Settings',
+      key: 'org-settings',
+      sub: [{ label: 'General', href: '/org-settings' }],
+    },
   ],
   CONNECTED_CONTRIBUTOR: [
     {
@@ -86,12 +97,22 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
         { label: 'Extracted', href: '/sessions/extracted' },
       ],
     },
+    {
+      label: 'Org Settings',
+      key: 'org-settings',
+      sub: [{ label: 'General', href: '/org-settings' }],
+    },
   ],
   CONNECTED_MEMBER: [
     {
       label: 'My Org',
       key: 'my-org',
       sub: [{ label: 'Overview', href: '/my-org' }],
+    },
+    {
+      label: 'Org Settings',
+      key: 'org-settings',
+      sub: [{ label: 'General', href: '/org-settings' }],
     },
     {
       label: 'Discover',
@@ -107,6 +128,7 @@ export const GENERAL_NAV: SubTab[] = [
   { label: 'Notifications', href: '/notifications' },
   { label: 'Faucet', href: '/faucet' },
   { label: 'Profile', href: '/profile' },
+  { label: 'Settings', href: '/settings' },
   { label: 'Pipeline Health', href: '/health' },
   { label: 'Diagnostics', href: '/diagnostics' },
 ];

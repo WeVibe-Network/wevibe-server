@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getOrg, getEpochManifest, rotateEpoch, type OrgSummary } from '@/lib/hub-client';
 import { useOrgContext } from '@/lib/org-context';
+import { useDashboardState } from '@/lib/use-dashboard-state';
 import ClientTime from '@/components/ui/client-time';
 
 interface EpochHistoryEntry {
@@ -14,6 +15,7 @@ interface EpochHistoryEntry {
 export default function EpochPage() {
   const { activeOrg } = useOrgContext();
   const orgId = activeOrg?.org_id ?? '';
+  const { isLeader, loading: dashLoading } = useDashboardState();
 
   const [org, setOrg] = useState<OrgSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,6 +78,28 @@ export default function EpochPage() {
       setRotateLoading(false);
     }
   }, [orgId]);
+
+  if (dashLoading) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold text-wv-text">Epochs</h1>
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <p className="text-sm text-wv-dim">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLeader) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold text-wv-text">Epochs</h1>
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <p className="text-sm text-wv-amber">Epochs is leader-only.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

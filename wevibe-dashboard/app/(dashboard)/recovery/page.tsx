@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getRecoveryShare, storeRecoveryShares, type RecoveryShareEntry } from '@/lib/hub-client';
 import { useOrgContext } from '@/lib/org-context';
+import { useDashboardState } from '@/lib/use-dashboard-state';
 import { getIdentity } from '@/lib/wevibe-auth';
 
 const MAX_SHARES = 3;
@@ -9,6 +10,7 @@ const MAX_SHARES = 3;
 export default function RecoveryPage() {
   const { activeOrg } = useOrgContext();
   const orgId = activeOrg?.org_id ?? '';
+  const { isLeader, loading: dashLoading } = useDashboardState();
 
   const [shares, setShares] = useState<RecoveryShareEntry[]>([]);
   const [storedCount, setStoredCount] = useState(0);
@@ -141,6 +143,28 @@ export default function RecoveryPage() {
       setRetrieveLoading(false);
     }
   }, [orgId]);
+
+  if (dashLoading) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold text-wv-text">Recovery</h1>
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <p className="text-sm text-wv-dim">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLeader) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold text-wv-text">Recovery</h1>
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <p className="text-sm text-wv-amber">Recovery is leader-only.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!orgId) {
     return (

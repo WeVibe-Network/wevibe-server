@@ -26,7 +26,7 @@ test.describe('Dashboard Navigation', () => {
       { testId: 'nav-billing', url: '/billing', heading: /billing|credit/i },
       { testId: 'nav-settings', url: '/settings', heading: /settings/i },
       { testId: 'nav-recovery', url: '/recovery', heading: /recovery/i },
-      { testId: 'nav-epoch', url: '/epoch', heading: /epoch/i },
+      { testId: 'nav-epoch', url: '/epochs', heading: /epoch/i },
     ];
 
     for (const p of pages) {

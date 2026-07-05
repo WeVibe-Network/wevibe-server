@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { getOrgCredits, getOrgFinances } from '@/lib/hub-client'
 import { formatVibeWithDenom } from '@/lib/format'
 import { useOrgContext } from '@/lib/org-context'
+import { useDashboardState } from '@/lib/use-dashboard-state'
 import ClientTime from '@/components/ui/client-time'
 
 const REASON_LABELS: Record<string, string> = {
@@ -25,6 +26,7 @@ export default function BillingPage() {
 
   const { activeOrg, orgs } = useOrgContext()
   const orgId = activeOrg?.org_id ?? orgs[0]?.org_id ?? ''
+  const { isLeader, loading: dashLoading } = useDashboardState()
 
   useEffect(() => {
     if (!orgId) { setLoading(false); return }
@@ -38,6 +40,28 @@ export default function BillingPage() {
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [orgId])
+
+  if (dashLoading) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold text-wv-text">Billing</h1>
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <p className="text-sm text-wv-dim">Loading…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!isLeader) {
+    return (
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold text-wv-text">Billing</h1>
+        <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
+          <p className="text-sm text-wv-amber">Billing is leader-only.</p>
+        </div>
+      </div>
+    )
+  }
 
   if (!orgId) return (
     <div>

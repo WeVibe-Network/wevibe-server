@@ -6,12 +6,12 @@ test.describe('Settings', () => {
   });
 
   test('displays current settings', async ({ page }) => {
-    await page.goto('/settings');
+    await page.goto('/org-settings');
     await expect(page.locator('h1')).toContainText('Dashboard Settings');
   });
 
   test('required approvals field exists', async ({ page }) => {
-    await page.goto('/settings');
+    await page.goto('/org-settings');
     await expect(page.getByTestId('required-approvals-input')).toBeVisible();
   });
 });
