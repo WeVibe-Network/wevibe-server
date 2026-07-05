@@ -18,6 +18,10 @@ import type {
 
 export const dynamic = 'force-dynamic';
 const DEFAULT_EXTRACTION_NUM_CTX = 32768;
+// Generous ceiling for a legit large single/multi-chunk extraction (a 600k-char session
+// can take several minutes across sequential Tier-2 chunk LLM calls). Well above undici's
+// ~5-min default, which previously fired mid-extraction and was mislabeled "unreachable".
+const EXTRACT_FETCH_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 const MCP_SESSION_TOKEN_PATH = path.join(
   homedir(),
   '.wevibe',
@@ -417,6 +421,10 @@ export async function POST(request: NextRequest) {
   }
 
   let response: Response;
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    controller.abort();
+  }, EXTRACT_FETCH_TIMEOUT_MS);
   try {
     response = await fetch(extractUrl, {
       method: 'POST',
@@ -425,21 +433,68 @@ export async function POST(request: NextRequest) {
         Authorization: `Bearer ${sessionToken}`,
         [TRACE_HEADER]: trace,
       },
+      signal: controller.signal,
       body: JSON.stringify(mcpExtractRequestBody),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      logOp('dashboard.extract', 'error', {
+        trace,
+        phase: 'outcome',
+        status: 'err',
+        proxy_target: extractUrl,
+        dur_ms: Date.now() - startedAt,
+        err: 'timeout',
+        reason: 'timeout',
+      });
+      return NextResponse.json(
+        {
+          error: `extraction timed out after ${Math.floor(EXTRACT_FETCH_TIMEOUT_MS / 1000)}s — the session may be too large; try splitting it or retrying`,
+          code: 'extraction_timeout',
+        },
+        { status: 504 },
+      );
+    }
+
+    const code = (error as { cause?: { code?: string } })?.cause?.code
+      ?? (error as { code?: string })?.code;
+    if (
+      code === 'ECONNREFUSED'
+      || code === 'ECONNRESET'
+      || code === 'EAI_AGAIN'
+      || code === 'UND_ERR_CONNECT_TIMEOUT'
+    ) {
+      logOp('dashboard.extract', 'error', {
+        trace,
+        phase: 'outcome',
+        status: 'err',
+        proxy_target: extractUrl,
+        dur_ms: Date.now() - startedAt,
+        err: code,
+        reason: 'connection',
+      });
+      return NextResponse.json(
+        { error: `local WeVibe MCP unreachable at ${mcpHttpUrl}` },
+        { status: 503 },
+      );
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
     logOp('dashboard.extract', 'error', {
       trace,
       phase: 'outcome',
       status: 'err',
       proxy_target: extractUrl,
       dur_ms: Date.now() - startedAt,
-      err: 'mcp_unreachable',
+      err: message,
+      reason: 'network',
     });
     return NextResponse.json(
-      { error: `local WeVibe MCP unreachable at ${mcpHttpUrl}` },
-      { status: 503 },
+      { error: `extraction request to local WeVibe MCP failed: ${message}` },
+      { status: 502 },
     );
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 
   let responseBody: unknown;
