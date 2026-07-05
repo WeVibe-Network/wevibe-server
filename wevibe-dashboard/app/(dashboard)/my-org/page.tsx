@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { MyFeed } from '@/components/feed/my-feed';
 import { useIdentity } from '@/lib/identity-context';
 import { useOrgContext } from '@/lib/org-context';
 import { useDashboardState } from '@/lib/use-dashboard-state';
@@ -334,6 +335,24 @@ export default function MyOrgPage() {
           </p>
         )}
       </section>
+
+      <div className="grid gap-8 lg:grid-cols-2">
+        {/* LEFT: Org-wide activity — Phase B placeholder, non-functional */}
+        <section className="flex flex-col gap-4 opacity-80">
+          <header className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-xl font-semibold tracking-tight text-wv-text">Org Activity</h2>
+            <span className="rounded-full border border-wv-line bg-wv-panel-2 px-2.5 py-1 text-xs font-medium uppercase tracking-[0.08em] text-wv-dim">
+              Coming soon
+            </span>
+          </header>
+          <div className="rounded-xl border border-dashed border-wv-line bg-wv-panel px-6 py-16 text-center text-sm text-wv-dim">
+            Org-wide activity feed — coming soon.
+          </div>
+        </section>
+
+        {/* RIGHT: the per-user notification feed, moved from /activity */}
+        <MyFeed />
+      </div>
 
       {isLeader && (
         <section className="rounded-xl border border-wv-line bg-wv-panel p-5">

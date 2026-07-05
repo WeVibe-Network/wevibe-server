@@ -79,7 +79,7 @@ export default function NotificationBell() {
 
   return (
     <button
-      onClick={() => router.push('/activity')}
+      onClick={() => router.push('/my-org')}
       className="relative rounded-md p-2 text-wv-dim transition hover:bg-wv-line hover:text-wv-text"
       aria-label="Notifications"
     >

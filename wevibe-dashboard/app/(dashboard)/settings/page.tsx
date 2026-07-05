@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
+import { NotificationPreferencesSection } from '@/components/notifications/notification-preferences-section';
 import { PairPlugin } from '@/components/pairing/pair-plugin';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
 import Toggle from '@/components/ui/toggle';
@@ -947,6 +948,8 @@ export default function SettingsPage() {
 
           {riskAppetiteLoading && <p className="mt-4 text-xs text-wv-dim">Loading recall risk appetite…</p>}
         </section>
+
+        <NotificationPreferencesSection />
       </div>
     </div>
   );

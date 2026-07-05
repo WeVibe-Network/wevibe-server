@@ -124,8 +124,6 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
 
 export const GENERAL_NAV: SubTab[] = [
   { label: 'Discover', href: '/discover' },
-  { label: 'Activity', href: '/activity' },
-  { label: 'Notifications', href: '/notifications' },
   { label: 'Faucet', href: '/faucet' },
   { label: 'Profile', href: '/profile' },
   { label: 'Settings', href: '/settings' },
