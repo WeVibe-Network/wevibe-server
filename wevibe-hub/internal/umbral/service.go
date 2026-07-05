@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral/umbralpb"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -31,7 +33,24 @@ func (s *Service) StoreKFrag(ctx context.Context, orgID string, epochID uint64, 
 		MemberPk: memberPK,
 		Kfrag:    kfrag,
 	})
-	return err
+	if err != nil {
+		wlog.Op(ctx, "hub.store_kfrag", slog.LevelError,
+			slog.String("phase", "outcome"),
+			slog.String("status", "err"),
+			slog.String("org", orgID),
+			slog.Uint64("epoch", epochID),
+			slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
+			slog.String("err", err.Error()))
+		return err
+	}
+	wlog.Op(ctx, "hub.store_kfrag", slog.LevelInfo,
+		slog.String("phase", "outcome"),
+		slog.String("status", "ok"),
+		slog.String("org", orgID),
+		slog.Uint64("epoch", epochID),
+		slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
+		slog.Int("kfrag_len", len(kfrag)))
+	return nil
 }
 
 func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID uint64, memberPK, capsule []byte) ([]byte, error) {
@@ -43,6 +62,14 @@ func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID 
 	}
 	resp, err := s.client.ReEncrypt(ctx, req)
 	if err != nil {
+		wlog.Op(ctx, "hub.reencrypt", slog.LevelError,
+			slog.String("phase", "outcome"),
+			slog.String("status", "err"),
+			slog.String("org", orgID),
+			slog.Uint64("epoch", epochID),
+			slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
+			slog.String("capsule_fp", wlog.Fingerprint(capsule)),
+			slog.String("err", err.Error()))
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			return nil, ErrKFragNotFound
 		}
@@ -51,6 +78,14 @@ func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID 
 		}
 		return nil, fmt.Errorf("re-encrypt: %w", err)
 	}
+	wlog.Op(ctx, "hub.reencrypt", slog.LevelInfo,
+		slog.String("phase", "outcome"),
+		slog.String("status", "ok"),
+		slog.String("org", orgID),
+		slog.Uint64("epoch", epochID),
+		slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
+		slog.String("capsule_fp", wlog.Fingerprint(capsule)),
+		slog.Int("cfrag_len", len(resp.Cfrag)))
 	return resp.Cfrag, nil
 }
 

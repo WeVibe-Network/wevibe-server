@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/reports"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 const (
@@ -568,6 +570,18 @@ func getMemberWallet(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey stri
 const maxCommitReasonLength = 500
 
 func CommitReport(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	defer func() {
+		wlog.Op(ctx, "hub.commit_report", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()))
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -579,6 +593,10 @@ func CommitReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"org_id and report_id required"}`, http.StatusBadRequest)
 		return
 	}
+	wlog.Op(ctx, "hub.commit_report", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("report", reportID))
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
@@ -694,6 +712,8 @@ func CommitReport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errorJSON("internal error"), http.StatusInternalServerError)
 		return
 	}
+	status = "ok"
+	count = 1
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "upheld",

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 func InviteMember(w http.ResponseWriter, r *http.Request) {
@@ -496,6 +498,16 @@ func DisableMemberRecall(w http.ResponseWriter, r *http.Request) {
 }
 
 func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	defer func() {
+		wlog.Op(ctx, "hub.store_kfrag", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()))
+	}()
+
 	if pool == nil {
 		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
@@ -555,6 +567,13 @@ func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wlog.Op(ctx, "hub.store_kfrag", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("member", memberPubkey),
+		slog.String("member_pk_fp", wlog.Fingerprint(prePubkey)),
+		slog.Uint64("epoch", req.EpochID))
+
 	kfrag, err := hex.DecodeString(req.Kfrag)
 	if err != nil {
 		WriteError(w, http.StatusBadRequest, "invalid_kfrag", "kfrag must be valid hex")
@@ -567,11 +586,18 @@ func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := umbralService.StoreKFrag(r.Context(), orgID, req.EpochID, prePubkey, kfrag); err != nil {
+		wlog.Op(ctx, "hub.store_kfrag", slog.LevelError,
+			slog.String("phase", "store-err"),
+			slog.String("org", orgID),
+			slog.String("member_pk_fp", wlog.Fingerprint(prePubkey)),
+			slog.Uint64("epoch", req.EpochID),
+			slog.String("err", err.Error()))
 		log.Printf("[kfrag] StoreKFrag failed org=%s epoch=%d: %v", orgID, req.EpochID, err)
 		WriteError(w, http.StatusInternalServerError, "kfrag_store_failed", "failed to store recall key in sidecar", err.Error())
 		return
 	}
 
+	status = "ok"
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

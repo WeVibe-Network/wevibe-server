@@ -22,6 +22,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/receipts"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 const defaultTrialDailyQueryLimit = 5
@@ -32,6 +33,8 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, http.StatusServiceUnavailable, "db_unavailable", "database unavailable")
 		return
 	}
+
+	trace := wlog.TraceFromContext(r.Context())
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -100,7 +103,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agentLogID := truncateForLog(req.AgentPubkey, 12)
-	log.Printf("[recall] query org=%s agent=%s vecDim=%d kw=%d model=%s limit=%d includeDormant=%v prePubkeyPresent=%v", req.OrgID, agentLogID, len(req.Vector), len(req.KeywordWeights), req.EmbeddingModelID, req.Limit, req.IncludeDormant, req.PrePubkey != "")
+	log.Printf("[recall] query org=%s agent=%s vecDim=%d kw=%d model=%s limit=%d includeDormant=%v prePubkeyPresent=%v trace=%s", req.OrgID, agentLogID, len(req.Vector), len(req.KeywordWeights), req.EmbeddingModelID, req.Limit, req.IncludeDormant, req.PrePubkey != "", trace)
 
 	if req.OrgID == "" || req.AgentPubkey == "" {
 		log.Printf("[recall] DENY/ERROR missing required fields org=%s agentPresent=%v", req.OrgID, req.AgentPubkey != "")
@@ -385,7 +388,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 
 		cfrag, err := umbralService.ReEncryptForMember(ctx, req.OrgID, uint64(cm.Epoch), memberPKBytes, payload.capsule)
 		if err != nil {
-			log.Printf("[recall] umbral ReEncrypt FAILED org=%s cid=%s epoch=%d member=%s: %v", req.OrgID, res.CID, cm.Epoch, agentLogID, err)
+			log.Printf("[recall] umbral ReEncrypt FAILED org=%s cid=%s epoch=%d member_pk_fp=%s capsule_fp=%s trace=%s: %v", req.OrgID, res.CID, cm.Epoch, wlog.Fingerprint(memberPKBytes), wlog.Fingerprint(payload.capsule), trace, err)
 			requiresReencryption = append(requiresReencryption, res.CID)
 			merged = append(merged, res)
 			continue
@@ -393,11 +396,12 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		res.Capsule = hex.EncodeToString(payload.capsule)
 		res.Cfrag = hex.EncodeToString(cfrag)
 		reencryptedCount++
+		log.Printf("[recall] umbral ReEncrypt ok org=%s cid=%s epoch=%d member_pk_fp=%s capsule_fp=%s cfrag_len=%d trace=%s", req.OrgID, res.CID, cm.Epoch, wlog.Fingerprint(memberPKBytes), wlog.Fingerprint(payload.capsule), len(cfrag), trace)
 
 		merged = append(merged, res)
 	}
 	results = merged
-	log.Printf("[recall] umbral re-encryption complete org=%s reencrypted=%d requiresReencryption=%d total=%d", req.OrgID, reencryptedCount, len(requiresReencryption), len(results))
+	log.Printf("[recall] umbral re-encryption complete org=%s reencrypted=%d requiresReencryption=%d total=%d trace=%s", req.OrgID, reencryptedCount, len(requiresReencryption), len(results), trace)
 
 	if len(results) > 0 {
 		cids := make([]string, 0, len(results))

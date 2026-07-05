@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"strings"
@@ -18,9 +19,23 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 func SubmitMemory(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	defer func() {
+		wlog.Op(ctx, "hub.submit_memory", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+		)
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -32,7 +47,12 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memberPubkey := auth.GetMemberPubkey(r.Context())
+	memberPubkey := auth.GetMemberPubkey(ctx)
+	wlog.Op(ctx, "hub.submit_memory", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("member", memberPubkey),
+	)
 	if memberPubkey == "" {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
@@ -120,6 +140,8 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		status = "ok"
+		count = 1
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(w).Encode(protocol.SubmitMemoryResponse{
@@ -143,6 +165,8 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	status = "ok"
+	count = 1
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(protocol.SubmitMemoryResponse{
@@ -152,6 +176,23 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	var batchSize int
+	var failedOutcome int
+	defer func() {
+		wlog.Op(ctx, "hub.submit_memory_batch", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int("failed", failedOutcome),
+			slog.Int("batch_size", batchSize),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+		)
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -163,7 +204,7 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memberPubkey := auth.GetMemberPubkey(r.Context())
+	memberPubkey := auth.GetMemberPubkey(ctx)
 	if memberPubkey == "" {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
@@ -190,6 +231,13 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
+	batchSize = len(req.Submissions)
+	wlog.Op(ctx, "hub.submit_memory_batch", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("member", memberPubkey),
+		slog.Int("batch_size", batchSize),
+	)
 	if len(req.Submissions) == 0 {
 		http.Error(w, `{"error":"submissions required"}`, http.StatusBadRequest)
 		return
@@ -294,6 +342,9 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		submitted++
 	}
 
+	status = "ok"
+	count = submitted
+	failedOutcome = failed
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"submitted": submitted,
@@ -303,6 +354,19 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetPendingQueue(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	defer func() {
+		wlog.Op(ctx, "hub.pending_queue", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+		)
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -338,6 +402,11 @@ func GetPendingQueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pubkey := signed.Pubkey
+	wlog.Op(ctx, "hub.pending_queue", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("member", pubkey),
+	)
 
 	items, err := moderation.GetPendingQueue(r.Context(), pool, orgID, pubkey)
 	if err != nil {
@@ -365,6 +434,8 @@ func GetPendingQueue(w http.ResponseWriter, r *http.Request) {
 		items[idx].ContributorDisplayName = nameMap[wallet]
 	}
 
+	status = "ok"
+	count = len(items)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(items)
 }
@@ -468,6 +539,23 @@ func GetModerationHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func VoteOnSubmission(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	var approveOutcome int
+	var flagOutcome int
+	defer func() {
+		wlog.Op(ctx, "hub.vote_submission", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int("approve", approveOutcome),
+			slog.Int("flag", flagOutcome),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+		)
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -485,6 +573,12 @@ func VoteOnSubmission(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
 		return
 	}
+	wlog.Op(ctx, "hub.vote_submission", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("member", signed.Pubkey),
+		slog.String("submission_hash", submissionHash),
+	)
 
 	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
 	if err != nil {
@@ -539,6 +633,10 @@ func VoteOnSubmission(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	approveOutcome = approve
+	flagOutcome = flag
+	status = "ok"
+	count = 1
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{
 		"approve": approve,
@@ -630,6 +728,19 @@ func VoteOnKeyword(w http.ResponseWriter, r *http.Request) {
 }
 
 func ApproveSubmission(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	defer func() {
+		wlog.Op(ctx, "hub.approve_submission", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+		)
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -653,6 +764,12 @@ func ApproveSubmission(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
+	wlog.Op(ctx, "hub.approve_submission", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("member", req.SignedBy),
+		slog.String("submission_hash", submissionHash),
+	)
 
 	if req.SignedBy == "" {
 		http.Error(w, `{"error":"signed_by required"}`, http.StatusBadRequest)
@@ -708,11 +825,26 @@ func ApproveSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	status = "ok"
+	count = 1
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
 }
 
 func DenySubmission(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	defer func() {
+		wlog.Op(ctx, "hub.deny_submission", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+		)
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -736,6 +868,12 @@ func DenySubmission(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
 		return
 	}
+	wlog.Op(ctx, "hub.deny_submission", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("member", req.SignedBy),
+		slog.String("submission_hash", submissionHash),
+	)
 
 	if req.SignedBy == "" || req.Reason == "" {
 		http.Error(w, `{"error":"signed_by and reason required"}`, http.StatusBadRequest)
@@ -762,6 +900,8 @@ func DenySubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	status = "ok"
+	count = 1
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "denied"})
 }

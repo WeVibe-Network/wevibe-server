@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 type hubActiveMember struct {
@@ -17,6 +20,8 @@ type hubActiveMember struct {
 }
 
 func ReconcileMembership(ctx context.Context, chainClient *GrpcClient, pool *pgxpool.Pool) error {
+	start := time.Now()
+
 	if chainClient == nil {
 		return fmt.Errorf("chain client unavailable")
 	}
@@ -140,7 +145,14 @@ func ReconcileMembership(ctx context.Context, chainClient *GrpcClient, pool *pgx
 		staleReverted += int(staleTag.RowsAffected())
 	}
 
-	log.Printf("membership reconcile summary: orgs_reconciled=%d roles_healed=%d divergences_logged=%d stale_reverted=%d", orgsReconciled, rolesHealed, divergencesLogged, staleReverted)
+	wlog.Op(ctx, "hub.reconcile", slog.LevelInfo,
+		slog.String("phase", "summary"),
+		slog.String("status", "ok"),
+		slog.Int("orgs_reconciled", orgsReconciled),
+		slog.Int("roles_healed", rolesHealed),
+		slog.Int("divergences_logged", divergencesLogged),
+		slog.Int("stale_reverted", staleReverted),
+		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
 	return nil
 }
 

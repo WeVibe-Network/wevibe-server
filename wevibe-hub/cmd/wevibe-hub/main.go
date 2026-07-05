@@ -24,6 +24,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/social"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 func corsOrigins() []string {
@@ -39,6 +40,7 @@ func corsOrigins() []string {
 }
 
 func main() {
+	wlog.Init()
 	cfg := config.Load()
 	retrievalRanker := &retrieval.ProbabilisticRanker{
 		Temperature:       cfg.RetrievalTemperature,
@@ -166,6 +168,7 @@ func main() {
 	}()
 
 	r := chi.NewRouter()
+	r.Use(wlog.TraceID)
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)

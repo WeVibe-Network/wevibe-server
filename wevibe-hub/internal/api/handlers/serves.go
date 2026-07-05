@@ -22,9 +22,22 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/serves"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var count int
+	defer func() {
+		wlog.Op(ctx, "hub.record_serve", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Int("count", count),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()))
+	}()
+
 	if pool == nil {
 		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
 		return
@@ -35,6 +48,9 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
 		return
 	}
+	wlog.Op(ctx, "hub.record_serve", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID))
 
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
@@ -101,6 +117,8 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 	// serve request should never block on block inclusion; instead we enqueue an
 	// org-level relay pass that flushes pending serves/denials in batch TXs.
 	enqueueServeRelay(orgID)
+	status = "ok"
+	count = 1
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

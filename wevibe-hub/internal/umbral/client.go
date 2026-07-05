@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral/umbralpb"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -26,7 +27,8 @@ type client struct {
 
 func NewClient(addr string) (*client, error) {
 	conn, err := grpc.NewClient(addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithChainUnaryInterceptor(wlog.UnaryClientInterceptor()))
 	if err != nil {
 		return nil, fmt.Errorf("create grpc connection to umbral sidecar: %w", err)
 	}
