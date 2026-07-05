@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,8 +32,13 @@ function getDbPath(): string {
   );
 }
 
-function extractTranscript(rows: PartRow[]): string {
+function extractTranscript(rows: PartRow[]): {
+  transcript: string;
+  capFired: boolean;
+  capCount: number;
+} {
   const lines: string[] = [];
+  let capCount = 0;
 
   for (const row of rows) {
     let partData: Record<string, unknown>;
@@ -95,6 +101,9 @@ function extractTranscript(rows: PartRow[]): string {
       } else {
         const inputJson = JSON.stringify(input);
         if (typeof inputJson === 'string') {
+          if (toolInputMax !== null && inputJson.length > toolInputMax) {
+            capCount += 1;
+          }
           inputStr = toolInputMax === null ? inputJson : inputJson.slice(0, toolInputMax);
         } else {
           inputStr = '';
@@ -104,10 +113,16 @@ function extractTranscript(rows: PartRow[]): string {
       const out = state.output;
       let outStr = '';
       if (typeof out === 'string') {
+        if (toolOutputMax !== null && out.length > toolOutputMax) {
+          capCount += 1;
+        }
         outStr = toolOutputMax === null ? out : out.slice(0, toolOutputMax);
       } else if (out) {
         const outJson = JSON.stringify(out);
         if (typeof outJson === 'string') {
+          if (toolOutputMax !== null && outJson.length > toolOutputMax) {
+            capCount += 1;
+          }
           outStr = toolOutputMax === null ? outJson : outJson.slice(0, toolOutputMax);
         }
       }
@@ -119,18 +134,34 @@ function extractTranscript(rows: PartRow[]): string {
   // The extractor now budgets/chunks against the model context window (75% rule);
   // truncating here would re-introduce transcript tail loss.
   const transcript = lines.join('\n\n');
+  const capFired = capCount > 0;
 
-  return transcript;
+  return { transcript, capFired, capCount };
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const trace = resolveTraceId(request.headers.get(TRACE_HEADER) ?? undefined);
+  const startedAt = Date.now();
+  logOp('dashboard.messages', 'info', {
+    trace,
+    phase: 'entry',
+    method: 'GET',
+    session_id: id,
+  });
   const dbPath = getDbPath();
 
   if (!existsSync(dbPath)) {
+    logOp('dashboard.messages', 'warn', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      err: 'db_not_found',
+      dur_ms: Date.now() - startedAt,
+    });
     return NextResponse.json({ error: 'OpenCode database not found' }, { status: 404 });
   }
 
@@ -143,6 +174,14 @@ export async function GET(
       .get(id) as { id: string; title: string; model: string; directory: string } | undefined;
 
     if (!session) {
+      logOp('dashboard.messages', 'warn', {
+        trace,
+        phase: 'outcome',
+        status: 'err',
+        err: 'session_not_found',
+        session_id: id,
+        dur_ms: Date.now() - startedAt,
+      });
       return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     }
 
@@ -160,7 +199,19 @@ export async function GET(
       )
       .all(id) as PartRow[];
 
-    const transcript = extractTranscript(parts);
+    const { transcript, capFired, capCount } = extractTranscript(parts);
+
+    logOp('dashboard.messages', 'info', {
+      trace,
+      phase: 'outcome',
+      status: 'ok',
+      session_id: id,
+      message_count: messages.length,
+      transcript_len: transcript.length,
+      cap_fired: capFired,
+      cap_count: capCount,
+      dur_ms: Date.now() - startedAt,
+    });
 
     return NextResponse.json({
       session_id: id,
@@ -171,6 +222,14 @@ export async function GET(
       transcript,
     });
   } catch (err) {
+    logOp('dashboard.messages', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      session_id: id,
+      err: (err as Error).message,
+      dur_ms: Date.now() - startedAt,
+    });
     return NextResponse.json(
       { error: `Failed to read messages: ${(err as Error).message}` },
       { status: 500 },

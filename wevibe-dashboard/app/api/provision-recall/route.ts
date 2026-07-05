@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl } from '@/lib/config';
 import { getDeploymentMode } from '@/lib/deployment';
+import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 import {
   MCP_OFFLINE_CODE,
   MCP_OFFLINE_ERROR,
@@ -46,6 +47,9 @@ async function readMcpSessionToken(): Promise<string | null> {
 }
 
 export async function POST(request: NextRequest) {
+  const trace = resolveTraceId(request.headers.get(TRACE_HEADER));
+  const startedAt = Date.now();
+
   if (getDeploymentMode() === 'server') {
     return NextResponse.json(
       { error: ORG_LOCAL_ONLY_ERROR, code: ORG_LOCAL_ONLY_CODE, remediation: ORG_LOCAL_ONLY_REMEDIATION },
@@ -73,10 +77,24 @@ export async function POST(request: NextRequest) {
     org_id: orgId.trim(),
   };
 
+  logOp('dashboard.provision_recall', 'info', {
+    trace,
+    phase: 'entry',
+    method: 'POST',
+    org_id: body.org_id,
+  });
+
   let sessionToken: string | null;
   try {
     sessionToken = await readMcpSessionToken();
   } catch (error) {
+    logOp('dashboard.provision_recall', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      dur_ms: Date.now() - startedAt,
+      err: (error as Error).message,
+    });
     return NextResponse.json(
       { error: `Failed to read MCP session token: ${(error as Error).message}` },
       { status: 500 },
@@ -100,13 +118,31 @@ export async function POST(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${sessionToken}`,
+        [TRACE_HEADER]: trace,
       },
       body: JSON.stringify(body),
     });
   } catch {
+    logOp('dashboard.provision_recall', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      proxy_target: provisionRecallUrl,
+      dur_ms: Date.now() - startedAt,
+      err: 'mcp_unreachable',
+    });
     return NextResponse.json({ error: 'local WeVibe MCP unreachable' }, { status: 503 });
   }
 
   const responseBody = (await response.json()) as unknown;
+  logOp('dashboard.provision_recall', response.status >= 400 ? 'warn' : 'info', {
+    trace,
+    phase: 'outcome',
+    status: response.status >= 400 ? 'err' : 'ok',
+    proxy_target: provisionRecallUrl,
+    upstream_status: response.status,
+    dur_ms: Date.now() - startedAt,
+    token_present: Boolean(sessionToken),
+  });
   return NextResponse.json(responseBody, { status: response.status });
 }

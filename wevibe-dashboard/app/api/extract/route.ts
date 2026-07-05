@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
+import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/lib/mcp-errors';
 import { getCertifiedReadiness } from '@/lib/provider-readiness';
 import { loadSettings } from '@/lib/settings';
@@ -206,6 +207,7 @@ function resolveServerHubBaseUrl(): string {
 
 async function fetchOrgExtractionProfileOverrides(
   orgId: string,
+  trace: string,
 ): Promise<ExtractionProfileOverrides | null> {
   const trimmedOrgId = orgId.trim();
   if (trimmedOrgId.length === 0) {
@@ -223,6 +225,9 @@ async function fetchOrgExtractionProfileOverrides(
     const response = await fetch(profileUrl, {
       method: 'GET',
       cache: 'no-store',
+      headers: {
+        [TRACE_HEADER]: trace,
+      },
       signal: controller.signal,
     });
 
@@ -279,6 +284,18 @@ function computePromptFingerprint(prompt: string | undefined): string {
 
 export async function POST(request: NextRequest) {
   const body = (await request.json()) as ExtractRequestBody;
+  const trace = resolveTraceId(request.headers.get(TRACE_HEADER));
+  const startedAt = Date.now();
+
+  logOp('dashboard.extract', 'info', {
+    trace,
+    phase: 'entry',
+    method: 'POST',
+    transcript_len: body.transcript?.length ?? 0,
+    has_title: Boolean(body.title),
+    has_stack: Array.isArray(body.stack),
+    has_session_id: typeof body.session_id === 'string' && body.session_id.trim().length > 0,
+  });
 
   if (!body.transcript || body.transcript.trim().length < 50) {
     return NextResponse.json(
@@ -346,7 +363,7 @@ export async function POST(request: NextRequest) {
   }
 
   const activeOrgId = settings.org_id.trim();
-  const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId);
+  const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId, trace);
   const useLmStudio = settings.llm_provider === 'lm_studio';
   const useOpenRouter = settings.llm_provider === 'openrouter';
   const mcpExtractRequestBody: {
@@ -406,10 +423,19 @@ export async function POST(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${sessionToken}`,
+        [TRACE_HEADER]: trace,
       },
       body: JSON.stringify(mcpExtractRequestBody),
     });
   } catch {
+    logOp('dashboard.extract', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      proxy_target: extractUrl,
+      dur_ms: Date.now() - startedAt,
+      err: 'mcp_unreachable',
+    });
     return NextResponse.json(
       { error: `local WeVibe MCP unreachable at ${mcpHttpUrl}` },
       { status: 503 },
@@ -430,6 +456,15 @@ export async function POST(request: NextRequest) {
         : `MCP extraction failed with status ${response.status}`;
 
     await recordExtractionError('mcp_error', response.status, errorMessage);
+    logOp('dashboard.extract', 'warn', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      proxy_target: extractUrl,
+      upstream_status: response.status,
+      dur_ms: Date.now() - startedAt,
+      err: errorMessage,
+    });
     return NextResponse.json({ error: errorMessage }, { status: response.status });
   }
 
@@ -444,6 +479,15 @@ export async function POST(request: NextRequest) {
       502,
       'MCP extraction returned invalid memory payload',
     );
+    logOp('dashboard.extract', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      proxy_target: extractUrl,
+      upstream_status: response.status,
+      dur_ms: Date.now() - startedAt,
+      err: 'invalid_payload',
+    });
     return NextResponse.json(
       { error: 'MCP extraction returned invalid memory payload' },
       { status: 502 },
@@ -460,6 +504,15 @@ export async function POST(request: NextRequest) {
         502,
         'MCP extraction returned invalid memory payload',
       );
+      logOp('dashboard.extract', 'error', {
+        trace,
+        phase: 'outcome',
+        status: 'err',
+        proxy_target: extractUrl,
+        upstream_status: response.status,
+        dur_ms: Date.now() - startedAt,
+        err: 'invalid_payload',
+      });
       return NextResponse.json(
         { error: 'MCP extraction returned invalid memory payload' },
         { status: 502 },
@@ -467,6 +520,17 @@ export async function POST(request: NextRequest) {
     }
     normalizedMemories.push(normalizedMemory);
   }
+
+  logOp('dashboard.extract', 'info', {
+    trace,
+    phase: 'outcome',
+    status: 'ok',
+    proxy_target: extractUrl,
+    upstream_status: response.status,
+    dur_ms: Date.now() - startedAt,
+    memories: normalizedMemories.length,
+    empty: normalizedMemories.length === 0,
+  });
 
   return NextResponse.json({
     memories: normalizedMemories,

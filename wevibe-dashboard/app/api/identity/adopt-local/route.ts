@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl } from '@/lib/config';
+import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 import {
   MCP_OFFLINE_CODE,
   MCP_OFFLINE_ERROR,
@@ -33,11 +34,27 @@ async function readMcpSessionToken(): Promise<string | null> {
   }
 }
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const trace = resolveTraceId(request.headers.get(TRACE_HEADER));
+  const startedAt = Date.now();
+
+  logOp('dashboard.identity_adopt_local', 'info', {
+    trace,
+    phase: 'entry',
+    method: 'POST',
+  });
+
   let sessionToken: string | null;
   try {
     sessionToken = await readMcpSessionToken();
   } catch (error) {
+    logOp('dashboard.identity_adopt_local', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      dur_ms: Date.now() - startedAt,
+      err: (error as Error).message,
+    });
     return NextResponse.json(
       { error: `Failed to read MCP session token: ${(error as Error).message}` },
       { status: 500 },
@@ -59,13 +76,31 @@ export async function POST() {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${sessionToken}`,
+        [TRACE_HEADER]: trace,
       },
     });
   } catch {
+    logOp('dashboard.identity_adopt_local', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      proxy_target: exportPairingUrl,
+      dur_ms: Date.now() - startedAt,
+      err: 'mcp_unreachable',
+    });
     return NextResponse.json({ error: 'local WeVibe MCP unreachable' }, { status: 503 });
   }
 
   const responseBody = (await response.json().catch(() => null)) as unknown;
+  logOp('dashboard.identity_adopt_local', response.status >= 400 ? 'warn' : 'info', {
+    trace,
+    phase: 'outcome',
+    status: response.status >= 400 ? 'err' : 'ok',
+    proxy_target: exportPairingUrl,
+    upstream_status: response.status,
+    dur_ms: Date.now() - startedAt,
+    token_present: Boolean(sessionToken),
+  });
 
   if (response.status === 404 && isRecord(responseBody) && responseBody.error === 'no_identity') {
     return NextResponse.json({ error: 'no_identity' }, { status: 404 });
