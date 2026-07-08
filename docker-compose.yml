@@ -217,7 +217,7 @@ services:
     restart: unless-stopped
     environment:
       WEVIBE_HUB_URL: ${WEVIBE_HUB_URL:-http://localhost:4440}
-      WEVIBE_MCP_URL: ${WEVIBE_MCP_URL:-http://localhost:4451}
+      WEVIBE_MCP_URL: ${WEVIBE_MCP_URL:-http://localhost:4450}
       WEVIBE_CHAIN_RPC: ${WEVIBE_CHAIN_RPC:-http://localhost:26657}
       WEVIBE_CHAIN_REST: ${WEVIBE_CHAIN_REST:-http://localhost:1317}
       WEVIBE_SOCIAL_GRAPH_URL: ${WEVIBE_SOCIAL_GRAPH_URL:-http://localhost:4470}

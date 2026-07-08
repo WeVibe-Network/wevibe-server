@@ -124,7 +124,7 @@ export interface ClientErrorPayload {
 export interface ConnectionError {
   /** Human-readable, honest detail including the failing URL. */
   message: string;
-  /** The exact URL that failed (e.g. http://127.0.0.1:4451/sse). */
+  /** The exact URL that failed (e.g. http://127.0.0.1:4450/sse). */
   url: string;
   /** ISO-8601 timestamp when the error was captured. */
   at: string;

@@ -14,31 +14,69 @@ export interface WevibeConfig {
 export const WEVIBE_CONFIG_GLOBAL = '__WEVIBE_CONFIG__';
 export const DEFAULT_WEVIBE_MCP_HTTP_URL = 'http://127.0.0.1:4450';
 
-const DEFAULT_CONFIG: WevibeConfig = {
+// ── WEVIBE_ENV base-URL switch ────────────────────────────────────────────
+// ONE flag selects the base URL set for every service. DEFAULT 'local'
+// (local-first; no public URLs are live yet). Precedence (R-13): an explicit
+// per-URL env var (WEVIBE_HUB_URL, WEVIBE_CHAIN_RPC, …) > the WEVIBE_ENV base.
+export type WevibeEnv = 'local' | 'production';
+
+export function resolveWevibeEnv(): WevibeEnv {
+  return process.env.WEVIBE_ENV?.trim().toLowerCase() === 'production' ? 'production' : 'local';
+}
+
+interface EnvBaseUrls {
+  hubUrl: string;
+  chainRpc: string;
+  chainRest: string;
+  socialGraphUrl: string;
+}
+
+const LOCAL_BASE: EnvBaseUrls = {
   hubUrl: 'http://localhost:4440',
-  mcpUrl: 'http://localhost:4451',
-  chainId: 'wevibe-local-1',
   chainRpc: 'http://localhost:26657',
   chainRest: 'http://localhost:1317',
   socialGraphUrl: 'http://localhost:4470',
+};
+
+// Public infra is NOT deployed yet. These are EXPLICIT PLACEHOLDERS on the
+// reserved `.invalid` TLD (RFC 6761 — can never resolve to real infra), so they
+// can't be mistaken for live hosts. Fill real values at VPS deploy via the
+// per-URL env vars (WEVIBE_HUB_URL / WEVIBE_CHAIN_RPC / WEVIBE_CHAIN_REST /
+// WEVIBE_SOCIAL_GRAPH_URL — they win over this base; see .env.example).
+const PRODUCTION_BASE: EnvBaseUrls = {
+  hubUrl: 'https://hub.PLACEHOLDER.invalid', // TODO(VPS): set real host at deploy
+  chainRpc: 'https://chain-rpc.PLACEHOLDER.invalid', // TODO(VPS): set real host at deploy
+  chainRest: 'https://chain-rest.PLACEHOLDER.invalid', // TODO(VPS): set real host at deploy
+  socialGraphUrl: 'https://social-graph.PLACEHOLDER.invalid', // TODO(VPS): set real host at deploy
+};
+
+function envBaseUrls(): EnvBaseUrls {
+  return resolveWevibeEnv() === 'production' ? PRODUCTION_BASE : LOCAL_BASE;
+}
+
+// Non-URL, mode-invariant defaults + the MCP sidecar (local in BOTH modes —
+// the dashboard's org crypto always talks to the leader's local MCP).
+const STATIC_DEFAULTS = {
+  mcpUrl: 'http://127.0.0.1:4450',
+  chainId: 'wevibe-local-1',
   bech32Prefix: 'wevibe',
   coinDenom: 'VIBE',
   coinMinDenom: 'uvibe',
-  environment: 'development',
 };
 
 export function readConfigFromEnv(): WevibeConfig {
+  const base = envBaseUrls();
   return {
-    hubUrl: process.env.WEVIBE_HUB_URL ?? DEFAULT_CONFIG.hubUrl,
-    mcpUrl: process.env.WEVIBE_MCP_URL ?? DEFAULT_CONFIG.mcpUrl,
-    chainId: process.env.WEVIBE_CHAIN_ID ?? DEFAULT_CONFIG.chainId,
-    chainRpc: process.env.WEVIBE_CHAIN_RPC ?? DEFAULT_CONFIG.chainRpc,
-    chainRest: process.env.WEVIBE_CHAIN_REST ?? DEFAULT_CONFIG.chainRest,
-    socialGraphUrl: process.env.WEVIBE_SOCIAL_GRAPH_URL ?? DEFAULT_CONFIG.socialGraphUrl,
-    bech32Prefix: process.env.WEVIBE_BECH32_PREFIX ?? DEFAULT_CONFIG.bech32Prefix,
-    coinDenom: process.env.WEVIBE_COIN_DENOM ?? DEFAULT_CONFIG.coinDenom,
-    coinMinDenom: process.env.WEVIBE_COIN_MIN_DENOM ?? DEFAULT_CONFIG.coinMinDenom,
-    environment: process.env.WEVIBE_ENV ?? DEFAULT_CONFIG.environment,
+    hubUrl: process.env.WEVIBE_HUB_URL ?? base.hubUrl,
+    mcpUrl: process.env.WEVIBE_MCP_URL ?? STATIC_DEFAULTS.mcpUrl,
+    chainId: process.env.WEVIBE_CHAIN_ID ?? STATIC_DEFAULTS.chainId,
+    chainRpc: process.env.WEVIBE_CHAIN_RPC ?? base.chainRpc,
+    chainRest: process.env.WEVIBE_CHAIN_REST ?? base.chainRest,
+    socialGraphUrl: process.env.WEVIBE_SOCIAL_GRAPH_URL ?? base.socialGraphUrl,
+    bech32Prefix: process.env.WEVIBE_BECH32_PREFIX ?? STATIC_DEFAULTS.bech32Prefix,
+    coinDenom: process.env.WEVIBE_COIN_DENOM ?? STATIC_DEFAULTS.coinDenom,
+    coinMinDenom: process.env.WEVIBE_COIN_MIN_DENOM ?? STATIC_DEFAULTS.coinMinDenom,
+    environment: resolveWevibeEnv(),
   };
 }
 

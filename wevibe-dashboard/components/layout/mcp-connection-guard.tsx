@@ -25,7 +25,7 @@ export default function McpConnectionGuard({ children }: { children: ReactNode }
         <p className="font-medium">No MCP session detected ({state}).</p>
         <p className="mt-2 text-sm text-wv-cyan">
           Open <Link href="/settings" className="font-medium text-wv-violet underline-offset-2 hover:underline">Settings</Link>{' '}
-          and connect to your local wevibe-mcp --dashboard server (http://localhost:4451).
+          and connect to your local wevibe-mcp --dashboard server (http://localhost:4450).
         </p>
       </div>
     );

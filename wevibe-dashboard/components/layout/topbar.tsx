@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { getBalance } from '@/lib/hub-client';
-import { ConnectionState, getMcpClient } from '@/lib/mcp-client';
+import { getConfig } from '@/lib/config';
+import { ConnectionState } from '@/lib/mcp-client';
 import { ConnectionErrorModal } from '@/components/diagnostics/connection-error-modal';
 import type { ClientErrorPayload, ConnectionError } from '@/lib/diagnostics-types';
 import { formatVibe } from '@/lib/format';
@@ -101,25 +102,44 @@ export default function Topbar() {
   };
 
   useEffect(() => {
-    const client = getMcpClient();
-    setState(client.state);
-    const unsubscribe = client.addStateListener(setState);
-    const unsubscribeErr = client.addErrorListener((err) => {
-      setConnectionError(err);
-      reportConnectionError(err);
-    });
+    let active = true;
+    const mcpHealthUrl = `${getConfig().mcpUrl.replace(/\/$/, '')}/v1/health`;
 
-    void client.connect().catch(() => {
-      const le = client.lastError;
-      if (le) {
-        setConnectionError(le);
-        reportConnectionError(le);
+    const probe = async () => {
+      let alive = false;
+      try {
+        const res = await fetch('/api/mcp-health', { cache: 'no-store' });
+        const data = (await res.json()) as { alive?: boolean };
+        alive = data.alive === true;
+      } catch {
+        alive = false;
       }
-    });
+      if (!active) return;
+      if (alive) {
+        setState('connected');
+        setConnectionError(null);
+        lastReportedConnectionMessageRef.current = null;
+      } else {
+        setState('error');
+        const err: ConnectionError = {
+          message: `MCP server unreachable at ${mcpHealthUrl} (connection refused / timed out)`,
+          url: mcpHealthUrl,
+          at: new Date().toISOString(),
+        };
+        setConnectionError(err);
+        reportConnectionError(err);
+      }
+    };
+
+    setState('connecting');
+    void probe();
+    const intervalId = window.setInterval(() => {
+      void probe();
+    }, 20_000);
 
     return () => {
-      unsubscribe();
-      unsubscribeErr();
+      active = false;
+      window.clearInterval(intervalId);
     };
   }, []);
 
