@@ -331,7 +331,8 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 
 			if err := w.processApproveMemoryBookkeeping(ctx, txHashHex, height, timestamp,
 				m.OrgId, m.ContentHash, keywords, contributorID, contributorWallet,
-				m.MemoryType.String(), m.EncryptedBlob, m.WrappedDekEnc); err != nil {
+				m.MemoryType.String(), m.EncryptedBlob, m.WrappedDekEnc,
+				m.McVersion); err != nil {
 				w.logger.Error("processApproveMemoryBookkeeping failed", "err", err, "org_id", m.OrgId)
 			}
 

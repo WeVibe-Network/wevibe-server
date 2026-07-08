@@ -174,7 +174,8 @@ CREATE TABLE IF NOT EXISTS pending_submissions (
     banned                  BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    resolved_at             TIMESTAMPTZ
+    resolved_at             TIMESTAMPTZ,
+    mc_version              INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_org_status ON pending_submissions(org_id, status);

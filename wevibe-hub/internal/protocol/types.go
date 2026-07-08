@@ -163,6 +163,7 @@ type SubmitMemoryRequest struct {
 	ContributorSig       string          `json:"contributor_sig"`
 	StackHint            []string        `json:"stack_hint"`
 	MemoryType           string          `json:"memory_type"`
+	McVersion            uint32          `json:"mc_version,omitempty"`
 	Keywords             json.RawMessage `json:"keywords,omitempty"`
 }
 
@@ -247,6 +248,7 @@ type ApproveRequest struct {
 	EmbeddingSchemaVersion string              `json:"embedding_schema_version,omitempty"`
 	VectorDim              int                 `json:"vector_dim,omitempty"`
 	MemoryType             string              `json:"memory_type"`
+	McVersion              uint32              `json:"mc_version,omitempty"`
 	ModeratorSig           string              `json:"moderator_sig"`
 	SignedBy               string              `json:"signed_by"`
 }
@@ -278,6 +280,7 @@ type QueryRequest struct {
 	IncludeDormant         bool                `json:"include_dormant,omitempty"`
 	RelevanceFloor         float64             `json:"relevance_floor,omitempty"`
 	SurfaceBudget          int                 `json:"surface_budget,omitempty"`
+	McVersion              int                 `json:"mc_version,omitempty"`
 }
 
 type MemoryResult struct {
@@ -371,6 +374,7 @@ type IndexEntry struct {
 	EmbeddingModelID       string              `json:"embedding_model_id,omitempty"`
 	EmbeddingSchemaVersion string              `json:"embedding_schema_version,omitempty"`
 	VectorDim              int                 `json:"vector_dim,omitempty"`
+	McVersion              uint32              `json:"mc_version,omitempty"`
 }
 
 type MemberOrgEntry struct {

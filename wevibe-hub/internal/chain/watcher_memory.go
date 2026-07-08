@@ -17,7 +17,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 )
 
-func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, contentHash []byte, keywords []string, contributorID string, contributorWallet string, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte) (retErr error) {
+func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, contentHash []byte, keywords []string, contributorID string, contributorWallet string, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte, mcVersion uint32) (retErr error) {
 	logger := w.logger.With("org_id", orgID, "tx_hash", txHash)
 
 	contentHashHex := hex.EncodeToString(contentHash)
@@ -109,6 +109,7 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		KeywordWeights: keywordWeights,
 		LifecycleState: "ACTIVE",
 		MemoryType:     memoryType,
+		McVersion:      mcVersion,
 	}
 
 	shouldUpsertVector := false

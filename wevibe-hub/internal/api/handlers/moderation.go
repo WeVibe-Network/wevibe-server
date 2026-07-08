@@ -949,6 +949,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 		SELECT ps.submission_hash, ps.contributor_pubkey, ps.ciphertext_hex, ps.wrapped_dek_mod,
 		       ps.plaintext_hash, ps.salt, ps.ciphertext_hash, ps.contributor_sig,
 		       ps.memory_type, ps.extraction_result, ps.preference_confidence,
+		       ps.mc_version,
 		       COALESCE(m.wallet_address, '') AS contributor_wallet
 		FROM pending_submissions ps
 		JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
@@ -969,6 +970,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 		Keywords             []string `json:"keywords"`
 		MemoryType           string   `json:"memory_type"`
 		PreferenceConfidence float64  `json:"preference_confidence"`
+		McVersion            uint32   `json:"mc_version"`
 		PlaintextHash        string   `json:"plaintext_hash"`
 		Salt                 string   `json:"salt"`
 		CiphertextHash       string   `json:"ciphertext_hash"`
@@ -1002,6 +1004,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var hash, contributor, ciphertext, wrappedDekMod, plaintextHash string
 		var salt, ciphertextHash, contributorSig, memoryType, walletAddress string
+		var mcVersion uint32
 		var extractionResult []byte
 		var preferenceConfidence float64
 		if err := rows.Scan(
@@ -1016,6 +1019,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 			&memoryType,
 			&extractionResult,
 			&preferenceConfidence,
+			&mcVersion,
 			&walletAddress,
 		); err != nil {
 			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -1146,6 +1150,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 			Keywords:             keywords,
 			MemoryType:           memoryType,
 			PreferenceConfidence: preferenceConfidence,
+			McVersion:            mcVersion,
 			PlaintextHash:        plaintextHash,
 			Salt:                 salt,
 			CiphertextHash:       ciphertextHash,

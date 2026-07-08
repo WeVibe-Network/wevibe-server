@@ -2,120 +2,12 @@ package chain
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
-	"strings"
 
 	"github.com/cosmos/cosmos-sdk/types"
 	"github.com/jackc/pgx/v5/pgxpool"
-	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
-
-type BatchMemory struct {
-	ContentHash         []byte
-	PlaintextHash       []byte
-	Salt                []byte
-	CiphertextHash      []byte
-	ContributorSig      []byte
-	ContributorPubkey   string
-	Approvers           []string
-	CommittingLeader    string
-	Keywords            []*memorytypes.KeywordWeight
-	ContributorID       string
-	ContributorWallet   string
-	EncryptedBlob       []byte
-	WrappedDekEnc       []byte
-	SubmittedMemoryType string
-	ApprovedMemoryType  string
-}
-
-func mapMemoryTypeToChainEnum(memoryType string) (memorytypes.MemoryType, error) {
-	switch memoryType {
-	case protocol.MemoryTypeMemory:
-		return memorytypes.MemoryType_MEMORY_TYPE_MEMORY, nil
-	default:
-		return memorytypes.MemoryType_MEMORY_TYPE_UNSPECIFIED, fmt.Errorf("invalid memory_type: %s", memoryType)
-	}
-}
-
-func (c *GrpcClient) SubmitMemoryBatchAtomic(ctx context.Context, db *pgxpool.Pool, faucetURL, orgID string, memories []BatchMemory) (string, []string, error) {
-	if len(memories) == 0 {
-		return "", nil, nil
-	}
-
-	var allMsgs []types.Msg
-	submissionHashes := make([]string, 0, len(memories))
-
-	for _, mem := range memories {
-		if len(mem.ContentHash) != 32 {
-			return "", nil, fmt.Errorf("content_hash must be 32 bytes, got %d", len(mem.ContentHash))
-		}
-		if len(mem.EncryptedBlob) == 0 {
-			return "", nil, fmt.Errorf("encrypted_blob cannot be empty")
-		}
-		if strings.TrimSpace(mem.ContributorWallet) == "" {
-			return "", nil, fmt.Errorf("contributor_wallet cannot be empty")
-		}
-		if !protocol.IsValidMemoryType(mem.SubmittedMemoryType) {
-			return "", nil, fmt.Errorf("invalid submitted memory_type: %s", mem.SubmittedMemoryType)
-		}
-		if !protocol.IsValidMemoryType(mem.ApprovedMemoryType) {
-			return "", nil, fmt.Errorf("invalid approved memory_type: %s", mem.ApprovedMemoryType)
-		}
-
-		submittedMemoryType, err := mapMemoryTypeToChainEnum(mem.SubmittedMemoryType)
-		if err != nil {
-			return "", nil, err
-		}
-		approvedMemoryType, err := mapMemoryTypeToChainEnum(mem.ApprovedMemoryType)
-		if err != nil {
-			return "", nil, err
-		}
-
-		msgCommit := buildSubmitCommitmentMsg("", orgID, mem, submittedMemoryType)
-
-		msgApprove := &memorytypes.MsgApproveMemory{
-			Signer:           "",
-			OrgId:            orgID,
-			ContentHash:      mem.ContentHash,
-			EncryptedBlob:    mem.EncryptedBlob,
-			CommittingLeader: mem.CommittingLeader,
-			WrappedDekEnc:    mem.WrappedDekEnc,
-			PlaintextHash:    mem.PlaintextHash,
-			Salt:             mem.Salt,
-			CiphertextHash:   mem.CiphertextHash,
-			ContributorSig:   mem.ContributorSig,
-			MemoryType:       approvedMemoryType,
-		}
-
-		allMsgs = append(allMsgs, msgCommit, msgApprove)
-		submissionHashes = append(submissionHashes, hex.EncodeToString(mem.ContentHash))
-	}
-
-	txResponse, err := c.BroadcastMsgsForOrgServing(ctx, db, faucetURL, orgID, allMsgs...)
-	if err != nil {
-		return "", nil, fmt.Errorf("broadcast: %w", err)
-	}
-	if txResponse == nil {
-		return "", nil, fmt.Errorf("broadcast: missing tx response")
-	}
-
-	return txResponse.TxHash, submissionHashes, nil
-}
-
-func buildSubmitCommitmentMsg(signer, orgID string, mem BatchMemory, submittedMemoryType memorytypes.MemoryType) *memorytypes.MsgSubmitCommitment {
-	return &memorytypes.MsgSubmitCommitment{
-		Signer:            signer,
-		OrgId:             orgID,
-		ContentHash:       mem.ContentHash,
-		Keywords:          mem.Keywords,
-		ContributorId:     mem.ContributorID,
-		ContributorWallet: mem.ContributorWallet,
-		MemoryType:        submittedMemoryType,
-	}
-}
 
 type ServeEntryInput struct {
 	MemoryContentHash []byte

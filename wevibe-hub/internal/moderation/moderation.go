@@ -114,16 +114,16 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 	}
 
 	_, err = pool.Exec(ctx, `
-		INSERT INTO pending_submissions
-			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex,
-			 plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash,
-			 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings, extraction_result, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)
-	`,
+			INSERT INTO pending_submissions
+				(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex,
+				 plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash,
+				 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings, extraction_result, status, mc_version)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, $19)
+		`,
 		req.SubmissionHash, req.OrgID, req.EpochID, req.ContributorPubkey,
 		req.Ciphertext, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash,
 		req.WrappedDekMod, req.ContributorSig, req.StackHint, req.MemoryType,
-		preferenceConfidence, derivation, sanitizationFindings, extractionResult, protocol.SubmissionStatusPendingKeyword,
+		preferenceConfidence, derivation, sanitizationFindings, extractionResult, protocol.SubmissionStatusPendingKeyword, req.McVersion,
 	)
 	if err != nil {
 		return err

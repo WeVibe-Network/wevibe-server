@@ -262,43 +262,99 @@ func (c *QdrantClient) EnsureCollection(ctx context.Context, orgID string, vecto
 	}
 	defer resp.Body.Close()
 
+	collectionEnsured := false
 	if resp.StatusCode == http.StatusOK {
 		var result map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil {
-			return nil
+			collectionEnsured = true
 		}
 	}
 
-	createReq := map[string]any{
-		"vectors": map[string]any{
-			"size":     vectorSize,
-			"distance": "Cosine",
-		},
+	if !collectionEnsured {
+		createReq := map[string]any{
+			"vectors": map[string]any{
+				"size":     vectorSize,
+				"distance": "Cosine",
+			},
+		}
+
+		reqBody, err := json.Marshal(createReq)
+		if err != nil {
+			return fmt.Errorf("marshal create request: %w", err)
+		}
+
+		url = fmt.Sprintf("%s/collections/%s", c.restURL, OrgCollectionName(orgID))
+		req, err = c.newRequest(ctx, "PUT", url, reqBody)
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+
+		resp, err = client.Do(req)
+		if err != nil {
+			return fmt.Errorf("create collection: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			var errResp map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
+				return fmt.Errorf("create collection failed: %v", errResp)
+			}
+			return fmt.Errorf("create collection failed with status %d", resp.StatusCode)
+		}
 	}
 
-	reqBody, err := json.Marshal(createReq)
-	if err != nil {
-		return fmt.Errorf("marshal create request: %w", err)
+	if err := c.ensureCollectionPayloadIndexes(ctx, orgID, client); err != nil {
+		return err
 	}
 
-	url = fmt.Sprintf("%s/collections/%s", c.restURL, OrgCollectionName(orgID))
-	req, err = c.newRequest(ctx, "PUT", url, reqBody)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
+	return nil
+}
 
-	resp, err = client.Do(req)
-	if err != nil {
-		return fmt.Errorf("create collection: %w", err)
-	}
-	defer resp.Body.Close()
+func (c *QdrantClient) ensureCollectionPayloadIndexes(ctx context.Context, orgID string, client *http.Client) error {
+	collectionName := OrgCollectionName(orgID)
+	url := fmt.Sprintf("%s/collections/%s/index", c.restURL, collectionName)
+	payloadIndexFields := []string{"org_id", "language", "superseded_by"}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	for _, fieldName := range payloadIndexFields {
+		indexReq := map[string]any{
+			"field_name":   fieldName,
+			"field_schema": "keyword",
+		}
+		reqBody, err := json.Marshal(indexReq)
+		if err != nil {
+			return fmt.Errorf("marshal payload index request: %w", err)
+		}
+
+		req, err := c.newRequest(ctx, "PUT", url, reqBody)
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("create payload index for %s: %w", fieldName, err)
+		}
+
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("read payload index response for %s: %w", fieldName, readErr)
+		}
+
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+			continue
+		}
+
+		if strings.Contains(strings.ToLower(string(respBody)), "already exists") {
+			continue
+		}
+
 		var errResp map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
-			return fmt.Errorf("create collection failed: %v", errResp)
+		if err := json.Unmarshal(respBody, &errResp); err == nil {
+			return fmt.Errorf("create payload index failed for %s: %v", fieldName, errResp)
 		}
-		return fmt.Errorf("create collection failed with status %d", resp.StatusCode)
+		return fmt.Errorf("create payload index failed for %s with status %d", fieldName, resp.StatusCode)
 	}
 
 	return nil
@@ -670,7 +726,10 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 	allScoredResults := append([]scoredResult(nil), scoredResults...)
 
-	// D-RECALL-GOVERNOR: optional floor + budget before final sampling.
+	// D-RECALL-GOVERNOR: relevance floor gate. Gates the COMBINED score
+	// (canon MATCHING_ENGINE.md "Absolute relevance floor"). Per-request
+	// configurable via relevanceFloor; below-floor => dropped (zero-injection is valid).
+	// nomic-768 tau VALUE is a post-reseed calibration sweep (Walter-ratified) — NOT hardcoded here.
 	if relevanceFloor > 0 {
 		filteredResults := make([]scoredResult, 0, len(scoredResults))
 		for _, sr := range scoredResults {
