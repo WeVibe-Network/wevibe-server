@@ -146,6 +146,7 @@ export function buildSubmitCommitmentMsg(
   contributorId: string,
   contributorWallet: string,
   memoryType: string,
+  mcVersion: number,
 ): EncodeObject {
   const fields: number[] = [
     ...encodeStringField(0x0a, signer),
@@ -166,6 +167,8 @@ export function buildSubmitCommitmentMsg(
     ...encodeStringField(0x32, contributorWallet),
     ...encodeVarint(0x38),
     ...encodeVarint(mapMemoryType(memoryType)),
+    ...encodeVarint(0x50),
+    ...encodeVarint(mcVersion),
   );
 
   return {
@@ -186,6 +189,7 @@ export function buildApproveMemoryMsg(
   ciphertextHash: Uint8Array,
   contributorSig: Uint8Array,
   memoryType: string,
+  mcVersion: number,
 ): EncodeObject {
   const fields: number[] = [
     ...encodeStringField(0x0a, signer),
@@ -200,6 +204,8 @@ export function buildApproveMemoryMsg(
     ...encodeBytesFieldFromBytes(0x52, salt),
     ...encodeBytesFieldFromBytes(0x5a, ciphertextHash),
     ...encodeBytesFieldFromBytes(0x62, contributorSig),
+    ...encodeVarint(0x78),
+    ...encodeVarint(mcVersion),
   ];
 
   return {

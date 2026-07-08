@@ -881,6 +881,7 @@ export interface PreparedBatchMemory {
   committing_leader: string;
   keywords: string[];
   memory_type: MemoryType;
+  mc_version: number;
   preference_confidence: number;
   plaintext_hash: string;
   salt: string;

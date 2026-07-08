@@ -3,10 +3,9 @@
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { getBalance } from '@/lib/hub-client';
-import { getConfig } from '@/lib/config';
-import { ConnectionState } from '@/lib/mcp-client';
+import { getMcpHttpUrl } from '@/lib/config';
 import { ConnectionErrorModal } from '@/components/diagnostics/connection-error-modal';
-import type { ClientErrorPayload, ConnectionError } from '@/lib/diagnostics-types';
+import type { ClientErrorPayload, ConnectionError, ConnectionState } from '@/lib/diagnostics-types';
 import { formatVibe } from '@/lib/format';
 import { useIdentity } from '@/lib/identity-context';
 import { clearWalletAddress, setWalletAddress } from '@/lib/wevibe-auth';
@@ -103,7 +102,7 @@ export default function Topbar() {
 
   useEffect(() => {
     let active = true;
-    const mcpHealthUrl = `${getConfig().mcpUrl.replace(/\/$/, '')}/v1/health`;
+    const mcpHealthUrl = `${getMcpHttpUrl().replace(/\/$/, '')}/v1/health`;
 
     const probe = async () => {
       let alive = false;

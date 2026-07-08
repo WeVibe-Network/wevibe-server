@@ -258,6 +258,7 @@ export default function MemoryReview({
             memoryType: memory.memory_type,
             preferenceConfidence: memory.preference_confidence,
             keywords: memory.keywords ?? EMPTY_MEMORY_KEYWORDS,
+            mc_version: memory.mc_version,
             derivation,
             modPubkeyHex: modPubkey || '',
             hubUrl,

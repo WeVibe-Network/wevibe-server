@@ -24,7 +24,7 @@ import {
   displayWeight,
 } from '@/lib/keyword-weights';
 import { requestProvisionRecall } from '@/lib/org-bridge';
-import { getMcpClient, ConnectionState } from '@/lib/mcp-client';
+import { callMcpTool, MCP_ROUTES, useMcpRestState } from '@/lib/mcp-rest';
 import {
   buildApproveMemoryMsg,
   buildSetMemberCapabilitiesMsg,
@@ -44,7 +44,6 @@ import {
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
 import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
-import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
 import { useOrgContext } from '@/lib/org-context';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { toast } from 'sonner';
@@ -296,7 +295,7 @@ export function LeaderPipelinePanel() {
   const [loadDiagnostics, setLoadDiagnostics] = useState<LoadDiagnostic[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [clientState, setClientState] = useState<ConnectionState>('disconnected');
+  const clientState = useMcpRestState();
   const [txResult, setTxResult] = useState<{ tx_hash: string; committed_count: number } | null>(null);
   const [orgVocabulary, setOrgVocabulary] = useState<Set<string>>(new Set());
   const [keywordCandidates, setKeywordCandidates] = useState<Map<string, KeywordCandidate>>(new Map());
@@ -485,7 +484,7 @@ export function LeaderPipelinePanel() {
       const plaintextByHash = new Map<string, string | null>();
       if (decryptItems.length > 0) {
         try {
-          const decrypted = await getMcpClient().callTool<DecryptBatchItem[]>('wevibe_decrypt_batch', {
+          const decrypted = await callMcpTool<DecryptBatchItem[]>(MCP_ROUTES.decryptBatch, {
             items: decryptItems,
           });
           for (const item of decrypted) {
@@ -524,11 +523,6 @@ export function LeaderPipelinePanel() {
       setLoading(false);
     }
   }, [orgId]);
-
-  useEffect(() => {
-    setClientState(getMcpClient().state);
-    getMcpClient().addStateListener(setClientState);
-  }, []);
 
   useEffect(() => {
     if (clientState === 'connected') {
@@ -573,8 +567,7 @@ export function LeaderPipelinePanel() {
 
     if (awaitingSubmissions.length === 0) return;
 
-    const client = getMcpClient();
-    if (client.state !== 'connected') {
+    if (clientState !== 'connected') {
       toast.error('Connect to the MCP server to verify keywords.');
       return;
     }
@@ -624,7 +617,7 @@ export function LeaderPipelinePanel() {
 
     enqueueVerificationBatch(batchInputs);
     resumeVerifyQueue();
-  }, [reviewKeywords, deselectedKeywords, orgId, verifyQueue.inFlightHashes]);
+  }, [reviewKeywords, deselectedKeywords, orgId, verifyQueue.inFlightHashes, clientState]);
 
   const handleDenyFinal = useCallback(async (hash: string, reason = 'rejected') => {
     if (!orgId) return;
@@ -754,6 +747,7 @@ export function LeaderPipelinePanel() {
           entry.contributor_pubkey,
           entry.contributor_wallet,
           entry.memory_type,
+          entry.mc_version ?? 0,
         );
         const approval = buildApproveMemoryMsg(
           walletAddress,
@@ -767,6 +761,7 @@ export function LeaderPipelinePanel() {
           hexToBytes(entry.ciphertext_hash),
           hexToBytes(entry.contributor_sig),
           entry.memory_type,
+          entry.mc_version ?? 0,
         );
         return [commitment, approval];
       });
@@ -899,13 +894,10 @@ export function LeaderPipelinePanel() {
           </p>
         </header>
         <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
-          <p className="font-medium">No MCP session detected ({clientState}).</p>
+          <p className="font-medium">MCP server unreachable ({clientState}).</p>
           <p className="mt-2">
-            Open <a href="/settings" className="font-medium text-wv-amber underline-offset-2 hover:underline">Settings</a> and connect to your running `wevibe-mcp --dashboard` server.
+            The local MCP server on <span className="font-mono">:4450</span> must be running.
           </p>
-          <div className="mt-4">
-            <DashboardServerControls variant="inline" />
-          </div>
         </div>
       </div>
     );

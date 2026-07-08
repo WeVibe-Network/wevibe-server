@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
 import { DiagnosticsErrorList, formatTimestamp, toEpoch } from '@/components/diagnostics/error-list';
 import { useDiagnosticsClear } from '@/components/diagnostics/use-diagnostics-clear';
 import type { ConnectionError, DiagnosticEntry, DiagnosticsResponse } from '@/lib/diagnostics-types';
@@ -195,11 +194,6 @@ export function ConnectionErrorModal({ open, onClose, connectionError }: Connect
           ) : (
             <p className="text-sm text-wv-dim">No active connection errors.</p>
           )}
-
-          <div className="rounded-md border border-wv-line bg-wv-panel-2 p-4">
-            <h3 className="text-sm font-semibold text-wv-text">Dashboard Server (:4451)</h3>
-            <DashboardServerControls variant="inline" onConnected={onClose} className="mt-3" />
-          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-wv-text">Recent aggregated errors</h3>

@@ -181,6 +181,12 @@ export function normalizeMemoryCandidate(value: unknown): MemoryCandidate | null
   }
 
   const nearDup = normalizeNearDup(value.near_dup);
+  const mc1 = isRecord(value.mc1) ? value.mc1 : undefined;
+  const mcVersion = typeof mc1?.mc_version === 'number' && Number.isFinite(mc1.mc_version)
+    ? mc1.mc_version
+    : typeof value.mc_version === 'number' && Number.isFinite(value.mc_version)
+      ? value.mc_version
+      : undefined;
 
   return {
     implement,
@@ -192,5 +198,6 @@ export function normalizeMemoryCandidate(value: unknown): MemoryCandidate | null
     extraction_hash: extractionHash,
     ...(nearDup ? { near_dup: nearDup } : {}),
     keywords: normalizeKeywords(value.keywords),
+    ...(mcVersion !== undefined ? { mc_version: mcVersion } : {}),
   };
 }

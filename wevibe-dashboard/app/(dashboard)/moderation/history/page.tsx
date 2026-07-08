@@ -1,10 +1,9 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import ClientTime from '@/components/ui/client-time';
-import { ConnectionState, WeVibeMcpClient, getMcpClient } from '@/lib/mcp-client';
+import { callMcpTool, MCP_ROUTES, useMcpRestState } from '@/lib/mcp-rest';
 
 type HistoryItem = {
   submission_hash: string;
@@ -30,45 +29,25 @@ function truncateValue(value: string | null, keep = 16): string {
 }
 
 export default function ModerationHistoryPage() {
-  const [clientState, setClientState] = useState<ConnectionState>('disconnected');
+  const clientState = useMcpRestState();
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const clientRef = useRef<WeVibeMcpClient | null>(null);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
-
-  const attachClient = useCallback(() => {
-    const client = getMcpClient();
-    clientRef.current = client;
-    setClientState(client.state);
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = client.addStateListener(setClientState);
-  }, []);
-
-  useEffect(() => {
-    attachClient();
-    return () => {
-      unsubscribeRef.current?.();
-      unsubscribeRef.current = null;
-    };
-  }, [attachClient]);
-
   const loadHistory = useCallback(async () => {
-    const client = clientRef.current;
-    if (!client || client.state !== 'connected') {
+    if (clientState !== 'connected') {
       return;
     }
 
     setLoading(true);
     try {
-      const loadedItems = await client.callTool<HistoryItem[]>('wevibe_mod_history');
+      const loadedItems = await callMcpTool<HistoryItem[]>(MCP_ROUTES.history, {});
       setItems(loadedItems ?? []);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clientState]);
 
   const hasLoadedRef = useRef(false);
 
@@ -92,9 +71,7 @@ export default function ModerationHistoryPage() {
         </header>
         <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
           <p className="font-medium">No MCP session detected ({clientState}).</p>
-          <p className="mt-2">
-            Open <Link href="/settings" className="font-medium text-wv-amber underline-offset-2 hover:underline">Settings</Link> and connect to your running `wevibe-mcp --dashboard` server. Once connected, return here to moderate submissions.
-          </p>
+          <p className="mt-2">Make sure the MCP server at :4450 is reachable from this dashboard, then refresh this page.</p>
         </div>
       </div>
     );

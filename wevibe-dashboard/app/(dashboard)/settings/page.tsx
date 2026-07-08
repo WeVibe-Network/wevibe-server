@@ -1,15 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
 import { NotificationPreferencesSection } from '@/components/notifications/notification-preferences-section';
 import { PairPlugin } from '@/components/pairing/pair-plugin';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
 import Toggle from '@/components/ui/toggle';
 import InfoTooltip from '@/components/ui/tooltip';
-import { getConfig } from '@/lib/config';
 import { useIdentity } from '@/lib/identity-context';
-import { resetMcpClient } from '@/lib/mcp-client';
 import type { DashboardSettings } from '@/lib/settings';
 import { DASHBOARD_SETTINGS_DEFAULTS } from '@/lib/settings-defaults';
 import { txError, txSuccess, txToast } from '@/lib/toast';
@@ -79,13 +76,11 @@ export default function SettingsPage() {
   const [disconnectingWallet, setDisconnectingWallet] = useState(false);
   const [walletActionError, setWalletActionError] = useState<string | null>(null);
 
-  const [mcpUrl, setMcpUrl] = useState(() => getConfig().mcpUrl);
   const [settings, setSettings] = useState<DashboardSettings | null>(null);
   const [persistedSettings, setPersistedSettings] = useState<DashboardSettings | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [localSaveMessage, setLocalSaveMessage] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<CertifiedReadiness | null>(null);
   const [readinessChecking, setReadinessChecking] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
@@ -169,11 +164,6 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const savedUrl = window.localStorage.getItem('wevibe-mcp-url') ?? getConfig().mcpUrl;
-      setMcpUrl(savedUrl);
-    }
-
     let cancelled = false;
     setSettingsLoading(true);
     setSettingsError(null);
@@ -402,15 +392,6 @@ export default function SettingsPage() {
   }, [refresh]);
 
   const handleSaveAppAndModelSettings = useCallback(async () => {
-    const normalizedMcpUrl = mcpUrl.trim() || getConfig().mcpUrl;
-
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('wevibe-mcp-url', normalizedMcpUrl);
-      void resetMcpClient(normalizedMcpUrl).connect().catch(() => {});
-    }
-    setMcpUrl(normalizedMcpUrl);
-    setLocalSaveMessage('MCP URL saved on this device.');
-
     if (!settings) {
       return;
     }
@@ -449,7 +430,7 @@ export default function SettingsPage() {
     } finally {
       setSettingsSaving(false);
     }
-  }, [mcpUrl, runReadinessCheck, settings]);
+  }, [runReadinessCheck, settings]);
 
   const handleRiskAppetiteChange = useCallback(async (nextValue: RiskAppetite) => {
     const previousValue = riskAppetite;
@@ -522,14 +503,6 @@ export default function SettingsPage() {
       </header>
 
       <div className="space-y-6">
-        <section className="rounded-xl border border-wv-line bg-wv-panel p-6 shadow-wv-sm">
-          <h2 className="text-lg font-semibold text-wv-text">Dashboard Server (:4451)</h2>
-          <p className="mt-1 text-sm text-wv-dim">
-            Manage the local encrypt/moderation/decrypt server used by this dashboard instance.
-          </p>
-          <DashboardServerControls variant="full" />
-        </section>
-
         <div className="rounded-xl border border-wv-line bg-wv-panel p-6">
           <div className="flex items-start justify-between gap-3">
             <h3 className="text-lg font-semibold text-wv-text">Wallet</h3>
@@ -590,29 +563,11 @@ export default function SettingsPage() {
           <div className="flex items-start justify-between gap-3">
             <h3 className="text-lg font-semibold text-wv-text">Extraction Model</h3>
             <InfoTooltip label="App & Model settings">
-              Local app preferences: your MCP server URL and the language model used for extraction. Stored on this device.
+              Local app preferences: the language model used for extraction. Stored on this device.
             </InfoTooltip>
           </div>
 
           <div className="mt-4 space-y-4">
-            <div>
-              <label htmlFor="profile-mcp-url" className="block text-sm font-medium text-wv-text">
-                MCP Server URL
-              </label>
-              <input
-                id="profile-mcp-url"
-                type="url"
-                value={mcpUrl}
-                onChange={event => {
-                  setMcpUrl(event.target.value);
-                  setLocalSaveMessage(null);
-                }}
-                placeholder={getConfig().mcpUrl}
-                className="mt-2 w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text shadow-wv-sm placeholder:text-wv-faint focus:border-wv-violet focus:outline-none focus:ring-2 focus:ring-[rgba(124,92,255,0.22)]"
-              />
-              <p className="mt-2 text-xs text-wv-dim">Used by this browser only.</p>
-            </div>
-
             {settingsLoading ? (
               <p className="text-xs text-wv-dim">Loading model settings…</p>
             ) : settings ? (
@@ -862,10 +817,6 @@ export default function SettingsPage() {
               <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-3 py-2 text-sm text-wv-red">
                 {settingsError}
               </div>
-            ) : null}
-
-            {localSaveMessage ? (
-              <p className="text-xs text-wv-green">{localSaveMessage}</p>
             ) : null}
 
             {isSettingsDirty ? (

@@ -1,9 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ConnectionState, WeVibeMcpClient, getMcpClient } from '@/lib/mcp-client';
+import { callMcpTool, MCP_ROUTES, useMcpRestState } from '@/lib/mcp-rest';
 import {
   voteKeyword,
   voteSubmission,
@@ -11,7 +10,6 @@ import {
 } from '@/lib/hub-client';
 import ClientTime from '@/components/ui/client-time';
 import { PreferenceScoreCard } from '@/components/memory/preference-score-card';
-import { DashboardServerControls } from '@/components/backend/dashboard-server-controls';
 import { useOrgContext } from '@/lib/org-context';
 import { normalizeKeywordWeights, displayWeight } from '@/lib/keyword-weights';
 
@@ -130,40 +128,20 @@ export function ModeratorReviewPanel() {
   const { activeOrg } = useOrgContext();
   const orgId = activeOrg?.org_id ?? '';
 
-  const [clientState, setClientState] = useState<ConnectionState>('disconnected');
+  const clientState = useMcpRestState();
   const [items, setItems] = useState<QueueItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const clientRef = useRef<WeVibeMcpClient | null>(null);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
-
-  const attachClient = useCallback(() => {
-    const client = getMcpClient();
-    clientRef.current = client;
-    setClientState(client.state);
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = client.addStateListener(setClientState);
-  }, []);
-
-  useEffect(() => {
-    attachClient();
-    return () => {
-      unsubscribeRef.current?.();
-      unsubscribeRef.current = null;
-    };
-  }, [attachClient]);
-
   const loadQueue = useCallback(async () => {
-    const client = clientRef.current;
-    if (!orgId || !client || client.state !== 'connected') {
+    if (!orgId || clientState !== 'connected') {
       return;
     }
 
     setLoading(true);
 
     try {
-      const queue = await client.callTool<QueueItem[]>('wevibe_mod_queue', { org_id: orgId });
+      const queue = await callMcpTool<QueueItem[]>(MCP_ROUTES.queue, { org_id: orgId });
       const loadedQueue = queue ?? [];
       setItems(loadedQueue);
     } catch (err) {
@@ -171,7 +149,7 @@ export function ModeratorReviewPanel() {
     } finally {
       setLoading(false);
     }
-  }, [orgId]);
+  }, [clientState, orgId]);
 
   const hasLoadedRef = useRef(false);
 
@@ -192,9 +170,8 @@ export function ModeratorReviewPanel() {
     }
 
     const id = toast.loading(vote === 'approve' ? 'Recording approve vote…' : 'Recording flag vote…');
-    const client = clientRef.current;
-    if (!client || client.state !== 'connected') {
-      toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
+    if (clientState !== 'connected') {
+      toast.error('Connect to the dashboard MCP server before moderating.', { id });
       return;
     }
 
@@ -212,7 +189,7 @@ export function ModeratorReviewPanel() {
     } finally {
       setBusy(null);
     }
-  }, [loadQueue, orgId]);
+  }, [clientState, loadQueue, orgId]);
 
   const voteOnKeyword = useCallback(async (
     hash: string,
@@ -224,9 +201,8 @@ export function ModeratorReviewPanel() {
     }
 
     const id = toast.loading(vote === 'include' ? 'Recording include vote…' : 'Recording exclude vote…');
-    const client = clientRef.current;
-    if (!client || client.state !== 'connected') {
-      toast.error('Connect to the dashboard MCP server in Settings before moderating.', { id });
+    if (clientState !== 'connected') {
+      toast.error('Connect to the dashboard MCP server before moderating.', { id });
       return;
     }
 
@@ -244,7 +220,7 @@ export function ModeratorReviewPanel() {
     } finally {
       setBusy(null);
     }
-  }, [loadQueue, orgId]);
+  }, [clientState, loadQueue, orgId]);
 
   if (!activeOrg) {
     return (
@@ -268,17 +244,14 @@ export function ModeratorReviewPanel() {
         <header className="flex flex-col gap-2">
           <h1 className="text-3xl font-semibold tracking-tight">Awaiting approval</h1>
           <p className="text-sm text-wv-dim">
-            Connect to the dashboard MCP server to review pending submissions. Configure the connection under Settings.
+            The moderation queue requires a reachable MCP server.
           </p>
         </header>
         <div className="rounded-xl border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] p-6 text-sm text-wv-amber">
-          <p className="font-medium">No MCP session detected ({clientState}).</p>
+          <p className="font-medium">MCP server unreachable ({clientState}).</p>
           <p className="mt-2">
-            Open <Link href="/settings" className="font-medium text-wv-amber underline-offset-2 hover:underline">Settings</Link> and connect to your running `wevibe-mcp --dashboard` server. Once connected, return here to moderate submissions.
+            Start the dashboard MCP server on <span className="font-mono">:4450</span>, then refresh this panel.
           </p>
-          <div className="mt-4">
-            <DashboardServerControls variant="inline" />
-          </div>
         </div>
       </div>
     );

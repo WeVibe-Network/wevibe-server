@@ -108,15 +108,17 @@ export interface ClientErrorPayload {
   /** Page URL where the error occurred (query string stripped). */
   url?: string;
   /**
-   * How it was caught. 'connection' = an MCP/SSE transport failure captured by
-   * the mcp-client (which never fires window.onerror), surfaced by the topbar.
+   * How it was caught. 'connection' = an MCP REST transport failure captured by
+   * the topbar health probe (these failures never fire window.onerror).
    */
   kind: 'onerror' | 'unhandledrejection' | 'boundary' | 'connection';
 }
 
+export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
+
 /**
- * A captured live connection (MCP/SSE transport) error. Retained on the mcp
- * client and surfaced by the topbar indicator + connection-error modal so the
+ * A captured live MCP transport error. Captured by the topbar /api/mcp-health
+ * probe and surfaced by the topbar indicator + connection-error modal so the
  * exact failing URL is copyable in-app instead of buried in the browser network
  * console. Stated truthfully (R-36): the URL + an honest "unreachable" message
  * (+ optional /health probe result) — NOT a fabricated browser network string.
@@ -124,7 +126,7 @@ export interface ClientErrorPayload {
 export interface ConnectionError {
   /** Human-readable, honest detail including the failing URL. */
   message: string;
-  /** The exact URL that failed (e.g. http://127.0.0.1:4450/sse). */
+  /** The exact URL that failed (e.g. http://127.0.0.1:4450/v1/health). */
   url: string;
   /** ISO-8601 timestamp when the error was captured. */
   at: string;

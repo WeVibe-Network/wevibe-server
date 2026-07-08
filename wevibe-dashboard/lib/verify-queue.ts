@@ -10,7 +10,7 @@ import {
   verifyKeywords,
 } from './hub-client';
 import { renormalizeFromBase } from './keyword-weights';
-import { getMcpClient } from './mcp-client';
+import { callMcpTool, getMcpRestState, MCP_ROUTES } from './mcp-rest';
 
 export interface VerificationJobInput {
   orgId: string;
@@ -845,7 +845,7 @@ async function runJob(job: VerificationJob): Promise<void> {
 
     refreshProgressToast();
 
-    const embedBatch = await getMcpClient().callTool<EmbedResult[]>('wevibe_embed_retrieval_card', {
+    const embedBatch = await callMcpTool<EmbedResult[]>(MCP_ROUTES.embedRetrievalCard, {
       org_id: job.orgId,
       items: [{
         id: job.submissionHash,
@@ -922,7 +922,7 @@ function processNext(): void {
     return;
   }
 
-  if (getMcpClient().state !== 'connected') {
+  if (getMcpRestState() !== 'connected') {
     return;
   }
 

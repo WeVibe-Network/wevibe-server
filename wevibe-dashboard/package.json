@@ -8,10 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
-    "test:mcp": "tsx e2e/mcp-tools.test.ts",
     "test:e2e": "playwright test --reporter=list",
     "test:e2e:headed": "playwright test --headed",
-    "test:all": "npm run test:mcp && npm run test:e2e"
+    "test:all": "npm run test:e2e"
   },
   "dependencies": {
     "@cosmjs/amino": "0.39.0",

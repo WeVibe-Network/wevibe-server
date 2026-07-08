@@ -49,4 +49,5 @@ export interface MemoryCandidate {
   extraction_hash: string;
   near_dup?: NearDupFlag;
   keywords?: MemoryCandidateKeywords;
+  mc_version?: number;
 }

@@ -1,21 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import Badge from '@/components/ui/badge';
 import Button from '@/components/ui/button';
 import Chip from '@/components/ui/chip';
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
+import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
 import Spinner from '@/components/ui/spinner';
 import type {
   SessionSummary,
   SessionDetail,
 } from '@/lib/session-types';
 import { getIdentity } from '@/lib/wevibe-auth';
-import { enqueueExtraction, useExtractionQueue } from '@/lib/extraction-queue';
+import { enqueueExtraction, resumeParkedJob, useExtractionQueue } from '@/lib/extraction-queue';
 import {
   getHubInstanceId,
   listExtractedSessions,
@@ -52,6 +53,16 @@ interface CertifiedReadiness {
   transient: boolean;
 }
 
+interface OpenRouterModelListResponse {
+  models?: unknown;
+  error?: unknown;
+}
+
+interface OllamaModelListResponse {
+  models?: unknown;
+  error?: unknown;
+}
+
 const DEFAULT_LLM_SETTINGS: LlmSettingsSnapshot = {
   llm_provider: 'ollama',
 };
@@ -72,8 +83,10 @@ function extractionEtaText(provider: 'ollama' | 'openrouter' | 'lm_studio'): str
   return provider === 'openrouter' ? '~5–20s' : '~30–90s';
 }
 
-export default function SessionsPage() {
+function SessionsPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sessionParam = searchParams.get('session');
   const { activeOrg } = useOrgContext();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -103,7 +116,12 @@ export default function SessionsPage() {
   const [draftSortDirection, setDraftSortDirection] = useState<SortDirection>('desc');
   const [draftSelectedModels, setDraftSelectedModels] = useState<Set<string>>(() => new Set());
   const [filtersHydrated, setFiltersHydrated] = useState(false);
+  const [consentModelOptions, setConsentModelOptions] = useState<SearchableModelOption[]>([]);
+  const [resumeBusyBySessionId, setResumeBusyBySessionId] = useState<Record<string, boolean>>({});
+  const [consentPickerOpenBySessionId, setConsentPickerOpenBySessionId] = useState<Record<string, boolean>>({});
+  const [pickedResumeModelBySessionId, setPickedResumeModelBySessionId] = useState<Record<string, string>>({});
   const previousQueuedSessionIdsRef = useRef<Set<string>>(new Set());
+  const previousConsentVisibleSessionIdsRef = useRef<Set<string>>(new Set());
   const filtersRestoredRef = useRef(false);
   const orgId = activeOrg?.org_id ?? null;
 
@@ -193,6 +211,111 @@ export default function SessionsPage() {
       }
     }
     void load();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadConsentModelOptions() {
+      const mergedOptions = new Map<string, SearchableModelOption>();
+
+      try {
+        const response = await fetch('/api/ollama-models', { cache: 'no-store' });
+        if (!response.ok) {
+          console.warn('[sessions] failed to fetch Ollama models for consent picker', {
+            status: response.status,
+          });
+        }
+
+        const data = (await response.json()) as OllamaModelListResponse;
+        if (typeof data.error === 'string' && data.error.trim().length > 0) {
+          console.warn('[sessions] Ollama model list returned warning', {
+            error: data.error,
+          });
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models
+            .filter((model): model is string => typeof model === 'string')
+            .map((model) => model.trim())
+            .filter((model) => model.length > 0)
+          : [];
+
+        for (const model of models) {
+          mergedOptions.set(model, {
+            id: model,
+            name: `${model} (local · free)`,
+          });
+        }
+      } catch (error) {
+        console.warn('[sessions] failed to load Ollama models for consent picker', {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      try {
+        const response = await fetch('/api/openrouter-models', { cache: 'no-store' });
+        if (!response.ok) {
+          console.warn('[sessions] failed to fetch OpenRouter models for consent picker', {
+            status: response.status,
+          });
+        }
+
+        const data = (await response.json()) as OpenRouterModelListResponse;
+        if (typeof data.error === 'string' && data.error.trim().length > 0) {
+          console.warn('[sessions] OpenRouter model list returned warning', {
+            error: data.error,
+          });
+        }
+
+        const models = Array.isArray(data.models)
+          ? data.models
+            .map((entry) => {
+              if (!entry || typeof entry !== 'object') {
+                return null;
+              }
+
+              const model = entry as { id?: unknown; name?: unknown };
+              if (typeof model.id !== 'string' || model.id.trim().length === 0) {
+                return null;
+              }
+
+              const id = model.id.trim();
+              const name = typeof model.name === 'string' && model.name.trim().length > 0
+                ? model.name.trim()
+                : id;
+
+              return { id, name } satisfies SearchableModelOption;
+            })
+            .filter((entry): entry is SearchableModelOption => entry !== null)
+          : [];
+
+        for (const model of models) {
+          if (!mergedOptions.has(model.id)) {
+            mergedOptions.set(model.id, model);
+          }
+        }
+      } catch (error) {
+        console.warn('[sessions] failed to load OpenRouter models for consent picker', {
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      const nextOptions = Array.from(mergedOptions.values()).sort(
+        (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
+      );
+      setConsentModelOptions(nextOptions);
+    }
+
+    void loadConsentModelOptions();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -409,6 +532,35 @@ export default function SessionsPage() {
     [activeSessionId, loadSessionDetail],
   );
 
+  useEffect(() => {
+    const normalizedSessionParam = sessionParam?.trim() ?? '';
+    if (!normalizedSessionParam) {
+      return;
+    }
+
+    const hasSession = sessions.some((session) => session.id === normalizedSessionParam);
+    if (!hasSession) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const element = document.getElementById(`session-${normalizedSessionParam}`);
+      if (!element) {
+        return;
+      }
+
+      if (activeSessionId !== normalizedSessionParam) {
+        selectSession(normalizedSessionParam);
+      }
+
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeSessionId, selectSession, sessionParam, sessions]);
+
   const enqueueActiveSession = useCallback(() => {
     if (!sessionDetail || !pubkeyHex) {
       return;
@@ -496,6 +648,74 @@ export default function SessionsPage() {
     },
     [activeSessionId, requestActiveSessionExtraction],
   );
+
+  const resumeParkedSessionExtraction = useCallback(
+    async (session: SessionSummary, jobId: string, model: string) => {
+      const requestedJobId = jobId.trim();
+      const chosenModel = model.trim();
+      if (!requestedJobId || !chosenModel) {
+        return;
+      }
+
+      if (chosenModel.toLowerCase().endsWith(':free')) {
+        console.warn('[sessions] blocked resume model', {
+          session_id: session.id,
+          model: chosenModel,
+        });
+        toast.error('Pick a paid or local model to continue extraction.');
+        return;
+      }
+
+      console.info('[sessions] resume chosen', {
+        session_id: session.id,
+        model: chosenModel,
+      });
+
+      setResumeBusyBySessionId((current) => ({
+        ...current,
+        [session.id]: true,
+      }));
+
+      try {
+        await resumeParkedJob({
+          job_id: requestedJobId,
+          sessionId: session.id,
+          sessionModel: session.model,
+          model: chosenModel,
+        });
+      } finally {
+        setResumeBusyBySessionId((current) => ({
+          ...current,
+          [session.id]: false,
+        }));
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const nextVisibleSessionIds = new Set<string>();
+
+    if (!sessionDetailLoading && sessionDetail) {
+      const sessionId = sessionDetail.session_id;
+      const status = queueStatusBySession.get(sessionId);
+      const parked = queueSnapshot.parkedJobs.find((job) => job.session_id === sessionId);
+
+      if (parked && status !== 'running' && status !== 'queued') {
+        nextVisibleSessionIds.add(sessionId);
+      }
+    }
+
+    for (const sessionId of nextVisibleSessionIds) {
+      if (!previousConsentVisibleSessionIdsRef.current.has(sessionId)) {
+        console.info('[sessions] consent shown', {
+          session_id: sessionId,
+        });
+      }
+    }
+
+    previousConsentVisibleSessionIdsRef.current = nextVisibleSessionIds;
+  }, [queueSnapshot.parkedJobs, queueStatusBySession, sessionDetail, sessionDetailLoading]);
 
   useEffect(() => {
     const queuedSessionIds = new Set<string>(queueSnapshot.jobs.map((job) => job.sessionId));
@@ -756,6 +976,13 @@ export default function SessionsPage() {
     const activeDraft = isActive && pubkeyHex ? getDraft(pubkeyHex, session.id) : null;
     const extractedMemoryCount = activeDraft?.memories.length ?? 0;
     const failureReason = getFailureReasonForSession(session.id);
+    const parked = queueSnapshot.parkedJobs.find((job) => job.session_id === session.id);
+    const isResumingParkedJob = resumeBusyBySessionId[session.id] === true;
+    const consentPickerOpen = consentPickerOpenBySessionId[session.id] === true;
+    const proposedPaidModel = parked?.proposed_paid_slug?.trim() ?? '';
+    const proposedPaidModelIsFree = proposedPaidModel.toLowerCase().endsWith(':free');
+    const pickedResumeModel = (pickedResumeModelBySessionId[session.id] ?? proposedPaidModel).trim();
+    const pickedResumeModelIsFree = pickedResumeModel.toLowerCase().endsWith(':free');
     const effectiveExtractionModel = certifiedExtractionModel || resolveSessionModelSlug(session.model);
     const providerLabel = `${extractionProviderDisplay(llmSettings.llm_provider)} · ${effectiveExtractionModel}`;
     const etaText = extractionEtaText(llmSettings.llm_provider);
@@ -767,7 +994,7 @@ export default function SessionsPage() {
       : 'border-[rgba(124,92,255,0.4)] bg-wv-panel ring-2 ring-[rgba(124,92,255,0.22)]';
 
     return (
-      <div key={session.id} className="space-y-2">
+      <div key={session.id} id={`session-${session.id}`} className="space-y-2">
         {providerReady === false && (
           <div className="rounded-lg border border-[rgba(255,178,85,0.4)] bg-[rgba(255,178,85,0.12)] px-4 py-3 text-sm text-wv-amber">
             Please set up your extraction model — memory extraction disabled.{' '}
@@ -912,7 +1139,83 @@ export default function SessionsPage() {
               </div>
             )}
 
-            {!sessionDetailLoading && sessionDetail && failureReason && !isRunning && !isQueued && (
+            {!sessionDetailLoading && sessionDetail && parked && !isRunning && !isQueued && (
+              <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-amber">
+                <p>
+                  The {parked.lapsed_model || 'configured :free'} model lapsed and needs a paid model or a different provider.
+                </p>
+                {failureReason ? (
+                  <p className="mt-1 text-xs text-wv-dim">{failureReason}</p>
+                ) : null}
+                <div className="mt-3 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => void resumeParkedSessionExtraction(session, parked.job_id, proposedPaidModel)}
+                    disabled={isResumingParkedJob || proposedPaidModel.length === 0 || proposedPaidModelIsFree}
+                    className="inline-flex items-center rounded-lg bg-wv-grad-btn px-5 py-2.5 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isResumingParkedJob
+                      ? 'Resuming extraction…'
+                      : `Extract with paid ${proposedPaidModel || 'recommended model'}`}
+                  </button>
+                  <p className="text-xs text-wv-dim">This uses the paid version and will cost money.</p>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConsentPickerOpenBySessionId((current) => ({
+                        ...current,
+                        [session.id]: !current[session.id],
+                      }));
+
+                      setPickedResumeModelBySessionId((current) => {
+                        const currentValue = current[session.id]?.trim() ?? '';
+                        if (currentValue.length > 0 || proposedPaidModel.length === 0) {
+                          return current;
+                        }
+
+                        return {
+                          ...current,
+                          [session.id]: proposedPaidModel,
+                        };
+                      });
+                    }}
+                    disabled={isResumingParkedJob}
+                    className="text-xs text-wv-amber underline hover:text-wv-text disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Pick a different model / provider
+                  </button>
+
+                  {consentPickerOpen && (
+                    <div className="space-y-2 rounded-lg border border-[rgba(255,178,85,0.35)] bg-[rgba(255,178,85,0.1)] p-3">
+                      <SearchableModelCombobox
+                        id={`resume-model-${session.id}`}
+                        value={pickedResumeModel}
+                        options={consentModelOptions}
+                        onChange={(nextValue) => {
+                          setPickedResumeModelBySessionId((current) => ({
+                            ...current,
+                            [session.id]: nextValue,
+                          }));
+                        }}
+                        placeholder="Pick or type a model slug"
+                        disabled={isResumingParkedJob}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void resumeParkedSessionExtraction(session, parked.job_id, pickedResumeModel)}
+                        disabled={isResumingParkedJob || pickedResumeModel.length === 0 || pickedResumeModelIsFree}
+                        className="inline-flex items-center rounded-lg bg-wv-grad-btn px-4 py-2 text-sm font-medium text-white shadow-wv-sm transition hover:shadow-glow-v disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isResumingParkedJob ? 'Resuming extraction…' : 'Extract with this model'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {!sessionDetailLoading && sessionDetail && failureReason && !parked && !isRunning && !isQueued && (
               <div className="rounded-lg border border-[rgba(255,107,107,0.4)] bg-[rgba(255,107,107,0.12)] px-4 py-3 text-sm text-wv-amber">
                 <span>{failureReason}</span>
                 <button
@@ -1150,5 +1453,13 @@ export default function SessionsPage() {
         and create a fresh local draft for review.
       </Modal>
     </div>
+  );
+}
+
+export default function SessionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SessionsPageInner />
+    </Suspense>
   );
 }

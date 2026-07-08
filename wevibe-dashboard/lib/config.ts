@@ -1,6 +1,5 @@
 export interface WevibeConfig {
   hubUrl: string;
-  mcpUrl: string;
   chainId: string;
   chainRpc: string;
   chainRest: string;
@@ -57,7 +56,6 @@ function envBaseUrls(): EnvBaseUrls {
 // Non-URL, mode-invariant defaults + the MCP sidecar (local in BOTH modes —
 // the dashboard's org crypto always talks to the leader's local MCP).
 const STATIC_DEFAULTS = {
-  mcpUrl: 'http://127.0.0.1:4450',
   chainId: 'wevibe-local-1',
   bech32Prefix: 'wevibe',
   coinDenom: 'VIBE',
@@ -68,7 +66,6 @@ export function readConfigFromEnv(): WevibeConfig {
   const base = envBaseUrls();
   return {
     hubUrl: process.env.WEVIBE_HUB_URL ?? base.hubUrl,
-    mcpUrl: process.env.WEVIBE_MCP_URL ?? STATIC_DEFAULTS.mcpUrl,
     chainId: process.env.WEVIBE_CHAIN_ID ?? STATIC_DEFAULTS.chainId,
     chainRpc: process.env.WEVIBE_CHAIN_RPC ?? base.chainRpc,
     chainRest: process.env.WEVIBE_CHAIN_REST ?? base.chainRest,

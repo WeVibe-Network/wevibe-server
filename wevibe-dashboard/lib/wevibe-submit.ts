@@ -70,6 +70,7 @@ export interface SubmitMemoryParams {
   memoryType: MemoryType;
   preferenceConfidence: number;
   keywords?: MemoryCandidateKeywords;
+  mc_version?: number;
   derivation: string;
   modPubkeyHex: string;
   hubUrl: string;
@@ -91,6 +92,7 @@ export interface SubmitMemoryPayload {
   stack_hint: string[];
   preference_confidence: number;
   keywords?: MemoryCandidateKeywords;
+  mc_version?: number;
   derivation: string;
   attestation: null;
 }
@@ -119,6 +121,7 @@ export async function buildSubmitMemoryPayload(
     memoryType,
     preferenceConfidence,
     keywords,
+    mc_version: mcVersion,
     derivation,
     modPubkeyHex,
   } = params;
@@ -192,6 +195,7 @@ export async function buildSubmitMemoryPayload(
       stack_hint: stackHint,
       preference_confidence: preferenceConfidence,
       keywords,
+      mc_version: mcVersion ?? 1,
       derivation,
       attestation: null,
     },
