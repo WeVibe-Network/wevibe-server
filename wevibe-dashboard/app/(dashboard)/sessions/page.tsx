@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import Badge from '@/components/ui/badge';
 import Button from '@/components/ui/button';
+import Chip from '@/components/ui/chip';
 import ClientTime from '@/components/ui/client-time';
 import Modal from '@/components/ui/modal';
 import Spinner from '@/components/ui/spinner';
@@ -28,10 +29,11 @@ import {
   reconcileBackendInstance,
 } from '@/lib/draft-store';
 
-type SessionSortKey = 'updated' | 'title' | 'message_count';
 type SortDirection = 'asc' | 'desc';
+type ModelSelection = { mode: 'all' } | { mode: 'subset'; models: string[] };
 
 const SESSION_SORT_STORAGE_KEY = 'wevibe.sessions.sort.v1';
+const SESSION_FILTERS_STORAGE_KEY = 'wevibe.sessions.filters.v1';
 
 // Shipping default: contributor session duplicate-extraction detection is enabled.
 const SESSION_DEDUP_DETECTION_ENABLED = true;
@@ -95,9 +97,14 @@ export default function SessionsPage() {
   const [providerReadyReason, setProviderReadyReason] = useState<string | null>(null);
   const providerReadyToastReasonRef = useRef<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortKey, setSortKey] = useState<SessionSortKey>('updated');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [modelSelection, setModelSelection] = useState<ModelSelection>({ mode: 'all' });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [draftSortDirection, setDraftSortDirection] = useState<SortDirection>('desc');
+  const [draftSelectedModels, setDraftSelectedModels] = useState<Set<string>>(() => new Set());
+  const [filtersHydrated, setFiltersHydrated] = useState(false);
   const previousQueuedSessionIdsRef = useRef<Set<string>>(new Set());
+  const filtersRestoredRef = useRef(false);
   const orgId = activeOrg?.org_id ?? null;
 
   const queueSnapshot = useExtractionQueue();
@@ -339,11 +346,7 @@ export default function SessionsPage() {
         return;
       }
 
-      const parsed = JSON.parse(raw) as { key?: unknown; direction?: unknown };
-
-      if (parsed.key === 'updated' || parsed.key === 'title' || parsed.key === 'message_count') {
-        setSortKey(parsed.key);
-      }
+      const parsed = JSON.parse(raw) as { direction?: unknown };
       if (parsed.direction === 'asc' || parsed.direction === 'desc') {
         setSortDirection(parsed.direction);
       }
@@ -360,12 +363,12 @@ export default function SessionsPage() {
     try {
       window.localStorage.setItem(
         SESSION_SORT_STORAGE_KEY,
-        JSON.stringify({ key: sortKey, direction: sortDirection }),
+        JSON.stringify({ direction: sortDirection }),
       );
     } catch {
       // ignore local storage errors
     }
-  }, [sortDirection, sortKey]);
+  }, [sortDirection]);
 
   const loadSessionDetail = useCallback(async (id: string) => {
     setSessionDetailLoading(true);
@@ -548,51 +551,199 @@ export default function SessionsPage() {
     setExtractedDraftCount(Object.keys(loadDrafts(pubkeyHex)).length);
   }, [pubkeyHex, queueSnapshot.activeCount, queueSnapshot.jobs, draftsVersion]);
 
-  const extractedSessions = useMemo(() => {
-    const sorted = sessions.filter((session) => extractedSessionIds.has(session.id));
-    return sorted.sort((a, b) => {
-      const aUpdated = Date.parse(a.time_updated) || 0;
-      const bUpdated = Date.parse(b.time_updated) || 0;
-      return bUpdated - aUpdated;
+  const modelCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const session of sessions) {
+      const slug = resolveSessionModelSlug(session.model);
+      if (!slug) {
+        continue;
+      }
+
+      counts.set(slug, (counts.get(slug) ?? 0) + 1);
+    }
+
+    return counts;
+  }, [sessions]);
+
+  const availableModels = useMemo(() => {
+    return Array.from(modelCounts.entries())
+      .sort((a, b) => {
+        const countDiff = b[1] - a[1];
+        if (countDiff !== 0) {
+          return countDiff;
+        }
+
+        return a[0].localeCompare(b[0]);
+      })
+      .map(([slug]) => slug);
+  }, [modelCounts]);
+
+  const selectedModelSet = useMemo(() => {
+    if (modelSelection.mode === 'all') {
+      return null;
+    }
+
+    return new Set(modelSelection.models);
+  }, [modelSelection]);
+
+  useEffect(() => {
+    if (filtersRestoredRef.current) {
+      return;
+    }
+
+    if (availableModels.length === 0 || typeof window === 'undefined') {
+      return;
+    }
+
+    filtersRestoredRef.current = true;
+
+    try {
+      const raw = window.localStorage.getItem(SESSION_FILTERS_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as { mode?: unknown; models?: unknown };
+
+      if (parsed.mode === 'all') {
+        setModelSelection({ mode: 'all' });
+      } else if (parsed.mode === 'subset' && Array.isArray(parsed.models)) {
+        const restoredModels = parsed.models.filter(
+          (model): model is string => typeof model === 'string' && availableModels.includes(model),
+        );
+
+        if (restoredModels.length === 0) {
+          setModelSelection({ mode: 'all' });
+        } else {
+          setModelSelection({ mode: 'subset', models: restoredModels });
+        }
+      }
+    } catch {
+      // ignore malformed saved filter state
+    } finally {
+      setFiltersHydrated(true);
+    }
+  }, [availableModels]);
+
+  useEffect(() => {
+    if (!filtersHydrated || typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(
+        SESSION_FILTERS_STORAGE_KEY,
+        JSON.stringify(modelSelection),
+      );
+    } catch {
+      // ignore local storage errors
+    }
+  }, [filtersHydrated, modelSelection]);
+
+  const openFilters = useCallback(() => {
+    setDraftSortDirection(sortDirection);
+    setDraftSelectedModels(
+      modelSelection.mode === 'all'
+        ? new Set(availableModels)
+        : new Set(modelSelection.models),
+    );
+    setFiltersOpen(true);
+  }, [availableModels, modelSelection, sortDirection]);
+
+  const closeFilters = useCallback(() => {
+    setFiltersOpen(false);
+  }, []);
+
+  const toggleDraftModel = useCallback((slug: string) => {
+    setDraftSelectedModels((current) => {
+      const next = new Set(current);
+      if (next.has(slug)) {
+        next.delete(slug);
+      } else {
+        next.add(slug);
+      }
+      return next;
     });
-  }, [extractedSessionIds, sessions]);
+  }, []);
+
+  const applyFilters = useCallback(() => {
+    setSortDirection(draftSortDirection);
+
+    const draftHasAllModels = availableModels.every((slug) => draftSelectedModels.has(slug));
+    if (draftSelectedModels.size === 0 || draftHasAllModels) {
+      setModelSelection({ mode: 'all' });
+    } else {
+      setModelSelection({ mode: 'subset', models: Array.from(draftSelectedModels) });
+    }
+
+    setFiltersOpen(false);
+  }, [availableModels, draftSelectedModels, draftSortDirection]);
+
+  const removeModel = useCallback((slug: string) => {
+    setModelSelection((current) => {
+      if (current.mode !== 'subset') {
+        return current;
+      }
+
+      const remainingModels = current.models.filter((model) => model !== slug);
+      if (remainingModels.length === 0) {
+        return { mode: 'all' };
+      }
+
+      return { mode: 'subset', models: remainingModels };
+    });
+  }, []);
+
+  const extractedSessions = useMemo(() => {
+    const directionMultiplier = sortDirection === 'asc' ? 1 : -1;
+
+    return sessions
+      .filter((session) => {
+        if (!extractedSessionIds.has(session.id)) {
+          return false;
+        }
+
+        if (selectedModelSet === null) {
+          return true;
+        }
+
+        return selectedModelSet.has(resolveSessionModelSlug(session.model));
+      })
+      .sort((a, b) => {
+        const aUpdated = Date.parse(a.time_updated) || 0;
+        const bUpdated = Date.parse(b.time_updated) || 0;
+        return (aUpdated - bUpdated) * directionMultiplier;
+      });
+  }, [extractedSessionIds, selectedModelSet, sessions, sortDirection]);
 
   const visibleNonExtractedSessions = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
-    const filtered = sessions.filter((session) => {
-      if (extractedSessionIds.has(session.id)) {
-        return false;
-      }
-
-      if (!query) {
-        return true;
-      }
-      return session.title.toLowerCase().includes(query)
-        || session.directory.toLowerCase().includes(query);
-    });
-
     const directionMultiplier = sortDirection === 'asc' ? 1 : -1;
-    const sorted = [...filtered].sort((a, b) => {
-      if (sortKey === 'title') {
-        const aTitle = (a.title || 'Untitled Session').toLowerCase();
-        const bTitle = (b.title || 'Untitled Session').toLowerCase();
-        return aTitle.localeCompare(bTitle) * directionMultiplier;
-      }
 
-      if (sortKey === 'message_count') {
-        const byMessages = a.message_count - b.message_count;
-        if (byMessages !== 0) {
-          return byMessages * directionMultiplier;
+    return sessions
+      .filter((session) => {
+        if (extractedSessionIds.has(session.id)) {
+          return false;
         }
-      }
 
-      const aUpdated = Date.parse(a.time_updated) || 0;
-      const bUpdated = Date.parse(b.time_updated) || 0;
-      return (aUpdated - bUpdated) * directionMultiplier;
-    });
+        if (selectedModelSet !== null && !selectedModelSet.has(resolveSessionModelSlug(session.model))) {
+          return false;
+        }
 
-    return sorted;
-  }, [extractedSessionIds, searchTerm, sessions, sortDirection, sortKey]);
+        if (!query) {
+          return true;
+        }
+
+        return session.title.toLowerCase().includes(query)
+          || session.directory.toLowerCase().includes(query);
+      })
+      .sort((a, b) => {
+        const aUpdated = Date.parse(a.time_updated) || 0;
+        const bUpdated = Date.parse(b.time_updated) || 0;
+        return (aUpdated - bUpdated) * directionMultiplier;
+      });
+  }, [extractedSessionIds, searchTerm, selectedModelSet, sessions, sortDirection]);
 
   const renderSessionCard = (session: SessionSummary) => {
     const isActive = activeSessionId === session.id;
@@ -837,29 +988,55 @@ export default function SessionsPage() {
       )}
 
       {!loading && sessions.length > 0 && (
-        <div className="flex flex-col gap-3 rounded-xl border border-wv-line bg-wv-panel p-4 sm:flex-row sm:items-center sm:justify-between">
-          <input
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Search title or directory"
-            className="w-full rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none sm:max-w-sm"
-          />
+        <div className="flex flex-col gap-3 rounded-xl border border-wv-line bg-wv-panel p-4">
           <div className="flex items-center gap-2">
-            <select
-              value={sortKey}
-              onChange={(event) => setSortKey(event.target.value as SessionSortKey)}
-              className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text focus:border-wv-violet focus:outline-none"
-            >
-              <option value="updated">Last updated</option>
-              <option value="title">Title (A→Z)</option>
-              <option value="message_count">Message count</option>
-            </select>
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Search title or directory"
+              className="w-full flex-1 rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text placeholder:text-wv-faint focus:border-wv-violet focus:outline-none"
+            />
             <button
-              onClick={() => setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-              className="rounded-lg border border-wv-line-2 bg-wv-panel-2 px-3 py-2 text-sm text-wv-text transition hover:border-[rgba(124,92,255,0.4)] hover:text-wv-violet"
+              type="button"
+              aria-label="Filters"
+              onClick={openFilters}
+              className="relative rounded-md p-2 text-wv-dim transition hover:bg-wv-line hover:text-wv-text"
             >
-              {sortDirection === 'asc' ? 'Ascending' : 'Descending'}
+              <svg
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {modelSelection.mode === 'subset' ? (
+                <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-wv-violet" />
+              ) : null}
             </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {modelSelection.mode === 'all' ? (
+              <Chip label="All models" />
+            ) : (
+              <>
+                {modelSelection.models.map((slug) => (
+                  <Chip key={slug} label={slug} onRemove={() => removeModel(slug)} />
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setModelSelection({ mode: 'all' })}
+                  className="text-[12.5px] text-wv-dim transition hover:text-wv-text"
+                >
+                  Clear all
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -886,6 +1063,73 @@ export default function SessionsPage() {
           </div>
         </section>
       )}
+
+      <Modal
+        open={filtersOpen}
+        title="Filters"
+        onClose={closeFilters}
+        footer={(
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setDraftSelectedModels(new Set(availableModels));
+                setDraftSortDirection('desc');
+              }}
+            >
+              Clear all
+            </Button>
+            <Button type="button" variant="ghost" onClick={closeFilters}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={applyFilters}>
+              Apply
+            </Button>
+          </div>
+        )}
+      >
+        <div className="max-h-[60vh] overflow-y-auto flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-mono uppercase tracking-wider text-wv-dim">Sort by</p>
+            <label className="inline-flex items-center gap-2 text-sm text-wv-text">
+              <input
+                type="radio"
+                name="sessions-sort"
+                checked={draftSortDirection === 'desc'}
+                onChange={() => setDraftSortDirection('desc')}
+                className="h-4 w-4 border-wv-line-2 bg-wv-panel-2"
+              />
+              Newest first
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm text-wv-text">
+              <input
+                type="radio"
+                name="sessions-sort"
+                checked={draftSortDirection === 'asc'}
+                onChange={() => setDraftSortDirection('asc')}
+                className="h-4 w-4 border-wv-line-2 bg-wv-panel-2"
+              />
+              Oldest first
+            </label>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-mono uppercase tracking-wider text-wv-dim">Model</p>
+            {availableModels.map((slug) => (
+              <label key={slug} className="inline-flex items-center gap-2 text-sm font-mono text-wv-text">
+                <input
+                  type="checkbox"
+                  checked={draftSelectedModels.has(slug)}
+                  onChange={() => toggleDraftModel(slug)}
+                  className="h-4 w-4 rounded border-wv-line-2 bg-wv-panel-2"
+                />
+                {slug} · {modelCounts.get(slug) ?? 0}
+              </label>
+            ))}
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={confirmReextractOpen}
