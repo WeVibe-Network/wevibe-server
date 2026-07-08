@@ -413,13 +413,14 @@ export default function SessionsPage() {
 
     enqueueExtraction({
       sessionId: sessionDetail.session_id,
+      orgId: orgId ?? undefined,
       pubkeyHex,
       transcript: sessionDetail.transcript,
       title: sessionDetail.title,
       directory: sessionDetail.directory,
       model: sessionDetail.model,
     });
-  }, [pubkeyHex, sessionDetail]);
+  }, [orgId, pubkeyHex, sessionDetail]);
 
   const closeReextractModal = useCallback(() => {
     setConfirmReextractOpen(false);

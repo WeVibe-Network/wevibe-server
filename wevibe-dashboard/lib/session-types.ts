@@ -33,6 +33,12 @@ export interface MemoryCandidateKeywords {
   suggestions: SuggestedKeyword[];
 }
 
+export interface NearDupFlag {
+  source: 'injected_memory' | 'intra_session';
+  matched: string;
+  score: number;
+}
+
 export interface MemoryCandidate {
   implement: string;
   context: string;
@@ -41,5 +47,6 @@ export interface MemoryCandidate {
   memory_type: 'memory';
   preference_confidence: number;
   extraction_hash: string;
+  near_dup?: NearDupFlag;
   keywords?: MemoryCandidateKeywords;
 }

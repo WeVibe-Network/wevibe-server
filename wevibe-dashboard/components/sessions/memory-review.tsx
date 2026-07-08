@@ -105,6 +105,12 @@ function extractedWithLabel(meta: MemoryReviewProps['extractionMeta']): string {
   return 'configured provider';
 }
 
+function nearDupSourcePhrase(source: NonNullable<MemoryCandidate['near_dup']>['source']): string {
+  return source === 'injected_memory'
+    ? 'of an injected memory'
+    : 'of another extracted memory';
+}
+
 export default function MemoryReview({
   sessionId,
   sessionTitle,
@@ -428,6 +434,7 @@ export default function MemoryReview({
 
       {sortedReviewMemories.map(({ memory, originalIndex }) => {
         const isSelected = selected.has(originalIndex);
+        const nearDup = memory.near_dup;
         const currentOrgId = memoryOrgs.get(originalIndex) ?? activeOrg?.org_id ?? (orgs.length > 0 ? orgs[0].org_id : '');
         const currentOrgEntry = orgs.find((org) => org.org_id === currentOrgId);
         const showOrgDropdown = orgs.length > 1;
@@ -466,6 +473,13 @@ export default function MemoryReview({
                     >
                       Memory
                     </span>
+                    {nearDup && (
+                      <span
+                        className="rounded-full bg-[rgba(255,178,85,0.12)] px-2 py-0.5 text-xs font-medium text-wv-amber"
+                      >
+                        Possible duplicate · {nearDupSourcePhrase(nearDup.source)} · {Math.round(nearDup.score * 100)}%
+                      </span>
+                    )}
                   </div>
 
                   {showOrgDropdown && (

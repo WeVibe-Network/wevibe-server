@@ -1,37 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import path from 'node:path';
 import { getMcpHttpUrl, readConfigFromEnv } from '@/lib/config';
+import { readMcpSessionToken, recordExtractionError, isRecord } from '@/lib/extract-shared';
 import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/lib/mcp-errors';
 import { getCertifiedReadiness } from '@/lib/provider-readiness';
 import { loadSettings } from '@/lib/settings';
 import { resolveSessionModelSlug } from '@/lib/session-model';
-import type {
-  ClassifiedKeyword,
-  MemoryCandidate,
-  MemoryCandidateKeywords,
-  SuggestedKeyword,
-} from '@/lib/session-types';
 
 export const dynamic = 'force-dynamic';
 const DEFAULT_EXTRACTION_NUM_CTX = 32768;
-// Generous ceiling for a legit large single/multi-chunk extraction (a 600k-char session
-// can take several minutes across sequential Tier-2 chunk LLM calls). Well above undici's
-// ~5-min default, which previously fired mid-extraction and was mislabeled "unreachable".
-const EXTRACT_FETCH_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
-const MCP_SESSION_TOKEN_PATH = path.join(
-  homedir(),
-  '.wevibe',
-  'mcp-session-token',
-);
-const LAST_EXTRACTION_ERROR_PATH = path.join(
-  homedir(),
-  '.wevibe',
-  'last-extraction-error.json',
-);
+const MCP_ENQUEUE_TIMEOUT_MS = 30_000; // the enqueue POST returns fast (202 {job_id}); no long-held connection
 
 interface ExtractRequestBody {
   transcript: string;
@@ -39,6 +18,7 @@ interface ExtractRequestBody {
   directory?: string;
   model?: string;
   stack?: string[];
+  org_id?: string;
   session_id?: string;
 }
 
@@ -46,153 +26,6 @@ interface ExtractionProfileOverrides {
   prompt?: string;
   numCtx?: number;
   presetId: string | null;
-}
-
-async function readMcpSessionToken(): Promise<string | null> {
-  try {
-    const token = (await readFile(MCP_SESSION_TOKEN_PATH, 'utf8')).trim();
-    return token.length > 0 ? token : null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function recordExtractionError(stage: string, status: number, message: string): Promise<void> {
-  try {
-    await writeFile(
-      LAST_EXTRACTION_ERROR_PATH,
-      JSON.stringify(
-        {
-          at: new Date().toISOString(),
-          stage,
-          status,
-          message,
-        },
-        null,
-        2,
-      ),
-      'utf8',
-    );
-  } catch {
-    // best-effort observability only
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function emptyKeywords(): MemoryCandidateKeywords {
-  return {
-    classified: [],
-    suggestions: [],
-  };
-}
-
-function isClassifiedKeyword(value: unknown): value is ClassifiedKeyword {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    typeof value.keyword === 'string'
-    && typeof value.weight === 'number'
-    && Number.isFinite(value.weight)
-  );
-}
-
-function isSuggestedKeyword(value: unknown): value is SuggestedKeyword {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  return (
-    typeof value.keyword === 'string'
-    && typeof value.weight === 'number'
-    && Number.isFinite(value.weight)
-    && typeof value.rationale === 'string'
-  );
-}
-
-function normalizeKeywords(value: unknown): MemoryCandidateKeywords {
-  if (!isRecord(value)) {
-    return emptyKeywords();
-  }
-
-  const { classified, suggestions } = value;
-  if (!Array.isArray(classified) || !Array.isArray(suggestions)) {
-    return emptyKeywords();
-  }
-
-  if (!classified.every(isClassifiedKeyword) || !suggestions.every(isSuggestedKeyword)) {
-    return emptyKeywords();
-  }
-
-  return {
-    classified: classified.map((entry) => ({
-      keyword: entry.keyword,
-      weight: entry.weight,
-    })),
-    suggestions: suggestions.map((entry) => ({
-      keyword: entry.keyword,
-      weight: entry.weight,
-      rationale: entry.rationale,
-    })),
-  };
-}
-
-function normalizeMemoryCandidate(value: unknown): MemoryCandidate | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const {
-    implement,
-    context,
-    dnd,
-    stack,
-    memory_type: memoryType,
-    preference_confidence: preferenceConfidence,
-    extraction_hash: extractionHash,
-  } = value;
-
-  if (typeof implement !== 'string' || typeof context !== 'string') {
-    return null;
-  }
-
-  if (dnd !== null && typeof dnd !== 'string') {
-    return null;
-  }
-
-  if (!Array.isArray(stack) || !stack.every((entry) => typeof entry === 'string')) {
-    return null;
-  }
-
-  if (memoryType !== 'memory') {
-    return null;
-  }
-
-  if (typeof preferenceConfidence !== 'number' || !Number.isFinite(preferenceConfidence)) {
-    return null;
-  }
-
-  if (typeof extractionHash !== 'string') {
-    return null;
-  }
-
-  return {
-    implement,
-    context,
-    dnd,
-    stack: [...stack],
-    memory_type: memoryType,
-    preference_confidence: preferenceConfidence,
-    extraction_hash: extractionHash,
-    keywords: normalizeKeywords(value.keywords),
-  };
 }
 
 function resolveServerHubBaseUrl(): string {
@@ -366,7 +199,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const activeOrgId = settings.org_id.trim();
+  const activeOrgId = (body.org_id ?? '').trim();
   const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId, trace);
   const useLmStudio = settings.llm_provider === 'lm_studio';
   const useOpenRouter = settings.llm_provider === 'openrouter';
@@ -420,11 +253,9 @@ export async function POST(request: NextRequest) {
     mcpExtractRequestBody.ollama_url = settings.ollama_url;
   }
 
-  let response: Response;
   const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => {
-    controller.abort();
-  }, EXTRACT_FETCH_TIMEOUT_MS);
+  const timeoutHandle = setTimeout(() => controller.abort(), MCP_ENQUEUE_TIMEOUT_MS);
+  let response: Response;
   try {
     response = await fetch(extractUrl, {
       method: 'POST',
@@ -444,13 +275,13 @@ export async function POST(request: NextRequest) {
         status: 'err',
         proxy_target: extractUrl,
         dur_ms: Date.now() - startedAt,
-        err: 'timeout',
+        err: 'enqueue_timeout',
         reason: 'timeout',
       });
       return NextResponse.json(
         {
-          error: `extraction timed out after ${Math.floor(EXTRACT_FETCH_TIMEOUT_MS / 1000)}s — the session may be too large; try splitting it or retrying`,
-          code: 'extraction_timeout',
+          error: 'enqueueing extraction timed out — local WeVibe MCP did not respond',
+          code: 'extraction_enqueue_timeout',
         },
         { status: 504 },
       );
@@ -523,17 +354,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: errorMessage }, { status: response.status });
   }
 
-  const mcpEmptyReason =
-    isRecord(responseBody) && isRecord(responseBody.meta) && typeof responseBody.meta.emptyReason === 'string'
-      ? responseBody.meta.emptyReason
-      : undefined;
-
-  if (!isRecord(responseBody) || !Array.isArray(responseBody.memories)) {
-    await recordExtractionError(
-      'invalid_payload',
-      502,
-      'MCP extraction returned invalid memory payload',
-    );
+  const jobId = isRecord(responseBody) && typeof responseBody.job_id === 'string' ? responseBody.job_id : null;
+  if (!jobId) {
+    await recordExtractionError('invalid_enqueue', 502, 'MCP did not return a job_id');
     logOp('dashboard.extract', 'error', {
       trace,
       phase: 'outcome',
@@ -541,39 +364,9 @@ export async function POST(request: NextRequest) {
       proxy_target: extractUrl,
       upstream_status: response.status,
       dur_ms: Date.now() - startedAt,
-      err: 'invalid_payload',
+      err: 'invalid_enqueue',
     });
-    return NextResponse.json(
-      { error: 'MCP extraction returned invalid memory payload' },
-      { status: 502 },
-    );
-  }
-
-  const memories = responseBody.memories;
-  const normalizedMemories: MemoryCandidate[] = [];
-  for (const memory of memories) {
-    const normalizedMemory = normalizeMemoryCandidate(memory);
-    if (!normalizedMemory) {
-      await recordExtractionError(
-        'invalid_payload',
-        502,
-        'MCP extraction returned invalid memory payload',
-      );
-      logOp('dashboard.extract', 'error', {
-        trace,
-        phase: 'outcome',
-        status: 'err',
-        proxy_target: extractUrl,
-        upstream_status: response.status,
-        dur_ms: Date.now() - startedAt,
-        err: 'invalid_payload',
-      });
-      return NextResponse.json(
-        { error: 'MCP extraction returned invalid memory payload' },
-        { status: 502 },
-      );
-    }
-    normalizedMemories.push(normalizedMemory);
+    return NextResponse.json({ error: 'MCP extraction did not return a job id' }, { status: 502 });
   }
 
   logOp('dashboard.extract', 'info', {
@@ -583,12 +376,11 @@ export async function POST(request: NextRequest) {
     proxy_target: extractUrl,
     upstream_status: response.status,
     dur_ms: Date.now() - startedAt,
-    memories: normalizedMemories.length,
-    empty: normalizedMemories.length === 0,
+    job_id: jobId,
   });
 
   return NextResponse.json({
-    memories: normalizedMemories,
+    job_id: jobId,
     extraction_meta: {
       source: profileOverrides ? 'org-profile' : 'wevibe-default',
       preset_id: profileOverrides?.presetId ?? null,
@@ -598,9 +390,6 @@ export async function POST(request: NextRequest) {
       is_local: !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
       prompt_fingerprint: computePromptFingerprint(mcpExtractRequestBody.prompt),
-      ...(normalizedMemories.length === 0
-        ? { empty_reason: mcpEmptyReason ?? 'no_durable_memories' }
-        : {}),
     },
-  });
+  }, { status: 202 });
 }

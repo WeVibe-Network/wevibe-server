@@ -13,28 +13,48 @@ export interface ExtractionJobInput {
   title: string;
   directory: string;
   model: string;
+  orgId?: string;
 }
 
 type QueueJobStatus = 'queued' | 'running';
 
 interface ExtractionJob extends ExtractionJobInput {
   status: QueueJobStatus;
+  chunksDone?: number;
+  chunksTotal?: number;
 }
 
 interface QueueSnapshot {
-  jobs: { sessionId: string; status: QueueJobStatus }[];
+  jobs: { sessionId: string; status: QueueJobStatus; chunksDone?: number; chunksTotal?: number }[];
   activeCount: number;
   failedSessions: { sessionId: string; reason: string }[];
 }
 
-interface ExtractResponseBody {
-  memories: MemoryCandidate[];
-  extraction_meta?: ExtractionDraft['extractionMeta'];
+interface EnqueueResponseBody {
+  job_id: string;
+  extraction_meta: ExtractionDraft['extractionMeta'];
+}
+
+interface StatusResponseBody {
+  status: 'running' | 'done' | 'error';
+  chunks_done: number;
+  chunks_total: number;
+  memories?: MemoryCandidate[];
+  empty_reason?: string;
+  error?: string;
 }
 
 interface ExtractErrorBody {
   error?: string;
   code?: string;
+}
+
+const POLL_INTERVAL_MS = 4000;
+const MAX_POLL_MS = 20 * 60 * 1000;
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const EMPTY_SERVER_JOBS: QueueSnapshot['jobs'] = [];
@@ -63,7 +83,12 @@ function isBrowser(): boolean {
 }
 
 function rebuildSnapshot(): void {
-  const snapshotJobs = jobs.map(({ sessionId, status }) => ({ sessionId, status }));
+  const snapshotJobs = jobs.map(({ sessionId, status, chunksDone, chunksTotal }) => ({
+    sessionId,
+    status,
+    chunksDone,
+    chunksTotal,
+  }));
   Object.freeze(snapshotJobs);
   const snapshotFailedSessions = Array.from(failedSessions.entries()).map(([sessionId, reason]) => ({
     sessionId,
@@ -89,7 +114,14 @@ function updatePersistentToast(): void {
 
   const activeCount = jobs.length;
   if (activeCount > 0) {
-    const message = `You have ${activeCount} session${activeCount === 1 ? '' : 's'} extracting…`;
+    let message = `You have ${activeCount} session${activeCount === 1 ? '' : 's'} extracting…`;
+    if (activeCount === 1) {
+      const [activeJob] = jobs;
+      if (typeof activeJob?.chunksTotal === 'number' && activeJob.chunksTotal > 0) {
+        const chunksDone = typeof activeJob.chunksDone === 'number' ? activeJob.chunksDone : 0;
+        message += ` (chunk ${chunksDone}/${activeJob.chunksTotal})`;
+      }
+    }
     if (persistentToastId === undefined) {
       toastSequence += 1;
       persistentToastId = `wevibe-extraction-queue-${Date.now()}-${toastSequence}`;
@@ -106,18 +138,31 @@ function updatePersistentToast(): void {
 
 async function runJob(job: ExtractionJob): Promise<void> {
   try {
+    const requestBody: {
+      transcript: string;
+      title: string;
+      directory: string;
+      model: string;
+      session_id: string;
+      org_id?: string;
+    } = {
+      transcript: job.transcript,
+      title: job.title,
+      directory: job.directory,
+      model: job.model,
+      session_id: job.sessionId,
+    };
+
+    if (job.orgId && job.orgId.trim().length > 0) {
+      requestBody.org_id = job.orgId.trim();
+    }
+
     const response = await fetch('/api/extract', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        transcript: job.transcript,
-        title: job.title,
-        directory: job.directory,
-        model: job.model,
-        session_id: job.sessionId,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -150,29 +195,101 @@ async function runJob(job: ExtractionJob): Promise<void> {
       throw new Error(errorMessage);
     }
 
-    const payload = (await response.json()) as Partial<ExtractResponseBody>;
-    if (!Array.isArray(payload.memories)) {
-      throw new Error('Extraction response missing memories array');
+    const enqueue = (await response.json()) as Partial<EnqueueResponseBody>;
+    if (typeof enqueue.job_id !== 'string' || !enqueue.job_id) {
+      throw new Error('Extraction did not start (no job id)');
     }
+    const baseMeta = enqueue.extraction_meta;
 
-    const emptyReason = payload.extraction_meta?.empty_reason;
-    if (
-      payload.memories.length === 0
-      && (emptyReason === 'off_task_output' || emptyReason === 'unparseable_output')
-    ) {
-      failedSessions.set(
-        job.sessionId,
-        'The model returned output we could not extract memories from. Retry to try again.',
-      );
-    } else {
-      saveDraft(job.pubkeyHex, {
-        sessionId: job.sessionId,
-        sessionTitle: job.title,
-        sessionDirectory: job.directory,
-        memories: payload.memories as MemoryCandidate[],
-        extractionMeta: payload.extraction_meta,
-        createdAt: Date.now(),
-      });
+    const deadline = Date.now() + MAX_POLL_MS;
+    let consecutiveFailures = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      await sleep(POLL_INTERVAL_MS);
+      if (Date.now() > deadline) {
+        throw new Error('Extraction timed out — the session may be too large; retry to try again');
+      }
+
+      let statusResp: Response;
+      try {
+        statusResp = await fetch(`/api/extract/status?job_id=${encodeURIComponent(enqueue.job_id)}`, {
+          method: 'GET',
+        });
+      } catch (err) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          throw err instanceof Error ? err : new Error(String(err));
+        }
+        continue;
+      }
+
+      if (!statusResp.ok) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+          let msg = `Extraction status check failed with status ${statusResp.status}`;
+          try {
+            const b = (await statusResp.json()) as ExtractErrorBody;
+            if (typeof b.error === 'string' && b.error.trim()) {
+              msg = b.error;
+            }
+          } catch {
+            // keep generic
+          }
+          throw new Error(msg);
+        }
+        continue;
+      }
+
+      consecutiveFailures = 0;
+      const status = (await statusResp.json()) as Partial<StatusResponseBody>;
+      if (status.status === 'running') {
+        const queued = jobs.find((j) => j.sessionId === job.sessionId);
+        if (queued) {
+          queued.chunksDone = status.chunks_done;
+          queued.chunksTotal = status.chunks_total;
+        }
+        notify();
+        updatePersistentToast();
+        continue;
+      }
+
+      if (status.status === 'error') {
+        throw new Error(
+          typeof status.error === 'string' && status.error.trim() ? status.error : 'Extraction failed',
+        );
+      }
+
+      if (status.status === 'done') {
+        if (!Array.isArray(status.memories)) {
+          throw new Error('Extraction response missing memories array');
+        }
+        const extractionMeta = {
+          ...(baseMeta ?? {}),
+          ...(status.empty_reason ? { empty_reason: status.empty_reason } : {}),
+        } as ExtractionDraft['extractionMeta'];
+        const emptyReason = extractionMeta?.empty_reason;
+        if (
+          status.memories.length === 0
+          && (emptyReason === 'off_task_output' || emptyReason === 'unparseable_output')
+        ) {
+          failedSessions.set(
+            job.sessionId,
+            'The model returned output we could not extract memories from. Retry to try again.',
+          );
+        } else {
+          saveDraft(job.pubkeyHex, {
+            sessionId: job.sessionId,
+            sessionTitle: job.title,
+            sessionDirectory: job.directory,
+            memories: status.memories as MemoryCandidate[],
+            extractionMeta,
+            createdAt: Date.now(),
+          });
+        }
+        return;
+      }
+
+      // unknown status → keep polling until deadline
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
