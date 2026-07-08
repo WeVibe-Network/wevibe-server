@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -14,9 +15,15 @@ import (
 	reptypes "github.com/wevibe-network/wevibe-chain/x/reputation/types"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// maxContentHashesPerBatch mirrors the chain-side cap enforced in
+// wevibe-chain/x/memory/keeper/grpc_query.go ("max 50 content hashes per batch").
+// The hub MUST chunk requests to <= this many hashes per gRPC call.
+const maxContentHashesPerBatch = 50
 
 // --- x/org ---
 
@@ -409,37 +416,85 @@ type MemoryBatchResult struct {
 }
 
 func (c *GrpcClient) GetMemoriesBatch(ctx context.Context, orgID string, contentHashes [][]byte) ([]MemoryBatchResult, [][]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	resp, err := c.memoryQuery.GetMemoriesBatch(ctx, &memorytypes.QueryGetMemoriesBatchRequest{
-		OrgId:         orgID,
-		ContentHashes: contentHashes,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("chain batch query: %w", err)
+	hashCount := len(contentHashes)
+	chunkCount := 0
+	if hashCount > 0 {
+		chunkCount = (hashCount + maxContentHashesPerBatch - 1) / maxContentHashesPerBatch
 	}
 
-	results := make([]MemoryBatchResult, 0, len(resp.Memories))
-	for _, m := range resp.Memories {
-		results = append(results, MemoryBatchResult{
-			ContentHash:       m.ContentHash,
-			EncryptedBlob:     m.EncryptedBlob,
-			WrappedDekEnc:     m.WrappedDekEnc,
-			Capsule:           nil,
-			Keywords:          m.Keywords,
-			ContributorPubkey: m.ContributorPubkey,
-			Epoch:             m.Epoch,
-			State:             int32(m.State),
-			MemoryType:        mapChainMemoryTypeToString(m.MemoryType),
-			ServeCountTotal:   m.ServeCountTotal,
-			DenialCountTotal:  m.DenialCountTotal,
-			LastActiveEpoch:   m.LastActiveEpoch,
-			ArchivedEpoch:     m.ArchivedEpoch,
-		})
+	wlog.Op(ctx, "chain.GetMemoriesBatch", slog.LevelInfo,
+		slog.String("org", orgID),
+		slog.Int("hashCount", hashCount),
+		slog.Int("chunkCount", chunkCount),
+		slog.Int("maxPerChunk", maxContentHashesPerBatch))
+
+	results := make([]MemoryBatchResult, 0, hashCount)
+	var notFound [][]byte
+
+	for chunkIndex, start := 0, 0; start < hashCount; chunkIndex, start = chunkIndex+1, start+maxContentHashesPerBatch {
+		end := start + maxContentHashesPerBatch
+		if end > hashCount {
+			end = hashCount
+		}
+
+		chunkHashes := contentHashes[start:end]
+		resp, err := func() (*memorytypes.QueryGetMemoriesBatchResponse, error) {
+			chunkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			return c.memoryQuery.GetMemoriesBatch(chunkCtx, &memorytypes.QueryGetMemoriesBatchRequest{
+				OrgId:         orgID,
+				ContentHashes: chunkHashes,
+			})
+		}()
+		if err != nil {
+			wlog.Op(ctx, "chain.GetMemoriesBatch", slog.LevelError,
+				slog.String("org", orgID),
+				slog.Int("chunkIndex", chunkIndex+1),
+				slog.Int("chunkCount", chunkCount),
+				slog.Int("chunkSize", len(chunkHashes)),
+				slog.String("err", err.Error()))
+			return nil, nil, fmt.Errorf("chain batch query (chunk %d/%d, %d hashes): %w", chunkIndex+1, chunkCount, len(chunkHashes), err)
+		}
+
+		for _, m := range resp.Memories {
+			results = append(results, MemoryBatchResult{
+				ContentHash:       m.ContentHash,
+				EncryptedBlob:     m.EncryptedBlob,
+				WrappedDekEnc:     m.WrappedDekEnc,
+				Capsule:           nil,
+				Keywords:          m.Keywords,
+				ContributorPubkey: m.ContributorPubkey,
+				Epoch:             m.Epoch,
+				State:             int32(m.State),
+				MemoryType:        mapChainMemoryTypeToString(m.MemoryType),
+				ServeCountTotal:   m.ServeCountTotal,
+				DenialCountTotal:  m.DenialCountTotal,
+				LastActiveEpoch:   m.LastActiveEpoch,
+				ArchivedEpoch:     m.ArchivedEpoch,
+			})
+		}
+
+		notFound = append(notFound, resp.NotFound...)
+
+		wlog.Op(ctx, "chain.GetMemoriesBatch.chunk", slog.LevelInfo,
+			slog.String("org", orgID),
+			slog.Int("chunkIndex", chunkIndex+1),
+			slog.Int("chunkCount", chunkCount),
+			slog.Int("chunkSize", len(chunkHashes)),
+			slog.Int("returned", len(resp.Memories)),
+			slog.Int("notFound", len(resp.NotFound)))
 	}
 
-	return results, resp.NotFound, nil
+	wlog.Op(ctx, "chain.GetMemoriesBatch", slog.LevelInfo,
+		slog.String("org", orgID),
+		slog.Int("hashCount", hashCount),
+		slog.Int("chunkCount", chunkCount),
+		slog.Int("resultCount", len(results)),
+		slog.Int("notFoundCount", len(notFound)),
+		slog.String("status", "ok"))
+
+	return results, notFound, nil
 }
 
 func mapChainMemoryTypeToString(memoryType memorytypes.MemoryType) string {
