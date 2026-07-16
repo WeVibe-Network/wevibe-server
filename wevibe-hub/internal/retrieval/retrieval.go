@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 func injectGaussianNoise(vector []float32, sigma float64) []float32 {
@@ -675,7 +677,15 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		Grace:              float64(ranker.GraceEpochs),
 		BoostWindow:        float64(ranker.NewMemBoostWindow),
 		NewMemMult:         ranker.NewMemBoostMult,
+		Floor:              relevanceFloor,
 	})
+
+	wlog.Op(ctx, "hub.recall_floor_gate", slog.LevelInfo,
+		slog.String("phase", "outcome"),
+		slog.Float64("relevance_floor", relevanceFloor),
+		slog.Int("candidates_scored", len(cands)),
+		slog.Int("admitted", len(out.Rows)),
+		slog.Int("dropped_by_floor", out.Drops.Floor))
 
 	scoredResults := make([]scoredResult, 0, len(out.Rows))
 	for _, row := range out.Rows {
@@ -724,22 +734,6 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			memoryCreatedEpoch: richData.memoryCreatedEpoch,
 		})
 	}
-	allScoredResults := append([]scoredResult(nil), scoredResults...)
-
-	// D-RECALL-GOVERNOR: relevance floor gate. Gates the COMBINED score
-	// (canon MATCHING_ENGINE.md "Absolute relevance floor"). Per-request
-	// configurable via relevanceFloor; below-floor => dropped (zero-injection is valid).
-	// nomic-768 tau VALUE is a post-reseed calibration sweep (Walter-ratified) — NOT hardcoded here.
-	if relevanceFloor > 0 {
-		filteredResults := make([]scoredResult, 0, len(scoredResults))
-		for _, sr := range scoredResults {
-			if sr.weightedScore >= relevanceFloor {
-				filteredResults = append(filteredResults, sr)
-			}
-		}
-		scoredResults = filteredResults
-	}
-
 	cap := limit
 	if surfaceBudget > 0 && (cap == 0 || uint64(surfaceBudget) < cap) {
 		cap = uint64(surfaceBudget)
@@ -754,8 +748,8 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		rankedPositions[sr.result.CID] = idx
 	}
 
-	candidateScores := make([]CandidateScore, 0, len(allScoredResults))
-	for _, sr := range allScoredResults {
+	candidateScores := make([]CandidateScore, 0, len(scoredResults)+len(out.FloorDropped))
+	for _, sr := range scoredResults {
 		candidate := CandidateScore{
 			CID:             sr.result.CID,
 			MatchedKeywords: append([]string{}, sr.result.MatchedKeywords...),
@@ -772,14 +766,32 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			candidate.CombinedScore = breakdown.CombinedScore
 		}
 
-		if relevanceFloor > 0 && sr.weightedScore < relevanceFloor {
-			candidate.Disposition = "below_floor"
-		} else if rankPosition, ok := rankedPositions[sr.result.CID]; ok {
+		if rankPosition, ok := rankedPositions[sr.result.CID]; ok {
 			candidate.Disposition = "returned"
 			candidate.RankPosition = rankPosition
 		}
 
 		candidateScores = append(candidateScores, candidate)
+	}
+
+	// D-RECALL-GOVERNOR: below-floor candidates were dropped on the PRE-FRESHNESS
+	// combined score inside ScoreAndRank. Persist them for recall-inspector
+	// observability (below_floor disposition + combined_score on the gated scale).
+	for _, row := range out.FloorDropped {
+		matched := append([]string{}, row.Matched...)
+		sort.Strings(matched)
+		candidateScores = append(candidateScores, CandidateScore{
+			CID:             row.ID,
+			KeywordScore:    row.KeywordBoost,
+			VectorScore:     row.VectorScore,
+			Gamma:           row.Gamma,
+			Delta:           row.Delta,
+			CappedBoost:     row.CappedBoost,
+			CombinedScore:   row.Final, // pre-freshness combined — the score the floor gated on
+			MatchedKeywords: matched,
+			RankPosition:    -1,
+			Disposition:     "below_floor",
+		})
 	}
 
 	var memoryResults []protocol.MemoryResult

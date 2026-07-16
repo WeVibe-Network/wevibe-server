@@ -43,6 +43,7 @@ type parityOptsSpec struct {
 	Grace              float64 `json:"grace"`
 	BoostWindow        float64 `json:"boostWindow"`
 	NewMemMult         float64 `json:"newMemMult"`
+	Floor              float64 `json:"floor"`
 }
 
 type parityExpectedCaseSpec struct {
@@ -54,6 +55,7 @@ type parityExpectedCaseSpec struct {
 type parityExpectedDropCount struct {
 	Gate   int `json:"gate"`
 	Vector int `json:"vector"`
+	Floor  int `json:"floor"`
 	Kept   int `json:"kept"`
 	Total  int `json:"total"`
 }
@@ -105,6 +107,7 @@ func TestRankingParity_AgainstSimFixtures(t *testing.T) {
 				Grace:              tc.Opts.Grace,
 				BoostWindow:        tc.Opts.BoostWindow,
 				NewMemMult:         tc.Opts.NewMemMult,
+				Floor:              tc.Opts.Floor,
 			}
 
 			out := ScoreAndRank(cands, query, opts)
@@ -121,6 +124,7 @@ func TestRankingParity_AgainstSimFixtures(t *testing.T) {
 			wantDrops := DropCount{
 				Gate:   tc.Expected.DropCount.Gate,
 				Vector: tc.Expected.DropCount.Vector,
+				Floor:  tc.Expected.DropCount.Floor,
 				Kept:   tc.Expected.DropCount.Kept,
 				Total:  tc.Expected.DropCount.Total,
 			}

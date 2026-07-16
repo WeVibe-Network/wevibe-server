@@ -30,6 +30,11 @@ type RankOpts struct {
 	Grace              float64
 	BoostWindow        float64
 	NewMemMult         float64
+	// Floor is the absolute relevance floor (D-RECALL-GOVERNOR). When > 0, a
+	// candidate whose PRE-FRESHNESS combined score (VectorScore + cappedBoost)
+	// is below Floor is dropped before pending-denials and the D-9.4 freshness
+	// boost — mirrors wevibe-sim/recall-sim/pipeline/rank.mjs scoreDetailed.
+	Floor float64
 }
 
 type RankKeywordMatch struct {
@@ -57,11 +62,16 @@ type DropCount struct {
 	Vector int
 	Kept   int
 	Total  int
+	Floor  int
 }
 
 type RankOutput struct {
 	Rows  []RankedRow
 	Drops DropCount
+	// FloorDropped carries the candidates dropped by the relevance floor, each
+	// with Final set to its PRE-FRESHNESS combined score (VectorScore+CappedBoost),
+	// so the caller can persist below_floor observability (recall inspector).
+	FloorDropped []RankedRow
 }
 
 type rankedRowWithIndex struct {
@@ -168,6 +178,7 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 	sort.Strings(queryKeywords)
 
 	rows := make([]rankedRowWithIndex, 0, len(cands))
+	floorDropped := make([]RankedRow, 0)
 	drops := DropCount{Total: len(cands)}
 
 	for i, cand := range cands {
@@ -193,6 +204,23 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 			}
 		}
 		final := cand.VectorScore + cappedBoost
+
+		if opts.Floor > 0 && final < opts.Floor {
+			floorDropped = append(floorDropped, RankedRow{
+				ID:             cand.ID,
+				Final:          final,
+				VectorScore:    cand.VectorScore,
+				KeywordBoost:   boost,
+				Gamma:          opts.KeywordBoostFactor,
+				Delta:          opts.Delta,
+				CappedBoost:    cappedBoost,
+				Matched:        matched,
+				KeywordMatches: matchedDetails,
+				UnmatchedQuery: unmatchedQueryKeywords(queryKeywords, matched),
+			})
+			drops.Floor++
+			continue
+		}
 
 		if cand.PendingDenials > 0 {
 			final = math.Max(0, final-float64(cand.PendingDenials)*0.05)
@@ -239,7 +267,8 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 	drops.Kept = len(outputRows)
 
 	return RankOutput{
-		Rows:  outputRows,
-		Drops: drops,
+		Rows:         outputRows,
+		Drops:        drops,
+		FloorDropped: floorDropped,
 	}
 }
