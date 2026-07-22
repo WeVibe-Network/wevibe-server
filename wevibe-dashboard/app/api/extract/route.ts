@@ -7,19 +7,19 @@ import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/
 import { getCertifiedReadiness } from '@/lib/provider-readiness';
 import { loadSettings } from '@/lib/settings';
 import { resolveSessionModelSlug } from '@/lib/session-model';
+import { fetchSessionEvents, type SubstrateEvent } from '@/lib/opencode-session-events';
 
 export const dynamic = 'force-dynamic';
 const DEFAULT_EXTRACTION_NUM_CTX = 32768;
 const MCP_ENQUEUE_TIMEOUT_MS = 30_000; // the enqueue POST returns fast (202 {job_id}); no long-held connection
 
 interface ExtractRequestBody {
-  transcript: string;
   title?: string;
   directory?: string;
   model?: string;
   stack?: string[];
   org_id?: string;
-  session_id?: string;
+  session_id: string;
 }
 
 interface ExtractionProfileOverrides {
@@ -120,23 +120,84 @@ function computePromptFingerprint(prompt: string | undefined): string {
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json()) as ExtractRequestBody;
+  const body = (await request.json()) as Partial<ExtractRequestBody>;
   const trace = resolveTraceId(request.headers.get(TRACE_HEADER));
   const startedAt = Date.now();
+  const activeOrgId = (body.org_id ?? '').trim();
+  const sessionId = typeof body.session_id === 'string' ? body.session_id.trim() : '';
+
+  let sessionEvents: SubstrateEvent[] = [];
+  let sessionEventsReadError: string | null = null;
+  if (sessionId.length > 0) {
+    try {
+      sessionEvents = fetchSessionEvents(sessionId);
+    } catch (error) {
+      sessionEventsReadError = error instanceof Error ? error.message : String(error);
+    }
+  }
 
   logOp('dashboard.extract', 'info', {
     trace,
     phase: 'entry',
     method: 'POST',
-    transcript_len: body.transcript?.length ?? 0,
     has_title: Boolean(body.title),
     has_stack: Array.isArray(body.stack),
-    has_session_id: typeof body.session_id === 'string' && body.session_id.trim().length > 0,
+    has_session_id: sessionId.length > 0,
+    org: activeOrgId || '-',
+    session_events: sessionEvents.length,
   });
 
-  if (!body.transcript || body.transcript.trim().length < 50) {
+  if (sessionId.length === 0) {
+    logOp('dashboard.extract', 'warn', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      org: activeOrgId || '-',
+      err: 'session_id_required',
+      dur_ms: Date.now() - startedAt,
+    });
     return NextResponse.json(
-      { error: 'Session transcript too short for extraction' },
+      { error: 'session_id is required', code: 'session_id_required' },
+      { status: 400 },
+    );
+  }
+
+  if (sessionEventsReadError) {
+    logOp('dashboard.extract', 'error', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      org: activeOrgId || '-',
+      session_id: sessionId,
+      err: sessionEventsReadError,
+      reason: 'session_events_read',
+      dur_ms: Date.now() - startedAt,
+    });
+    return NextResponse.json(
+      {
+        error: 'Failed to load OpenCode session events',
+        code: 'session_events_read_failed',
+      },
+      { status: 500 },
+    );
+  }
+
+  if (sessionEvents.length === 0) {
+    logOp('dashboard.extract', 'warn', {
+      trace,
+      phase: 'outcome',
+      status: 'err',
+      org: activeOrgId || '-',
+      session_id: sessionId,
+      session_events: 0,
+      err: 'session_events_empty',
+      dur_ms: Date.now() - startedAt,
+    });
+    return NextResponse.json(
+      {
+        error: 'Session event stream is empty for extraction',
+        code: 'session_events_empty',
+      },
       { status: 400 },
     );
   }
@@ -199,12 +260,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const activeOrgId = (body.org_id ?? '').trim();
   const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId, trace);
   const useLmStudio = settings.llm_provider === 'lm_studio';
   const useOpenRouter = settings.llm_provider === 'openrouter';
   const mcpExtractRequestBody: {
-    transcript: string;
+    events: SubstrateEvent[];
     project_context: {
       title: string;
       directory: string;
@@ -218,19 +278,16 @@ export async function POST(request: NextRequest) {
     api_key?: string;
     base_url?: string;
     org_id?: string;
-    session_id?: string;
+    session_id: string;
   } = {
-    transcript: body.transcript,
+    events: sessionEvents,
     project_context: projectContext,
     model: effectiveModel,
+    session_id: sessionId,
   };
 
   if (activeOrgId.length > 0) {
     mcpExtractRequestBody.org_id = activeOrgId;
-  }
-
-  if (typeof body.session_id === 'string' && body.session_id.trim().length > 0) {
-    mcpExtractRequestBody.session_id = body.session_id;
   }
 
   if (profileOverrides?.prompt) {
@@ -273,6 +330,7 @@ export async function POST(request: NextRequest) {
         trace,
         phase: 'outcome',
         status: 'err',
+        org: activeOrgId || '-',
         proxy_target: extractUrl,
         dur_ms: Date.now() - startedAt,
         err: 'enqueue_timeout',
@@ -299,6 +357,7 @@ export async function POST(request: NextRequest) {
         trace,
         phase: 'outcome',
         status: 'err',
+        org: activeOrgId || '-',
         proxy_target: extractUrl,
         dur_ms: Date.now() - startedAt,
         err: code,
@@ -315,6 +374,7 @@ export async function POST(request: NextRequest) {
       trace,
       phase: 'outcome',
       status: 'err',
+      org: activeOrgId || '-',
       proxy_target: extractUrl,
       dur_ms: Date.now() - startedAt,
       err: message,
@@ -346,6 +406,7 @@ export async function POST(request: NextRequest) {
       trace,
       phase: 'outcome',
       status: 'err',
+      org: activeOrgId || '-',
       proxy_target: extractUrl,
       upstream_status: response.status,
       dur_ms: Date.now() - startedAt,
@@ -361,6 +422,7 @@ export async function POST(request: NextRequest) {
       trace,
       phase: 'outcome',
       status: 'err',
+      org: activeOrgId || '-',
       proxy_target: extractUrl,
       upstream_status: response.status,
       dur_ms: Date.now() - startedAt,
@@ -373,6 +435,7 @@ export async function POST(request: NextRequest) {
     trace,
     phase: 'outcome',
     status: 'ok',
+    org: activeOrgId || '-',
     proxy_target: extractUrl,
     upstream_status: response.status,
     dur_ms: Date.now() - startedAt,

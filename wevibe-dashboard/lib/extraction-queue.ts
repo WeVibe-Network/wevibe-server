@@ -9,7 +9,6 @@ import type { MemoryCandidate } from './session-types';
 export interface ExtractionJobInput {
   sessionId: string;
   pubkeyHex: string;
-  transcript: string;
   title: string;
   directory: string;
   model: string;
@@ -337,14 +336,12 @@ async function resolveJobPollingTarget(
   }
 
   const requestBody: {
-    transcript: string;
     title: string;
     directory: string;
     model: string;
     session_id: string;
     org_id?: string;
   } = {
-    transcript: job.transcript,
     title: job.title,
     directory: job.directory,
     model: job.model,
@@ -761,7 +758,6 @@ export async function resumeParkedJob(input: {
     jobs.push({
       sessionId,
       pubkeyHex: context.pubkeyHex,
-      transcript: '',
       title: context.title,
       directory: context.directory,
       model,
