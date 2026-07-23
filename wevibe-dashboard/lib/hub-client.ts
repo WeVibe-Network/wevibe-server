@@ -652,6 +652,9 @@ export interface Submission {
   mod_votes?: { approve: number; flag: number };
   keyword_votes?: Record<string, { include: number; exclude: number }>;
   moderator_recommendations?: ModeratorRecommendation[];
+  // Producer-model provenance (T3): immutable fields from submission.
+  producer_model_id?: string | null;
+  attestation_session_hash?: string | null;
 }
 
 export interface SanitizationFinding {

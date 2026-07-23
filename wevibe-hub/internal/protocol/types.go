@@ -165,6 +165,10 @@ type SubmitMemoryRequest struct {
 	MemoryType           string          `json:"memory_type"`
 	McVersion            uint32          `json:"mc_version,omitempty"`
 	Keywords             json.RawMessage `json:"keywords,omitempty"`
+	// Producer-model provenance (T3): immutable fields carrying the provenance
+	// identity of the producer memory that injected into this submission.
+	ProducerModelId    string `json:"producer_model_id,omitempty"`
+	AttestationSessionHash string `json:"attestation_session_hash,omitempty"`
 }
 
 type SubmitMemoryBatchRequest struct {
@@ -202,6 +206,9 @@ type PendingQueueItem struct {
 	Status                 string    `json:"status"`
 	Votes                  int       `json:"votes"`
 	VoterPubkeys           []string  `json:"voter_pubkeys,omitempty"`
+	// Producer-model provenance (T3): immutable fields carried from submission.
+	ProducerModelId      string `json:"producer_model_id,omitempty"`
+	AttestationSessionHash string `json:"attestation_session_hash,omitempty"`
 }
 
 type KeywordWithWeight struct {
@@ -375,6 +382,9 @@ type IndexEntry struct {
 	EmbeddingSchemaVersion string              `json:"embedding_schema_version,omitempty"`
 	VectorDim              int                 `json:"vector_dim,omitempty"`
 	McVersion              uint32              `json:"mc_version,omitempty"`
+	// Producer-model provenance (T3): immutable fields carried in Qdrant payload.
+	ProducerModelId      string `json:"producer_model_id,omitempty"`
+	AttestationSessionHash string `json:"attestation_session_hash,omitempty"`
 }
 
 type MemberOrgEntry struct {

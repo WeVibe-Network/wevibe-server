@@ -74,6 +74,9 @@ export interface SubmitMemoryParams {
   derivation: string;
   modPubkeyHex: string;
   hubUrl: string;
+  // Producer-model provenance (T3): optional fields for injecting provenance metadata.
+  producerModelId?: string;
+  attestationSessionHash?: string;
 }
 
 export interface SubmitMemoryPayload {
@@ -95,6 +98,10 @@ export interface SubmitMemoryPayload {
   mc_version?: number;
   derivation: string;
   attestation: null;
+  // Producer-model provenance (T3): immutable fields carrying the provenance
+  // identity of the producer memory that injected into this submission.
+  producer_model_id?: string;
+  attestation_session_hash?: string;
 }
 
 export interface BatchSubmitResult {
@@ -198,6 +205,12 @@ export async function buildSubmitMemoryPayload(
       mc_version: mcVersion ?? 1,
       derivation,
       attestation: null,
+      // Producer-model provenance (T3): pass through from params if provided.
+      ...(typeof derivation === 'string' && derivation.length > 0 ? { derivation } : {}),
+      ...(typeof params.producerModelId === 'string' && params.producerModelId.length > 0
+        ? { producer_model_id: params.producerModelId } : {}),
+      ...(typeof params.attestationSessionHash === 'string' && params.attestationSessionHash.length > 0
+        ? { attestation_session_hash: params.attestationSessionHash } : {}),
     },
   };
 }

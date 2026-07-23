@@ -33,22 +33,27 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		}
 	}()
 
-	var epochID int64
-	var extractionResult json.RawMessage
-	var embeddingVectorRaw json.RawMessage
-	var embeddingModelID sql.NullString
-	var embeddingSchemaVersion sql.NullString
+ 	var epochID int64
+ 	var extractionResult json.RawMessage
+ 	var embeddingVectorRaw json.RawMessage
+ 	var embeddingModelID sql.NullString
+ 	var embeddingSchemaVersion sql.NullString
+ 	var producerModelId string
+ 	var attestationSessionHash string
 
-	err := w.db.QueryRow(ctx, `
-		SELECT epoch_id, extraction_result, embedding_vector, embedding_model_id, embedding_schema_version
+ 	err := w.db.QueryRow(ctx, `
+		SELECT epoch_id, extraction_result, embedding_vector, embedding_model_id, embedding_schema_version,
+		       producer_model_id, attestation_session_hash
 		FROM pending_submissions
 		WHERE org_id = $1 AND submission_hash = $2 AND status = $3
-	`, orgID, contentHashHex, protocol.SubmissionStatusPendingChain).Scan(
+	`).Scan(
 		&epochID,
 		&extractionResult,
 		&embeddingVectorRaw,
 		&embeddingModelID,
 		&embeddingSchemaVersion,
+		&producerModelId,
+		&attestationSessionHash,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

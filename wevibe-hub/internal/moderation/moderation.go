@@ -113,17 +113,29 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		}
 	}
 
+	// T3 logging: log provenance fields at entry boundary (R-37).
+	// Log model/session fingerprints (first-8-hex of sha256), NEVER raw keys/secrets/plaintext/ciphertext.
+	attestationFp := "-"
+	if len(req.AttestationSessionHash) > 0 {
+		h := sha256.Sum256([]byte(req.AttestationSessionHash))
+		attestationFp = hex.EncodeToString(h[:])[:8]
+	}
+	log.Printf("op=submit_to_queue level=INFO trace=%s org_id=%s submission_hash=%s producer_model_id=%s attestation_session_hash_fp=%s status=accepted",
+		ctx.Value("trace_id"), req.OrgID, req.SubmissionHash, req.ProducerModelId, attestationFp)
+
 	_, err = pool.Exec(ctx, `
 			INSERT INTO pending_submissions
 				(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex,
 				 plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash,
-				 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings, extraction_result, status, mc_version)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, $19)
+				 wrapped_dek_mod, contributor_sig, stack_hint, memory_type, preference_confidence, derivation, sanitization_findings, extraction_result, status, mc_version,
+				 producer_model_id, attestation_session_hash)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, $19, $20, $21)
 		`,
 		req.SubmissionHash, req.OrgID, req.EpochID, req.ContributorPubkey,
 		req.Ciphertext, req.PlaintextHash, req.Salt, req.CiphertextHash, req.WrappedDekHash,
 		req.WrappedDekMod, req.ContributorSig, req.StackHint, req.MemoryType,
 		preferenceConfidence, derivation, sanitizationFindings, extractionResult, protocol.SubmissionStatusPendingKeyword, req.McVersion,
+		req.ProducerModelId, req.AttestationSessionHash,
 	)
 	if err != nil {
 		return err
@@ -172,35 +184,37 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 	rows, err := pool.Query(ctx, `
         SELECT ps.submission_hash, ps.org_id, ps.epoch_id, ps.contributor_pubkey,
                COALESCE(m.wallet_address, '') AS contributor_wallet,
-	               ps.ciphertext_hex, ps.wrapped_dek_mod,
-	               ps.stack_hint, ps.memory_type, ps.preference_confidence, ps.derivation, ps.created_at, ps.status,
+ 	               ps.ciphertext_hex, ps.wrapped_dek_mod,
+ 	               ps.stack_hint, ps.memory_type, ps.preference_confidence, ps.derivation, ps.created_at, ps.status,
                COALESCE(v.vote_count, 0) AS vote_count,
-               COALESCE(v.voter_pubkeys, ARRAY[]::TEXT[]) AS voter_pubkeys
-        FROM pending_submissions ps
-        LEFT JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
-        LEFT JOIN (
-            SELECT org_id, submission_hash, COUNT(*) AS vote_count,
-                   ARRAY_AGG(moderator_pubkey ORDER BY moderator_pubkey) AS voter_pubkeys
-	            FROM submission_mod_votes
-            GROUP BY org_id, submission_hash
-        ) v ON v.org_id = ps.org_id AND v.submission_hash = ps.submission_hash
-	        WHERE ps.org_id = $1 AND ps.status = 'pending_keyword'
-        ORDER BY ps.created_at ASC
-    `, orgID)
+               COALESCE(v.voter_pubkeys, ARRAY[]::TEXT[]) AS voter_pubkeys,
+               ps.producer_model_id, ps.attestation_session_hash
+         FROM pending_submissions ps
+         LEFT JOIN members m ON m.org_id = ps.org_id AND m.pubkey = ps.contributor_pubkey
+         LEFT JOIN (
+             SELECT org_id, submission_hash, COUNT(*) AS vote_count,
+                    ARRAY_AGG(moderator_pubkey ORDER BY moderator_pubkey) AS voter_pubkeys
+ 	            FROM submission_mod_votes
+             GROUP BY org_id, submission_hash
+         ) v ON v.org_id = ps.org_id AND v.submission_hash = ps.submission_hash
+ 	        WHERE ps.org_id = $1 AND ps.status = 'pending_keyword'
+         ORDER BY ps.created_at ASC
+     `, orgID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	items := []protocol.PendingQueueItem{}
-	for rows.Next() {
-		var item protocol.PendingQueueItem
-		if err := rows.Scan(
-			&item.SubmissionHash, &item.OrgID, &item.EpochID,
-			&item.ContributorPubkey, &item.ContributorWallet, &item.CiphertextHex, &item.WrappedDekMod,
-			&item.StackHint, &item.MemoryType, &item.PreferenceConfidence, &item.Derivation, &item.CreatedAt, &item.Status,
-			&item.Votes, &item.VoterPubkeys,
-		); err != nil {
+ 	items := []protocol.PendingQueueItem{}
+ 	for rows.Next() {
+ 		var item protocol.PendingQueueItem
+ 		if err := rows.Scan(
+ 			&item.SubmissionHash, &item.OrgID, &item.EpochID,
+ 			&item.ContributorPubkey, &item.ContributorWallet, &item.CiphertextHex, &item.WrappedDekMod,
+ 			&item.StackHint, &item.MemoryType, &item.PreferenceConfidence, &item.Derivation, &item.CreatedAt, &item.Status,
+ 			&item.Votes, &item.VoterPubkeys,
+ 			&item.ProducerModelId, &item.AttestationSessionHash,
+ 		); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

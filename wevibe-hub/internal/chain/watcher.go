@@ -401,12 +401,21 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 				w.logger.Error("processCloseOrgBookkeeping failed", "err", err, "org_id", m.OrgId)
 			}
 
-		case *memorytypes.MsgSubmitCommitment,
-			*reputationtypes.MsgIncrementContribution,
-			*reputationtypes.MsgIncrementServe,
-			*reputationtypes.MsgRecordBan,
-			*orgtypes.MsgSetOrgConfig:
-			w.logger.Debug("processed msg type with no bookkeeping", "msg_type", fmt.Sprintf("%T", msg))
+ 		case *memorytypes.MsgSubmitCommitment:
+ 			// T3: Extract provenance fields from chain event and persist to hub DB.
+ 			// The chain types already support ProducerModelId and AttestationSessionHash
+ 			// (keys.go:50-51, 98-99). We store them in pending_submissions so they're
+ 			// available for Qdrant indexing at approval time.
+ 			if err := w.storeSubmitCommitmentProvenance(ctx, m.OrgId, m.ContentHash,
+ 				m.ProducerModelId, m.AttestationSessionHash); err != nil {
+ 				w.logger.Error("storeSubmitCommitmentProvenance failed",
+ 					"err", err, "org_id", m.OrgId, "content_hash", fmt.Sprintf("%X", m.ContentHash))
+ 			}
+ 		case *reputationtypes.MsgIncrementContribution,
+ 			*reputationtypes.MsgIncrementServe,
+ 			*reputationtypes.MsgRecordBan,
+ 			*orgtypes.MsgSetOrgConfig:
+ 			w.logger.Debug("processed msg type with no bookkeeping", "msg_type", fmt.Sprintf("%T", msg))
 		}
 	}
 	return nil
@@ -797,4 +806,41 @@ func (w *ChainWatcher) getLastSeenBlock(ctx context.Context) (int64, error) {
 func (w *ChainWatcher) updateLastSeenBlock(ctx context.Context, height int64) error {
 	_, err := w.db.Exec(ctx, `UPDATE watcher_state SET last_seen_block_height = $1, updated_at = NOW() WHERE watcher_name = 'chain_watcher'`, height)
 	return err
+}
+
+// storeSubmitCommitmentProvenance (T3) extracts provenance fields from a
+// MsgSubmitCommitment chain event and stores them in pending_submissions.
+// The chain types already support ProducerModelId and AttestationSessionHash
+// (keys.go:50-51, 98-99). This bridges the chain → hub DB gap.
+func (w *ChainWatcher) storeSubmitCommitmentProvenance(
+	ctx context.Context,
+	orgID string,
+	contentHash []byte,
+	producerModelId string,
+	attestationSessionHash []byte,
+) error {
+	contentHashHex := hex.EncodeToString(contentHash)
+	attestationHex := ""
+	if len(attestationSessionHash) > 0 {
+		attestationHex = hex.EncodeToString(attestationSessionHash)
+	}
+
+	_, err := w.db.Exec(ctx, `
+		UPDATE pending_submissions
+		SET producer_model_id = $3,
+		    attestation_session_hash = $4,
+		    updated_at = NOW()
+		WHERE org_id = $1 AND submission_hash = $2
+	`, orgID, contentHashHex, producerModelId, attestationHex)
+	if err != nil {
+		return fmt.Errorf("store submit commitment provenance: %w", err)
+	}
+
+	w.logger.Info("stored submit commitment provenance",
+		"org_id", orgID,
+		"content_hash", contentHashHex,
+		"producer_model_id", producerModelId,
+		"attestation_session_hash", attestationHex)
+
+	return nil
 }

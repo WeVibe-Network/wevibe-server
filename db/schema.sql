@@ -175,7 +175,15 @@ CREATE TABLE IF NOT EXISTS pending_submissions (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     resolved_at             TIMESTAMPTZ,
-    mc_version              INTEGER
+    mc_version              INTEGER,
+    -- Producer-model provenance (T3): immutable fields carrying the provenance
+    -- identity of the producer memory that injected into this submission.
+    -- Threaded end-to-end through submit/persistence, chain-event ingestion,
+    -- pending→approved promotion, reconciliation/rebuild/bootstrap, API reads,
+    -- and Qdrant payload. SESSION_REFERENCED means a session reference exists,
+    -- not cryptographic verification (fact-vs-policy separation preserved).
+    producer_model_id       TEXT,
+    attestation_session_hash TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_org_status ON pending_submissions(org_id, status);

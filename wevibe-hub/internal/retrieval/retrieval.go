@@ -389,6 +389,16 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 		"keyword_weights": keywordWeights,
 		"lifecycle_state": entry.LifecycleState,
 		"memory_type":     entry.MemoryType,
+		// Producer-model provenance (T3): immutable fields carried in Qdrant payload.
+		// These are rebuildable read-index fields, not authority — the source of truth
+		// is pending_submissions + chain types. SESSION_REFERENCED means a session
+		// reference exists, not cryptographic verification (fact-vs-policy separation).
+	}
+	if entry.ProducerModelId != "" {
+		payloadMap["producer_model_id"] = entry.ProducerModelId
+	}
+	if entry.AttestationSessionHash != "" {
+		payloadMap["attestation_session_hash"] = entry.AttestationSessionHash
 	}
 
 	if entry.EmbeddingModelID != "" {
