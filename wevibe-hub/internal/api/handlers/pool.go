@@ -13,6 +13,7 @@ var pool *pgxpool.Pool
 var qdrantClient *retrieval.QdrantClient
 var nodePrivkeyHex string
 var chainClient *chain.GrpcClient
+var chainWatcher *chain.ChainWatcher
 var faucetURL string
 var umbralService *umbral.Service
 var socialClient *social.Client
@@ -44,6 +45,10 @@ func SetNodePrivkey(key string) {
 
 func SetChainClient(c *chain.GrpcClient) {
 	chainClient = c
+}
+
+func SetChainWatcher(w *chain.ChainWatcher) {
+	chainWatcher = w
 }
 
 func SetFaucetURL(url string) {

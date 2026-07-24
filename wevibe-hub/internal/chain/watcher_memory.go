@@ -46,7 +46,7 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		       producer_model_id, attestation_session_hash
 		FROM pending_submissions
 		WHERE org_id = $1 AND submission_hash = $2 AND status = $3
-	`).Scan(
+	`, orgID, contentHashHex, protocol.SubmissionStatusPendingChain).Scan(
 		&epochID,
 		&extractionResult,
 		&embeddingVectorRaw,

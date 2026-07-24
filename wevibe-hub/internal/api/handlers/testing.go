@@ -93,6 +93,36 @@ type TestUpdateRoleRequest struct {
 	NewRole string `json:"new_role"`
 }
 
+type TestRedriveApproveRequest struct {
+	OrgID          string `json:"org_id"`
+	ContentHashHex string `json:"content_hash_hex"`
+}
+
+func TestRedriveApproveMemory(w http.ResponseWriter, r *http.Request) {
+	if chainWatcher == nil {
+		http.Error(w, `{"error":"chain watcher unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req TestRedriveApproveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if req.OrgID == "" || req.ContentHashHex == "" {
+		http.Error(w, `{"error":"org_id and content_hash_hex required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := chainWatcher.RedriveApproveMemory(r.Context(), req.OrgID, req.ContentHashHex); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 // TestServeQueueDepth reports how many serve/denial events are still pending
 // relay to the chain for an org. The empirical replay polls this between epochs
 // to wait for each epoch's traffic to land on-chain before advancing, bounding

@@ -161,6 +161,7 @@ func main() {
 	txDecoder := chain.BuildTxDecoder(chainClient.GetCodec())
 	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, umbralService)
 	watcher.SetDispatcher(notificationDispatcher)
+	handlers.SetChainWatcher(watcher)
 	go func() {
 		if err := watcher.Start(ctx); err != nil {
 			log.Printf("ERROR: chain watcher exited: %v", err)
@@ -321,6 +322,7 @@ func main() {
 		r.Get("/v1/test/health", handlers.TestHealth)
 
 		r.Post("/v1/test/embed", handlers.TestEmbed)
+		r.Post("/v1/test/redrive/approve", handlers.TestRedriveApproveMemory)
 		r.Get("/v1/test/orgs/{orgID}/queue", handlers.TestGetQueue)
 		r.Get("/v1/test/orgs/{orgID}/serve-queue", handlers.TestServeQueueDepth)
 	}
