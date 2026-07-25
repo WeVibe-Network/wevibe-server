@@ -16,7 +16,7 @@ require (
 	github.com/lib/pq v1.11.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wevibe-network/wevibe-chain v0.0.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 )
 
