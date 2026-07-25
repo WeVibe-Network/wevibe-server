@@ -2,7 +2,6 @@ package retrieval
 
 import (
 	"fmt"
-	"math"
 	"math/rand"
 	"sort"
 	"testing"
@@ -201,8 +200,4 @@ func extractCIDs(results []scoredResult) []string {
 		cids = append(cids, r.result.CID)
 	}
 	return cids
-}
-
-func almostEqual(a, b, epsilon float64) bool {
-	return math.Abs(a-b) <= epsilon
 }

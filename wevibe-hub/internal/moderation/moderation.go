@@ -102,14 +102,15 @@ func SubmitToQueue(ctx context.Context, pool *pgxpool.Pool, req protocol.SubmitM
 		derivation = "verbatim"
 	}
 
-	var extractionResult any
+	var extractionResult *string
 	rawKeywords := req.Keywords
 	if keywords := bytes.TrimSpace(rawKeywords); len(keywords) > 0 {
 		var parsedKeywords map[string]any
 		if err := json.Unmarshal(keywords, &parsedKeywords); err != nil {
 			log.Printf("warn: skipping malformed keywords metadata for submission %s: %v", req.SubmissionHash, err)
 		} else if len(parsedKeywords) > 0 {
-			extractionResult = string(rawKeywords)
+			rawKeywordsStr := string(rawKeywords)
+			extractionResult = &rawKeywordsStr
 		}
 	}
 
@@ -205,16 +206,16 @@ func GetPendingQueue(ctx context.Context, pool *pgxpool.Pool, orgID, moderatorPu
 	}
 	defer rows.Close()
 
- 	items := []protocol.PendingQueueItem{}
- 	for rows.Next() {
- 		var item protocol.PendingQueueItem
- 		if err := rows.Scan(
- 			&item.SubmissionHash, &item.OrgID, &item.EpochID,
- 			&item.ContributorPubkey, &item.ContributorWallet, &item.CiphertextHex, &item.WrappedDekMod,
- 			&item.StackHint, &item.MemoryType, &item.PreferenceConfidence, &item.Derivation, &item.CreatedAt, &item.Status,
- 			&item.Votes, &item.VoterPubkeys,
- 			&item.ProducerModelId, &item.AttestationSessionHash,
- 		); err != nil {
+	items := []protocol.PendingQueueItem{}
+	for rows.Next() {
+		var item protocol.PendingQueueItem
+		if err := rows.Scan(
+			&item.SubmissionHash, &item.OrgID, &item.EpochID,
+			&item.ContributorPubkey, &item.ContributorWallet, &item.CiphertextHex, &item.WrappedDekMod,
+			&item.StackHint, &item.MemoryType, &item.PreferenceConfidence, &item.Derivation, &item.CreatedAt, &item.Status,
+			&item.Votes, &item.VoterPubkeys,
+			&item.ProducerModelId, &item.AttestationSessionHash,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, item)

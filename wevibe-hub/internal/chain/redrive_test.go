@@ -10,6 +10,7 @@ import (
 	"time"
 
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/jackc/pgx/v5"
 	memorytypes "github.com/wevibe-network/wevibe-chain/x/memory/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
@@ -80,7 +81,7 @@ func TestRedriveApproveMemory_DispatchesBookkeepingWithTxFields(t *testing.T) {
 		func(context.Context, string, int, int) (*coretypes.ResultTxSearch, error) { return txs, nil },
 		func(context.Context, int64) (time.Time, error) { return txTime, nil },
 		func([]byte) (TxInterface, error) {
-			return testTx{msgs: []interface{}{
+			return testTx{msgs: []sdk.Msg{
 				&memorytypes.MsgSubmitCommitment{
 					OrgId:                  "wevibe-org-0",
 					ContentHash:            contentHash,
@@ -155,9 +156,9 @@ func TestRedriveApproveMemory_DispatchesBookkeepingWithTxFields(t *testing.T) {
 	}
 }
 
-type testTx struct{ msgs []interface{} }
+type testTx struct{ msgs []sdk.Msg }
 
-func (t testTx) GetMsgs() []interface{} { return t.msgs }
+func (t testTx) GetMsgs() []sdk.Msg { return t.msgs }
 
 func mustHex(t *testing.T, s string) []byte {
 	t.Helper()

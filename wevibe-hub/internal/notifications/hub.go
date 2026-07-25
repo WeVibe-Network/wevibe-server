@@ -19,8 +19,8 @@ type Client struct {
 }
 
 type NotificationMessage struct {
-	Type string      `json:"type"`
-	Data interface{} `json:"data"`
+	Type string               `json:"type"`
+	Data *NotificationPayload `json:"data"`
 }
 
 func NewHub() *NotificationHub {
@@ -64,15 +64,6 @@ func (h *NotificationHub) Broadcast(pubkey string, payload []byte) {
 			}
 		}
 	}
-}
-
-func (h *NotificationHub) ClientCount(pubkey string) int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if clients, ok := h.clients[pubkey]; ok {
-		return len(clients)
-	}
-	return 0
 }
 
 type NotificationPayload struct {

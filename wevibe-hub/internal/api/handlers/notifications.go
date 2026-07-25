@@ -19,10 +19,6 @@ func SetNotificationHub(h *notifications.NotificationHub) {
 	notificationHub = h
 }
 
-func GetNotificationHub() *notifications.NotificationHub {
-	return notificationHub
-}
-
 func SetNotificationDispatcher(d *notifications.Dispatcher) {
 	notificationDispatcher = d
 }

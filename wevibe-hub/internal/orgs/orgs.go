@@ -108,15 +108,6 @@ func GetOrgIDByLeader(ctx context.Context, pool *pgxpool.Pool, leaderPubkey stri
 	return orgID, nil
 }
 
-func SetChainRegistered(ctx context.Context, pool *pgxpool.Pool, orgID string, registered bool) error {
-	_, err := pool.Exec(ctx, `
-		UPDATE orgs
-		SET chain_registered = $2, updated_at = NOW()
-		WHERE org_id = $1
-	`, orgID, registered)
-	return err
-}
-
 func SetRotationPending(ctx context.Context, pool *pgxpool.Pool, orgID string) error {
 	_, err := pool.Exec(ctx, `
 		UPDATE orgs 
@@ -362,15 +353,4 @@ func EpochExists(ctx context.Context, pool *pgxpool.Pool, orgID string, epochID 
 		return false, err
 	}
 	return exists, nil
-}
-
-func GetOrgStatus(ctx context.Context, pool *pgxpool.Pool, orgID string) (string, error) {
-	var status string
-	err := pool.QueryRow(ctx, `
-		SELECT status FROM orgs WHERE org_id = $1
-	`, orgID).Scan(&status)
-	if err != nil {
-		return "", err
-	}
-	return status, nil
 }

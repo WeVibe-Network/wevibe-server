@@ -1,17 +1,16 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 )
 
 func RegisterDashboardKey(w http.ResponseWriter, r *http.Request) {
@@ -140,18 +139,4 @@ func RevokeDashboardKey(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "revoked"})
-}
-
-func IsDashboardKey(ctx context.Context, orgID, pubkey string) bool {
-	if pool == nil {
-		return false
-	}
-	var active bool
-	err := pool.QueryRow(ctx, `
-		SELECT active FROM dashboard_keys WHERE org_id = $1 AND pubkey = $2
-	`, orgID, pubkey).Scan(&active)
-	if err != nil {
-		return false
-	}
-	return active
 }

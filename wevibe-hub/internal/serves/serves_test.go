@@ -91,12 +91,20 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 
 	// Round-trip via the read path to confirm persistence, not just the
 	// return value from the post-INSERT SELECT inside RecordServe.
-	got, err := GetServeEventByIdentity(ctx, pool, orgID, EventTypeServe, serveKeyPubkey, contentHash, 0)
+	pending, err := GetPendingServes(ctx, pool, orgID, 10)
 	if err != nil {
-		t.Fatalf("GetServeEventByIdentity failed: %v", err)
+		t.Fatalf("GetPendingServes failed: %v", err)
+	}
+
+	var got *ServeEventRecord
+	for i := range pending {
+		if pending[i].ID == record.ID {
+			got = &pending[i]
+			break
+		}
 	}
 	if got == nil {
-		t.Fatal("expected to find persisted serve_events row, got nil")
+		t.Fatal("expected to find persisted serve_events row in pending serves, got nil")
 	}
 	if !reflect.DeepEqual(got.MatchedKeywords, expectedCanonical) {
 		t.Fatalf("matched keywords from DB: got=%v want=%v", got.MatchedKeywords, expectedCanonical)

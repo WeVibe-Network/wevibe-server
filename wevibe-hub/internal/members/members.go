@@ -106,17 +106,6 @@ func LinkWallet(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey, walletAd
 	return nil
 }
 
-func GetWalletAddress(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (*string, error) {
-	var wallet *string
-	err := pool.QueryRow(ctx,
-		`SELECT wallet_address FROM members WHERE org_id = $1 AND pubkey = $2`,
-		orgID, pubkey).Scan(&wallet)
-	if err != nil {
-		return nil, err
-	}
-	return wallet, nil
-}
-
 func ListMembers(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]protocol.MemberRecord, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate, join_epoch,

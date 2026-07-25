@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -375,21 +374,6 @@ func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, li
 	return records, nil
 }
 
-func MarkSubmitted(ctx context.Context, pool *pgxpool.Pool, ids []int64, txHash string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	_, err := pool.Exec(ctx, `
-		UPDATE serve_events
-		SET status = 'submitted', tx_hash = $1, submitted_at = NOW()
-		WHERE id = ANY($2)
-	`, txHash, ids)
-	if err != nil {
-		return fmt.Errorf("mark submitted: %w", err)
-	}
-	return nil
-}
-
 // MarkServesSubmitted updates the given serve_events rows to status='submitted'
 // after a successful chain broadcast, scoped to event_type='serve' to prevent
 // accidental cross-type updates from a misuse of the API.
@@ -425,32 +409,6 @@ func MarkDenialsSubmitted(ctx context.Context, pool *pgxpool.Pool, ids []int64, 
 	return nil
 }
 
-func MarkFailed(ctx context.Context, pool *pgxpool.Pool, ids []int64) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	_, err := pool.Exec(ctx, `
-		UPDATE serve_events
-		SET status = 'failed'
-		WHERE id = ANY($1)
-	`, ids)
-	if err != nil {
-		return fmt.Errorf("mark failed: %w", err)
-	}
-	return nil
-}
-
-func CountPending(ctx context.Context, pool *pgxpool.Pool, orgID string) (int64, error) {
-	var count int64
-	err := pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM serve_events WHERE org_id = $1 AND status = 'pending' AND event_type = 'serve'
-	`, orgID).Scan(&count)
-	if err != nil && err != pgx.ErrNoRows {
-		return 0, fmt.Errorf("count pending: %w", err)
-	}
-	return count, nil
-}
-
 func HasPendingEvents(ctx context.Context, pool *pgxpool.Pool, orgID string) (bool, error) {
 	var exists bool
 	err := pool.QueryRow(ctx, `
@@ -464,25 +422,4 @@ func HasPendingEvents(ctx context.Context, pool *pgxpool.Pool, orgID string) (bo
 		return false, fmt.Errorf("check pending serve events: %w", err)
 	}
 	return exists, nil
-}
-
-func GetServeEventByIdentity(ctx context.Context, pool *pgxpool.Pool, orgID, eventType, serveKeyPubkey, memoryContentHash string, epochID int) (*ServeEventRecord, error) {
-	var r ServeEventRecord
-	err := pool.QueryRow(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, COALESCE(serve_fingerprint, ''), contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
-		FROM serve_events
-		WHERE org_id = $1 AND event_type = $2 AND serve_key_pubkey = $3 AND memory_content_hash = $4 AND epoch_id = $5
-	`, orgID, eventType, serveKeyPubkey, memoryContentHash, epochID).Scan(
-		&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
-		&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
-		&r.TurnCount, &r.MatchedKeywords, &r.ReporterPubkey, &r.Reason, &r.EventType, &r.Status, &r.TxHash,
-		&r.CreatedAt, &r.SubmittedAt,
-	)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get serve event: %w", err)
-	}
-	return &r, nil
 }

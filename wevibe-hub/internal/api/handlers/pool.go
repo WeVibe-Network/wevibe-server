@@ -62,7 +62,3 @@ func SetUmbralService(s *umbral.Service) {
 func SetSocialClient(c *social.Client) {
 	socialClient = c
 }
-
-func GetSocialClient() *social.Client {
-	return socialClient
-}

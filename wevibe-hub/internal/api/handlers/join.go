@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +126,15 @@ func SubmitJoinRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var leaderPubkey string
-	_ = pool.QueryRow(ctx, `SELECT leader_pubkey FROM orgs WHERE org_id=$1`, orgID).Scan(&leaderPubkey)
+	leaderLookupErr := pool.QueryRow(ctx, `SELECT leader_pubkey FROM orgs WHERE org_id=$1`, orgID).Scan(&leaderPubkey)
+	if leaderLookupErr != nil {
+		wlog.Op(ctx, "hub.submit_join_request", slog.LevelWarn,
+			slog.String("phase", "leader_lookup"),
+			slog.String("status", "err"),
+			slog.String("org", orgID),
+			slog.String("requester", requesterPubkey),
+			slog.String("err", leaderLookupErr.Error()))
+	}
 	if leaderPubkey != "" {
 		shortPubkey := requesterPubkey[:min(8, len(requesterPubkey))]
 		_ = emitUserNotification(ctx,

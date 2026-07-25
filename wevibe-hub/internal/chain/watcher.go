@@ -47,20 +47,15 @@ type ChainWatcher struct {
 type TxDecoderFunc func(txBytes []byte) (TxInterface, error)
 
 type TxInterface interface {
-	GetMsgs() []interface{}
+	GetMsgs() []sdk.Msg
 }
 
 type sdkTxAdapter struct {
 	tx sdk.Tx
 }
 
-func (a sdkTxAdapter) GetMsgs() []interface{} {
-	msgs := a.tx.GetMsgs()
-	out := make([]interface{}, len(msgs))
-	for i := range msgs {
-		out[i] = msgs[i]
-	}
-	return out
+func (a sdkTxAdapter) GetMsgs() []sdk.Msg {
+	return a.tx.GetMsgs()
 }
 
 // BuildTxDecoder reuses the GrpcClient proto codec/registry so tx decoding

@@ -431,43 +431,6 @@ func VoteOnReport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-type reportRecordForResolution struct {
-	ID             string
-	MemoryCID      string
-	ReporterPubkey string
-	ReporterWallet *string
-	Reason         string
-	Note           *string
-}
-
-func resolveReportUpheld(ctx context.Context, tx pgx.Tx, orgID string, reportID string, report *reportRecordForResolution, epoch int) error {
-	_, err := tx.Exec(ctx, `
-		UPDATE reports SET status = 'upheld_pending_tx', resolved_at = NOW(), updated_at = NOW()
-		WHERE org_id = $1 AND id = $2
-	`, orgID, reportID)
-	return err
-}
-
-func resolveReportDismissed(ctx context.Context, tx pgx.Tx, orgID string, reportID string, report *reportRecordForResolution, resolution string) error {
-	_, err := tx.Exec(ctx, `
-		UPDATE reports SET status = $1, resolution = $1, resolved_at = NOW(), updated_at = NOW()
-		WHERE org_id = $2 AND id = $3
-	`, resolution, orgID, reportID)
-	if err != nil {
-		return fmt.Errorf("update report status: %w", err)
-	}
-
-	_, err = tx.Exec(ctx, `
-		UPDATE members SET dismissed_reports_count = dismissed_reports_count + 1
-		WHERE org_id = $1 AND pubkey = $2 AND active = true
-	`, orgID, report.ReporterPubkey)
-	if err != nil {
-		return fmt.Errorf("increment dismissed count: %w", err)
-	}
-
-	return nil
-}
-
 func authorizeReportActor(r *http.Request, orgID string, moderatorOnly bool) (string, string, error) {
 	signed, err := auth.ParseWeVibeSigned(r)
 	if err != nil {
