@@ -17,7 +17,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 )
 
-func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, contentHash []byte, keywords []string, contributorID string, contributorWallet string, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte, mcVersion uint32) (retErr error) {
+func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, contentHash []byte, keywords []string, contributorID string, contributorWallet string, producerModelID string, attestationSessionHash string, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte, mcVersion uint32) (retErr error) {
 	logger := w.logger.With("org_id", orgID, "tx_hash", txHash)
 
 	contentHashHex := hex.EncodeToString(contentHash)
@@ -33,17 +33,13 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		}
 	}()
 
- 	var epochID int64
- 	var extractionResult json.RawMessage
- 	var embeddingVectorRaw json.RawMessage
- 	var embeddingModelID sql.NullString
- 	var embeddingSchemaVersion sql.NullString
- 	var producerModelId string
- 	var attestationSessionHash string
-
- 	err := w.db.QueryRow(ctx, `
-		SELECT epoch_id, extraction_result, embedding_vector, embedding_model_id, embedding_schema_version,
-		       producer_model_id, attestation_session_hash
+	var epochID int64
+	var extractionResult json.RawMessage
+	var embeddingVectorRaw json.RawMessage
+	var embeddingModelID sql.NullString
+	var embeddingSchemaVersion sql.NullString
+	err := w.db.QueryRow(ctx, `
+		SELECT epoch_id, extraction_result, embedding_vector, embedding_model_id, embedding_schema_version
 		FROM pending_submissions
 		WHERE org_id = $1 AND submission_hash = $2 AND status = $3
 	`, orgID, contentHashHex, protocol.SubmissionStatusPendingChain).Scan(
@@ -52,8 +48,6 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 		&embeddingVectorRaw,
 		&embeddingModelID,
 		&embeddingSchemaVersion,
-		&producerModelId,
-		&attestationSessionHash,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -107,14 +101,16 @@ func (w *ChainWatcher) processApproveMemoryBookkeeping(ctx context.Context, txHa
 	}
 
 	entry := protocol.IndexEntry{
-		CID:            contentHashHex,
-		OrgID:          orgID,
-		EpochID:        int32(epochID),
-		Keywords:       keywordWithWeightSlice,
-		KeywordWeights: keywordWeights,
-		LifecycleState: "ACTIVE",
-		MemoryType:     memoryType,
-		McVersion:      mcVersion,
+		CID:                    contentHashHex,
+		OrgID:                  orgID,
+		EpochID:                int32(epochID),
+		Keywords:               keywordWithWeightSlice,
+		KeywordWeights:         keywordWeights,
+		LifecycleState:         "ACTIVE",
+		ProducerModelId:        producerModelID,
+		AttestationSessionHash: attestationSessionHash,
+		MemoryType:             memoryType,
+		McVersion:              mcVersion,
 	}
 
 	shouldUpsertVector := false

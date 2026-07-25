@@ -314,6 +314,96 @@ func TestQueryPointsMissingCollectionReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestUpsertPoint_IncludesProvenancePayloadWhenPresent(t *testing.T) {
+	var capturedPayload map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&capturedPayload); err != nil {
+			t.Fatalf("decode upsert payload: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"status": "ok"}})
+	}))
+	defer server.Close()
+
+	client := &QdrantClient{restURL: server.URL, apiKey: "test-api-key-for-unit-tests-only"}
+	entry := protocol.IndexEntry{
+		CID:                    "cid-with-provenance",
+		OrgID:                  "prov-org",
+		EpochID:                1,
+		Keywords:               []protocol.KeywordWithWeight{{Keyword: "alpha", Weight: 1}},
+		Vector:                 make([]float32, EMBED_DIM),
+		ProducerModelId:        "gpt-5.3-codex",
+		AttestationSessionHash: "cafebabe",
+	}
+
+	if err := client.UpsertPoint(context.Background(), entry); err != nil {
+		t.Fatalf("UpsertPoint failed: %v", err)
+	}
+
+	payload := extractUpsertPointPayload(t, capturedPayload)
+	if got, ok := payload["producer_model_id"].(string); !ok || got != "gpt-5.3-codex" {
+		t.Fatalf("producer_model_id mismatch: got=%#v ok=%v", payload["producer_model_id"], ok)
+	}
+	if got, ok := payload["attestation_session_hash"].(string); !ok || got != "cafebabe" {
+		t.Fatalf("attestation_session_hash mismatch: got=%#v ok=%v", payload["attestation_session_hash"], ok)
+	}
+}
+
+func TestUpsertPoint_OmitsProvenancePayloadWhenEmpty(t *testing.T) {
+	var capturedPayload map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&capturedPayload); err != nil {
+			t.Fatalf("decode upsert payload: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"status": "ok"}})
+	}))
+	defer server.Close()
+
+	client := &QdrantClient{restURL: server.URL, apiKey: "test-api-key-for-unit-tests-only"}
+	entry := protocol.IndexEntry{
+		CID:      "cid-without-provenance",
+		OrgID:    "prov-org",
+		EpochID:  1,
+		Keywords: []protocol.KeywordWithWeight{{Keyword: "alpha", Weight: 1}},
+		Vector:   make([]float32, EMBED_DIM),
+	}
+
+	if err := client.UpsertPoint(context.Background(), entry); err != nil {
+		t.Fatalf("UpsertPoint failed: %v", err)
+	}
+
+	payload := extractUpsertPointPayload(t, capturedPayload)
+	if _, ok := payload["producer_model_id"]; ok {
+		t.Fatalf("producer_model_id should be omitted when empty: %#v", payload)
+	}
+	if _, ok := payload["attestation_session_hash"]; ok {
+		t.Fatalf("attestation_session_hash should be omitted when empty: %#v", payload)
+	}
+}
+
+func extractUpsertPointPayload(t *testing.T, captured map[string]any) map[string]any {
+	t.Helper()
+	points, ok := captured["points"].([]any)
+	if !ok || len(points) != 1 {
+		t.Fatalf("upsert payload missing points array: %#v", captured)
+	}
+	point, ok := points[0].(map[string]any)
+	if !ok {
+		t.Fatalf("upsert point malformed: %#v", points[0])
+	}
+	payload, ok := point["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("upsert payload missing point payload map: %#v", point)
+	}
+	return payload
+}
+
 func assertEmbeddingModelFilterCondition(t *testing.T, requestBody map[string]any, expectedModelID string, expected bool) {
 	t.Helper()
 

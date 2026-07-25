@@ -58,7 +58,7 @@ func (w *ChainWatcher) redriveApproveMemory(ctx context.Context, orgID string, c
 	txSearch func(context.Context, string, int, int) (*coretypes.ResultTxSearch, error),
 	blockTime func(context.Context, int64) (time.Time, error),
 	decode TxDecoderFunc,
-	bookkeep func(context.Context, string, int64, time.Time, string, []byte, []string, string, string, string, []byte, []byte, uint32) error,
+	bookkeep func(context.Context, string, int64, time.Time, string, []byte, []string, string, string, string, string, string, []byte, []byte, uint32) error,
 ) error {
 	start := time.Now()
 	contentFP := ""
@@ -123,6 +123,7 @@ func (w *ChainWatcher) redriveApproveMemory(ctx context.Context, orgID string, c
 				}
 				var keywords []string
 				var contributorID, contributorWallet string
+				var producerModelID, attestationSessionHash string
 				for _, inner := range msgs {
 					submit, ok := inner.(*memorytypes.MsgSubmitCommitment)
 					if !ok || submit.OrgId != approve.OrgId || !bytes.Equal(submit.ContentHash, approve.ContentHash) {
@@ -134,6 +135,8 @@ func (w *ChainWatcher) redriveApproveMemory(ctx context.Context, orgID string, c
 					}
 					contributorID = submit.ContributorId
 					contributorWallet = submit.ContributorWallet
+					producerModelID = submit.ProducerModelId
+					attestationSessionHash = encodeAttestationSessionHash(submit.AttestationSessionHash)
 					break
 				}
 				txTime, err := blockTime(ctx, tx.Height)
@@ -142,6 +145,7 @@ func (w *ChainWatcher) redriveApproveMemory(ctx context.Context, orgID string, c
 				}
 				if err := bookkeep(ctx, fmt.Sprintf("%X", []byte(tx.Hash)), tx.Height, txTime,
 					approve.OrgId, approve.ContentHash, keywords, contributorID, contributorWallet,
+					producerModelID, attestationSessionHash,
 					approve.MemoryType.String(), approve.EncryptedBlob, approve.WrappedDekEnc, approve.McVersion); err != nil {
 					return fmt.Errorf("process approve bookkeeping: %w", err)
 				}

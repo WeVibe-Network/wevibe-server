@@ -315,6 +315,7 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 		case *memorytypes.MsgApproveMemory:
 			var keywords []string
 			var contributorID, contributorWallet string
+			var producerModelID, attestationSessionHash string
 			for _, innerMsg := range allMsgs {
 				if sc, ok := innerMsg.(*memorytypes.MsgSubmitCommitment); ok {
 					if sc.OrgId == m.OrgId && string(sc.ContentHash) == string(m.ContentHash) {
@@ -324,6 +325,8 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 						}
 						contributorID = sc.ContributorId
 						contributorWallet = sc.ContributorWallet
+						producerModelID = sc.ProducerModelId
+						attestationSessionHash = encodeAttestationSessionHash(sc.AttestationSessionHash)
 						break
 					}
 				}
@@ -331,6 +334,7 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 
 			if err := w.processApproveMemoryBookkeeping(ctx, txHashHex, height, timestamp,
 				m.OrgId, m.ContentHash, keywords, contributorID, contributorWallet,
+				producerModelID, attestationSessionHash,
 				m.MemoryType.String(), m.EncryptedBlob, m.WrappedDekEnc,
 				m.McVersion); err != nil {
 				w.logger.Error("processApproveMemoryBookkeeping failed", "err", err, "org_id", m.OrgId)
@@ -401,21 +405,21 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 				w.logger.Error("processCloseOrgBookkeeping failed", "err", err, "org_id", m.OrgId)
 			}
 
- 		case *memorytypes.MsgSubmitCommitment:
- 			// T3: Extract provenance fields from chain event and persist to hub DB.
- 			// The chain types already support ProducerModelId and AttestationSessionHash
- 			// (keys.go:50-51, 98-99). We store them in pending_submissions so they're
- 			// available for Qdrant indexing at approval time.
- 			if err := w.storeSubmitCommitmentProvenance(ctx, m.OrgId, m.ContentHash,
- 				m.ProducerModelId, m.AttestationSessionHash); err != nil {
- 				w.logger.Error("storeSubmitCommitmentProvenance failed",
- 					"err", err, "org_id", m.OrgId, "content_hash", fmt.Sprintf("%X", m.ContentHash))
- 			}
- 		case *reputationtypes.MsgIncrementContribution,
- 			*reputationtypes.MsgIncrementServe,
- 			*reputationtypes.MsgRecordBan,
- 			*orgtypes.MsgSetOrgConfig:
- 			w.logger.Debug("processed msg type with no bookkeeping", "msg_type", fmt.Sprintf("%T", msg))
+		case *memorytypes.MsgSubmitCommitment:
+			// T3: Extract provenance fields from chain event and persist to hub DB.
+			// The chain types already support ProducerModelId and AttestationSessionHash
+			// (keys.go:50-51, 98-99). We store them in pending_submissions so they're
+			// available for Qdrant indexing at approval time.
+			if err := w.storeSubmitCommitmentProvenance(ctx, m.OrgId, m.ContentHash,
+				m.ProducerModelId, m.AttestationSessionHash); err != nil {
+				w.logger.Error("storeSubmitCommitmentProvenance failed",
+					"err", err, "org_id", m.OrgId, "content_hash", fmt.Sprintf("%X", m.ContentHash))
+			}
+		case *reputationtypes.MsgIncrementContribution,
+			*reputationtypes.MsgIncrementServe,
+			*reputationtypes.MsgRecordBan,
+			*orgtypes.MsgSetOrgConfig:
+			w.logger.Debug("processed msg type with no bookkeeping", "msg_type", fmt.Sprintf("%T", msg))
 		}
 	}
 	return nil
@@ -820,10 +824,7 @@ func (w *ChainWatcher) storeSubmitCommitmentProvenance(
 	attestationSessionHash []byte,
 ) error {
 	contentHashHex := hex.EncodeToString(contentHash)
-	attestationHex := ""
-	if len(attestationSessionHash) > 0 {
-		attestationHex = hex.EncodeToString(attestationSessionHash)
-	}
+	attestationHex := encodeAttestationSessionHash(attestationSessionHash)
 
 	_, err := w.db.Exec(ctx, `
 		UPDATE pending_submissions
@@ -843,4 +844,11 @@ func (w *ChainWatcher) storeSubmitCommitmentProvenance(
 		"attestation_session_hash", attestationHex)
 
 	return nil
+}
+
+func encodeAttestationSessionHash(attestationSessionHash []byte) string {
+	if len(attestationSessionHash) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(attestationSessionHash)
 }

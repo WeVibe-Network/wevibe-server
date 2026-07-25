@@ -82,10 +82,12 @@ func TestRedriveApproveMemory_DispatchesBookkeepingWithTxFields(t *testing.T) {
 		func([]byte) (TxInterface, error) {
 			return testTx{msgs: []interface{}{
 				&memorytypes.MsgSubmitCommitment{
-					OrgId:             "wevibe-org-0",
-					ContentHash:       contentHash,
-					ContributorId:     "contributor-1",
-					ContributorWallet: "wevibe1wallet",
+					OrgId:                  "wevibe-org-0",
+					ContentHash:            contentHash,
+					ContributorId:          "contributor-1",
+					ContributorWallet:      "wevibe1wallet",
+					ProducerModelId:        "gpt-5.3-codex",
+					AttestationSessionHash: []byte{0xCA, 0xFE},
 					Keywords: []*memorytypes.KeywordWeight{
 						{Keyword: "alpha"},
 						{Keyword: "beta"},
@@ -101,7 +103,7 @@ func TestRedriveApproveMemory_DispatchesBookkeepingWithTxFields(t *testing.T) {
 				},
 			}}, nil
 		},
-		func(_ context.Context, txHash string, height int64, blockTime time.Time, orgID string, gotHash []byte, keywords []string, contributorID, contributorWallet, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte, mcVersion uint32) error {
+		func(_ context.Context, txHash string, height int64, blockTime time.Time, orgID string, gotHash []byte, keywords []string, contributorID, contributorWallet, producerModelID, attestationSessionHash, memoryType string, encryptedBlob []byte, wrappedDekEnc []byte, mcVersion uint32) error {
 			called = true
 			if txHash != "5E45" {
 				t.Fatalf("unexpected tx hash: %s", txHash)
@@ -123,6 +125,12 @@ func TestRedriveApproveMemory_DispatchesBookkeepingWithTxFields(t *testing.T) {
 			}
 			if contributorID != "contributor-1" || contributorWallet != "wevibe1wallet" {
 				t.Fatalf("unexpected contributor fields: %s %s", contributorID, contributorWallet)
+			}
+			if producerModelID != "gpt-5.3-codex" {
+				t.Fatalf("unexpected producer model id: %s", producerModelID)
+			}
+			if attestationSessionHash != "cafe" {
+				t.Fatalf("unexpected attestation session hash: %s", attestationSessionHash)
 			}
 			if memoryType != "MEMORY_TYPE_MEMORY" {
 				t.Fatalf("unexpected memory type: %s", memoryType)
