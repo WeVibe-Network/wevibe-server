@@ -1250,6 +1250,22 @@ export interface RecallHealth {
   pending_serve_backlog: number;
 }
 
+export interface PendingCallbackItem {
+  member_pubkey: string;
+  memory_content_hash: string;
+  delivered_at: string;
+  age_seconds: number;
+}
+
+export interface PendingCallbacksResponse {
+  buckets: {
+    gt_1h: number;
+    gt_24h: number;
+    gt_7d: number;
+  };
+  items: PendingCallbackItem[];
+}
+
 export async function getRecallHealth(orgId: string, hours?: number): Promise<RecallHealth> {
   const searchParams = new URLSearchParams();
   if (typeof hours === 'number' && hours > 0) {
@@ -1257,6 +1273,10 @@ export async function getRecallHealth(orgId: string, hours?: number): Promise<Re
   }
   const query = searchParams.toString();
   return hubFetch<RecallHealth>(`/v1/orgs/${orgId}/recall-health${query ? `?${query}` : ''}`);
+}
+
+export async function getPendingCallbacks(orgId: string): Promise<PendingCallbacksResponse> {
+  return hubFetch<PendingCallbacksResponse>(`/v1/orgs/${orgId}/pending-callbacks`);
 }
 
 export async function getRecallRateLimit(orgId: string): Promise<{

@@ -4,7 +4,12 @@ import { useEffect, useState } from 'react';
 import Card from '@/components/ui/card';
 import ClientTime from '@/components/ui/client-time';
 import Spinner from '@/components/ui/spinner';
-import { getRecallHealth, type RecallHealth } from '@/lib/hub-client';
+import {
+  getPendingCallbacks,
+  getRecallHealth,
+  type PendingCallbacksResponse,
+  type RecallHealth,
+} from '@/lib/hub-client';
 import simBenchmark from '@/lib/sim-benchmark.json';
 import { useDashboardState } from '@/lib/use-dashboard-state';
 
@@ -42,6 +47,15 @@ const EMPTY_HEALTH: RecallHealth = {
     serve_denial_ratio: null,
   },
   pending_serve_backlog: 0,
+};
+
+const EMPTY_PENDING_CALLBACKS: PendingCallbacksResponse = {
+  buckets: {
+    gt_1h: 0,
+    gt_24h: 0,
+    gt_7d: 0,
+  },
+  items: [],
 };
 
 const BAND_STYLES: Record<BandToken, { dot: string; bar: string; value: string }> = {
@@ -130,6 +144,31 @@ function dispositionPct(value: number, total: number): string {
   return `${((value / total) * 100).toFixed(1)}%`;
 }
 
+function formatAgeCompact(ageSeconds: number): string {
+  if (!Number.isFinite(ageSeconds) || ageSeconds <= 0) {
+    return '0m';
+  }
+
+  if (ageSeconds < 60) {
+    return '<1m';
+  }
+
+  const totalMinutes = Math.floor(ageSeconds / 60);
+  if (totalMinutes < 60) {
+    return `${totalMinutes}m`;
+  }
+
+  const totalHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (totalHours < 24) {
+    return minutes > 0 ? `${totalHours}h ${minutes}m` : `${totalHours}h`;
+  }
+
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
 function Gauge({
   label,
   value,
@@ -191,15 +230,19 @@ export default function RecallInspectPage() {
   const { isLeader, activeOrg, loading } = useDashboardState();
   const [selectedWindow, setSelectedWindow] = useState<WindowId>('all');
   const [health, setHealth] = useState<RecallHealth | null>(null);
+  const [pendingCallbacks, setPendingCallbacks] = useState<PendingCallbacksResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [pendingCallbacksError, setPendingCallbacksError] = useState<string | null>(null);
 
   const selectedWindowOption = WINDOW_OPTIONS.find((option) => option.id === selectedWindow) ?? WINDOW_OPTIONS[0];
 
   useEffect(() => {
     if (!activeOrg?.org_id || !isLeader) {
       setHealth(null);
+      setPendingCallbacks(null);
       setHealthError(null);
+      setPendingCallbacksError(null);
       setHealthLoading(false);
       return;
     }
@@ -207,17 +250,37 @@ export default function RecallInspectPage() {
     let cancelled = false;
     setHealthLoading(true);
     setHealthError(null);
+    setPendingCallbacksError(null);
 
-    void getRecallHealth(activeOrg.org_id, selectedWindowOption.hours)
-      .then((nextHealth) => {
-        if (!cancelled) {
-          setHealth(nextHealth);
+    void Promise.allSettled([
+      getRecallHealth(activeOrg.org_id, selectedWindowOption.hours),
+      getPendingCallbacks(activeOrg.org_id),
+    ])
+      .then(([healthResult, pendingCallbacksResult]) => {
+        if (cancelled) {
+          return;
         }
-      })
-      .catch((error) => {
-        if (!cancelled) {
+
+        if (healthResult.status === 'fulfilled') {
+          setHealth(healthResult.value);
+        } else {
           setHealth(null);
-          setHealthError(error instanceof Error ? error.message : String(error));
+          setHealthError(
+            healthResult.reason instanceof Error
+              ? healthResult.reason.message
+              : String(healthResult.reason),
+          );
+        }
+
+        if (pendingCallbacksResult.status === 'fulfilled') {
+          setPendingCallbacks(pendingCallbacksResult.value);
+        } else {
+          setPendingCallbacks(null);
+          setPendingCallbacksError(
+            pendingCallbacksResult.reason instanceof Error
+              ? pendingCallbacksResult.reason.message
+              : String(pendingCallbacksResult.reason),
+          );
         }
       })
       .finally(() => {
@@ -232,7 +295,28 @@ export default function RecallInspectPage() {
   }, [activeOrg?.org_id, isLeader, selectedWindowOption.hours]);
 
   const recallHealth = health ?? EMPTY_HEALTH;
+  const pendingCallbacksData = pendingCallbacks ?? EMPTY_PENDING_CALLBACKS;
+  const pendingCallbacksUnavailable = pendingCallbacks === null && pendingCallbacksError !== null;
   const noData = recallHealth.query_count === 0;
+
+  const gt1hValue = pendingCallbacksUnavailable ? null : pendingCallbacksData.buckets.gt_1h;
+  const gt24hValue = pendingCallbacksUnavailable ? null : pendingCallbacksData.buckets.gt_24h;
+  const gt7dValue = pendingCallbacksUnavailable ? null : pendingCallbacksData.buckets.gt_7d;
+
+  const gt1hToken = bandColor(gt1hValue, {
+    green: (value) => value === 0,
+    amber: (value) => value > 0,
+  });
+  const gt24hToken = bandColor(gt24hValue, {
+    green: (value) => value === 0,
+    amber: () => false,
+  });
+  const gt7dToken = bandColor(gt7dValue, {
+    green: (value) => value === 0,
+    amber: () => false,
+  });
+
+  const pendingItems = pendingCallbacksData.items ?? [];
 
   const floorGap = noData ? null : recallHealth.score_separation.gap;
   const floorToken = bandColor(floorGap, {
@@ -479,6 +563,74 @@ export default function RecallInspectPage() {
             detail={`pending serve backlog ${formatCount(noData ? 0 : recallHealth.pending_serve_backlog)}`}
           />
         </div>
+      </Card>
+
+      <Card className="p-5">
+        <h2 className="text-lg font-semibold text-wv-text">Pending callbacks</h2>
+        <p className="mt-1 text-sm text-wv-dim">
+          Delivered recall memories that still have no serve, denial-note, or report decision.
+        </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <Gauge
+            label="Pending &gt;1h"
+            value={gt1hValue === null ? '—' : formatCount(gt1hValue)}
+            token={gt1hToken}
+            healthyBand="Healthy band: 0 (amber when &gt;0)"
+          />
+          <Gauge
+            label="Pending &gt;24h"
+            value={gt24hValue === null ? '—' : formatCount(gt24hValue)}
+            token={gt24hToken}
+            healthyBand="Healthy band: 0 (red when &gt;0)"
+          />
+          <Gauge
+            label="Pending &gt;7d"
+            value={gt7dValue === null ? '—' : formatCount(gt7dValue)}
+            token={gt7dToken}
+            healthyBand="Healthy band: 0 (red when &gt;0)"
+          />
+        </div>
+
+        {pendingCallbacksError ? (
+          <p className="mt-3 text-xs text-wv-amber">Pending callbacks unavailable: {pendingCallbacksError}</p>
+        ) : null}
+
+        <details className="mt-4 rounded-lg border border-wv-line bg-wv-panel-2 p-3">
+          <summary className="cursor-pointer text-sm text-wv-dim">Recent pending ({pendingItems.length})</summary>
+          <div className="mt-3 space-y-2">
+            {pendingItems.length === 0 ? (
+              <p className="text-xs text-wv-faint">No pending callbacks.</p>
+            ) : (
+              pendingItems.map((item, index) => (
+                <div
+                  key={`${item.member_pubkey}-${item.memory_content_hash}-${item.delivered_at}-${index}`}
+                  className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-wv-line bg-wv-panel px-3 py-2"
+                >
+                  <div className="space-y-1 text-xs">
+                    <p className="text-wv-dim">
+                      member{' '}
+                      <span className="font-mono text-wv-text" title={item.member_pubkey}>
+                        {`${item.member_pubkey.slice(0, 12)}…`}
+                      </span>
+                    </p>
+                    <p className="text-wv-dim">
+                      memory{' '}
+                      <span className="font-mono text-wv-text" title={item.memory_content_hash}>
+                        {`${item.memory_content_hash.slice(0, 12)}…`}
+                      </span>
+                    </p>
+                    <p className="text-wv-faint">
+                      delivered{' '}
+                      <ClientTime value={item.delivered_at} mode="datetime-compact" fallback={item.delivered_at} />
+                    </p>
+                  </div>
+                  <p className="text-xs font-mono text-wv-amber">age {formatAgeCompact(item.age_seconds)}</p>
+                </div>
+              ))
+            )}
+          </div>
+        </details>
       </Card>
 
       <Card className="p-5">
