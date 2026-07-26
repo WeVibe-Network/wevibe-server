@@ -45,6 +45,7 @@ func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey s
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
+		LeaderWallet:       "wevibe1memberorgstest1",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -271,6 +272,7 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 		orgReq := protocol.CreateOrgRequest{
 			LeaderPubkey:       data.leader,
 			LeaderX25519Pubkey: data.x25519,
+			LeaderWallet:       "wevibe1memberorgstest2",
 			OrgName:            fmt.Sprintf("Test Org %d", i),
 			Domain:             "test.example.com",
 			FeeModel:           protocol.FeeModel{},

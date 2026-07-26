@@ -35,6 +35,7 @@ func TestCreateOrg_GetOrg(t *testing.T) {
 	req := protocol.CreateOrgRequest{
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1orgstest1",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -83,6 +84,7 @@ func TestOrgExists(t *testing.T) {
 	req := protocol.CreateOrgRequest{
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1orgstest2",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -127,6 +129,7 @@ func TestGetLeaderPubkey(t *testing.T) {
 	req := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1orgstest3",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -162,6 +165,7 @@ func TestGetCurrentEpoch(t *testing.T) {
 	req := protocol.CreateOrgRequest{
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1orgstest4",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -197,6 +201,7 @@ func TestFullOrgLifecycle(t *testing.T) {
 	req := protocol.CreateOrgRequest{
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1orgstest5",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -261,6 +266,7 @@ func TestEpochExists_CurrentEpoch(t *testing.T) {
 	req := protocol.CreateOrgRequest{
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1orgstest6",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -296,6 +302,7 @@ func TestEpochExists_NonexistentEpoch(t *testing.T) {
 	req := protocol.CreateOrgRequest{
 		LeaderPubkey:       strings.Repeat("a", 64),
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1orgstest7",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},

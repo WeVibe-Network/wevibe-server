@@ -41,8 +41,10 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) (orgID, leaderPubkey string)
 	pub, _, _ := ed25519.GenerateKey(nil)
 	leaderPubkey = hex.EncodeToString(pub)
 
-	pool.Exec(ctx, `INSERT INTO orgs (org_id, leader_pubkey, org_name, domain) VALUES ($1,$2,$3,$4)`,
-		orgID, leaderPubkey, "Test Org", "test.local")
+	if _, err := pool.Exec(ctx, `INSERT INTO orgs (org_id, leader_pubkey, leader_wallet_address, org_name, domain) VALUES ($1,$2,$3,$4,$5)`,
+		orgID, leaderPubkey, "wevibe1moderationtest1", "Test Org", "test.local"); err != nil {
+		t.Fatalf("insert org: %v", err)
+	}
 	pool.Exec(ctx, `INSERT INTO epoch_manifests (org_id, epoch_id, pk_mod, signed_by, signature) VALUES ($1,0,$2,$2,'sig')`,
 		orgID, leaderPubkey)
 	pool.Exec(ctx, `INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch) VALUES ($1,$2,$2,'leader',0)`,

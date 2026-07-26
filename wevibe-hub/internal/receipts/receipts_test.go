@@ -36,6 +36,7 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) string {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: fmt.Sprintf("%064d", 2),
+		LeaderWallet:       "wevibe1receiptstest1",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},

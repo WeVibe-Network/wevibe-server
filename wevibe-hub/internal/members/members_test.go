@@ -42,6 +42,7 @@ func TestInviteMember_GetMember(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
+		LeaderWallet:       "wevibe1memberstest1",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -97,6 +98,7 @@ func TestGetMember_NotFound(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1memberstest2",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -130,6 +132,7 @@ func TestRemoveMember(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
+		LeaderWallet:       "wevibe1memberstest3",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -183,6 +186,7 @@ func TestListMembers(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1memberstest4",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -239,6 +243,7 @@ func TestVerifyMemberAccess(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1memberstest5",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -282,6 +287,7 @@ func TestIsLeader(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("b", 64),
+		LeaderWallet:       "wevibe1memberstest6",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -326,6 +332,7 @@ func TestFullMemberLifecycle(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
+		LeaderWallet:       "wevibe1memberstest7",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -391,6 +398,7 @@ func TestListOrgsForMember(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: testPubkey(t, "lx"),
+		LeaderWallet:       "wevibe1memberstest8",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},
@@ -470,6 +478,7 @@ func TestListOrgsForMember_InactiveExcluded(t *testing.T) {
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
+		LeaderWallet:       "wevibe1memberstest9",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},

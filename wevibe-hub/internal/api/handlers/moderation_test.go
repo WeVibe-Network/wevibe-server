@@ -46,6 +46,7 @@ func setupOrgForModeration(t *testing.T, pool *pgxpool.Pool) (orgID, contributor
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
 		LeaderX25519Pubkey: strings.Repeat("c", 64),
+		LeaderWallet:       "wevibe1handlersmodtest1",
 		OrgName:            "Test Org",
 		Domain:             "test.example.com",
 		FeeModel:           protocol.FeeModel{},

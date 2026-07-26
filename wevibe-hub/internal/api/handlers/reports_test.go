@@ -465,6 +465,7 @@ func setupReportTestEnv(t *testing.T) reportTestEnv {
 	_, err := orgs.CreateOrg(ctx, pool, orgID, protocol.CreateOrgRequest{
 		LeaderPubkey:       leader.pubkeyHex,
 		LeaderX25519Pubkey: randomHex(32),
+		LeaderWallet:       "wevibe1reportstest1",
 		OrgName:            "Reports Test Org",
 		Domain:             "reports.test",
 		FeeModel:           protocol.FeeModel{},
