@@ -94,6 +94,8 @@ func main() {
 	log.Printf("chain client initialized for chain %s, submitter %s", cfg.ChainID, chainClient.SubmitterAddress())
 
 	handlers.SetChainClient(chainClient)
+	handlers.SetRelayHoldConfig(cfg.RelayHoldHours, cfg.RelayHoldExemptOrgs)
+	slog.Info("relay hold configured", "hours", cfg.RelayHoldHours, "exempt_orgs", cfg.RelayHoldExemptOrgs)
 	handlers.SetFaucetURL(cfg.FaucetURL)
 	handlers.SetSocialClient(social.NewClient(cfg.SocialGraphURL))
 
@@ -138,6 +140,19 @@ func main() {
 				if err := chain.ReconcileMembership(ctx, chainClient, pool); err != nil {
 					log.Printf("ERROR: membership reconcile failed: %v", err)
 				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				handlers.EnqueueEligibleRelays(ctx)
 			case <-ctx.Done():
 				return
 			}
@@ -270,11 +285,13 @@ func main() {
 			r.Post("/moderation/batch-submit", handlers.PrepareBatchForChain)
 
 			r.Post("/serves", handlers.RecordServeEvent)
+			r.Post("/decision-notes", handlers.RecordDecisionNote)
 			r.Put("/recall-rate-limit", handlers.SetRecallRateLimit)
 			r.Get("/recall-rate-limit", handlers.GetRecallRateLimit)
 			r.Get("/recall-queries", handlers.ListRecallQueries)
 			r.Get("/recall-queries/{queryID}", handlers.GetRecallQueryDetail)
 			r.Get("/recall-health", handlers.GetRecallHealth)
+			r.Get("/pending-callbacks", handlers.GetPendingCallbacks)
 			r.Post("/extracted-sessions", handlers.RecordExtractedSession)
 			r.Get("/extracted-sessions", handlers.ListExtractedSessions)
 			r.Post("/denials", handlers.RecordDenialEvent)

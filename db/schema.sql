@@ -453,6 +453,22 @@ CREATE TABLE IF NOT EXISTS serve_events (
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_status ON serve_events(org_id, status);
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
+CREATE INDEX IF NOT EXISTS idx_serve_events_pending_created ON serve_events(created_at) WHERE status = 'pending';
+
+-- ── Decision notes ─────────────────────────────────────────────────────────
+-- Member-authenticated moderation decision notes (hub-only; never relayed to chain).
+
+CREATE TABLE IF NOT EXISTS decision_notes (
+    id                  BIGSERIAL   PRIMARY KEY,
+    org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    member_pubkey       TEXT        NOT NULL,
+    memory_content_hash TEXT        NOT NULL,
+    action              TEXT        NOT NULL,
+    reason              TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_notes_org_member_memory ON decision_notes(org_id, member_pubkey, memory_content_hash);
 
 CREATE TABLE IF NOT EXISTS session_served_memories (
     org_id      TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,

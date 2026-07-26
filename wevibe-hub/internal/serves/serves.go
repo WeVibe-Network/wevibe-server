@@ -305,15 +305,16 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 	return &record, nil
 }
 
-func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int) ([]ServeEventRecord, error) {
+func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int, holdHours int) ([]ServeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT se.id, se.org_id, se.epoch_id, se.memory_content_hash, se.serve_key_pubkey, se.serve_sig, se.nonce, COALESCE(se.serve_fingerprint, ''), se.contributor_id, se.model_id, se.turn_count, se.matched_keywords, se.reporter_pubkey, se.reason, se.event_type, se.status, se.tx_hash, se.created_at, se.submitted_at, COALESCE(m.wallet_address, '')
 		FROM serve_events se
 		JOIN members m ON m.org_id = se.org_id AND m.pubkey = se.contributor_id
 		WHERE se.org_id = $1 AND se.status = 'pending' AND se.event_type = 'serve'
+			AND ($3::int <= 0 OR se.created_at <= NOW() - make_interval(hours => $3))
 		ORDER BY se.created_at ASC
 		LIMIT $2
-	`, orgID, limit)
+	`, orgID, limit, holdHours)
 	if err != nil {
 		return nil, fmt.Errorf("query pending serves: %w", err)
 	}
@@ -340,14 +341,15 @@ func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, lim
 	return records, nil
 }
 
-func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int) ([]ServeEventRecord, error) {
+func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int, holdHours int) ([]ServeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, COALESCE(serve_fingerprint, ''), contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events
 		WHERE org_id = $1 AND status = 'pending' AND event_type = 'denial'
+			AND ($3::int <= 0 OR created_at <= NOW() - make_interval(hours => $3))
 		ORDER BY created_at ASC
 		LIMIT $2
-	`, orgID, limit)
+	`, orgID, limit, holdHours)
 	if err != nil {
 		return nil, fmt.Errorf("query pending denials: %w", err)
 	}
@@ -409,17 +411,50 @@ func MarkDenialsSubmitted(ctx context.Context, pool *pgxpool.Pool, ids []int64, 
 	return nil
 }
 
-func HasPendingEvents(ctx context.Context, pool *pgxpool.Pool, orgID string) (bool, error) {
+func HasPendingEvents(ctx context.Context, pool *pgxpool.Pool, orgID string, holdHours int) (bool, error) {
 	var exists bool
 	err := pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1
 			FROM serve_events
 			WHERE org_id = $1 AND status = 'pending'
+				AND ($2::int <= 0 OR created_at <= NOW() - make_interval(hours => $2))
 		)
-	`, orgID).Scan(&exists)
+	`, orgID, holdHours).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check pending serve events: %w", err)
 	}
 	return exists, nil
+}
+
+func ListOrgsWithEligiblePending(ctx context.Context, pool *pgxpool.Pool, holdHours int, exemptOrgs []string) ([]string, error) {
+	if exemptOrgs == nil {
+		exemptOrgs = []string{}
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT DISTINCT org_id
+		FROM serve_events
+		WHERE status = 'pending'
+			AND (org_id = ANY($2) OR created_at <= NOW() - make_interval(hours => $1))
+		ORDER BY org_id
+	`, holdHours, exemptOrgs)
+	if err != nil {
+		return nil, fmt.Errorf("list orgs with eligible pending events: %w", err)
+	}
+	defer rows.Close()
+
+	orgs := make([]string, 0)
+	for rows.Next() {
+		var orgID string
+		if err := rows.Scan(&orgID); err != nil {
+			return nil, fmt.Errorf("scan eligible org id: %w", err)
+		}
+		orgs = append(orgs, orgID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate eligible org ids: %w", err)
+	}
+
+	return orgs, nil
 }

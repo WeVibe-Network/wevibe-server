@@ -77,7 +77,8 @@ func GetPendingDenials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := serves.GetPendingDenials(r.Context(), pool, orgID, 200)
+	// Relay hold is relay-only; this inspection endpoint intentionally returns all pending denials.
+	records, err := serves.GetPendingDenials(r.Context(), pool, orgID, 200, 0)
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return

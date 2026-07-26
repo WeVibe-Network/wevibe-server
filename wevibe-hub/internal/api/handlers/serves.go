@@ -141,12 +141,56 @@ var (
 	serveRelayMu         sync.Mutex
 	serveRelayQueued     map[string]struct{}
 	serveRelayCh         chan string
+	relayHoldHours       = 24
+	relayHoldExempt      map[string]struct{}
 )
 
 // poolType is the concrete pgxpool.Pool type used throughout the handlers
 // package. Declared as a named alias so relay helpers read clearly without
 // re-importing pgxpool everywhere.
 type poolType = *pgxpool.Pool
+
+func SetRelayHoldConfig(hours int, exemptOrgs []string) {
+	if hours < 0 {
+		hours = 0
+	}
+	relayHoldHours = hours
+
+	if exemptOrgs == nil {
+		relayHoldExempt = nil
+		return
+	}
+
+	exemptSet := make(map[string]struct{}, len(exemptOrgs))
+	for _, orgID := range exemptOrgs {
+		trimmed := strings.TrimSpace(orgID)
+		if trimmed == "" {
+			continue
+		}
+		exemptSet[trimmed] = struct{}{}
+	}
+	relayHoldExempt = exemptSet
+}
+
+func effectiveRelayHoldHours(orgID string) int {
+	if _, exempt := relayHoldExempt[orgID]; exempt {
+		return 0
+	}
+	return relayHoldHours
+}
+
+func exemptOrgsSlice() []string {
+	if len(relayHoldExempt) == 0 {
+		return []string{}
+	}
+
+	orgs := make([]string, 0, len(relayHoldExempt))
+	for orgID := range relayHoldExempt {
+		orgs = append(orgs, orgID)
+	}
+	sort.Strings(orgs)
+	return orgs
+}
 
 func ensureServeRelayWorker() {
 	serveRelayWorkerOnce.Do(func() {
@@ -191,6 +235,23 @@ func enqueueServeRelay(orgID string) {
 	}
 }
 
+func EnqueueEligibleRelays(ctx context.Context) {
+	if pool == nil || chainClient == nil {
+		return
+	}
+
+	orgs, err := serves.ListOrgsWithEligiblePending(ctx, pool, relayHoldHours, exemptOrgsSlice())
+	if err != nil {
+		slog.Error("relay eligibility scan failed", "err", err)
+		return
+	}
+
+	for _, orgID := range orgs {
+		slog.Info("relay hold elapsed; enqueueing org", "org_id", orgID)
+		enqueueServeRelay(orgID)
+	}
+}
+
 func serveRelayWorker() {
 	for orgID := range serveRelayCh {
 		if chainClient == nil || pool == nil {
@@ -211,7 +272,7 @@ func serveRelayWorker() {
 		delete(serveRelayQueued, orgID)
 		serveRelayMu.Unlock()
 
-		hasPending, pendingErr := serves.HasPendingEvents(context.Background(), pool, orgID)
+		hasPending, pendingErr := serves.HasPendingEvents(context.Background(), pool, orgID, effectiveRelayHoldHours(orgID))
 		if pendingErr != nil {
 			slog.Error("serve relay pending check failed", "org_id", orgID, "err", pendingErr)
 			continue
@@ -240,8 +301,12 @@ type relayTxBatch struct {
 
 func relayPendingEventsByOrg(ctx context.Context, cc *chain.GrpcClient, p poolType, orgID string) error {
 	deps := relayPendingDeps{
-		getPendingServes:  serves.GetPendingServes,
-		getPendingDenials: serves.GetPendingDenials,
+		getPendingServes: func(ctx context.Context, p poolType, orgID string, limit int) ([]serves.ServeEventRecord, error) {
+			return serves.GetPendingServes(ctx, p, orgID, limit, effectiveRelayHoldHours(orgID))
+		},
+		getPendingDenials: func(ctx context.Context, p poolType, orgID string, limit int) ([]serves.ServeEventRecord, error) {
+			return serves.GetPendingDenials(ctx, p, orgID, limit, effectiveRelayHoldHours(orgID))
+		},
 		submitRelayBatch: func(ctx context.Context, cc *chain.GrpcClient, db poolType, faucetURL, orgID string, msgs []sdktypes.Msg) (string, error) {
 			return cc.SubmitRelayBatch(ctx, db, faucetURL, orgID, msgs)
 		},

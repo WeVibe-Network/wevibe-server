@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -29,6 +30,8 @@ type Config struct {
 	RetrievalVectorNoiseSigma  float64
 	RetrievalRecallDepth       uint64
 	RecallMode                 string
+	RelayHoldHours             int
+	RelayHoldExemptOrgs        []string
 }
 
 func Load() Config {
@@ -71,6 +74,8 @@ func Load() Config {
 		RetrievalVectorNoiseSigma:  getEnvOrDefaultFloat("RETRIEVAL_VECTOR_NOISE_SIGMA", 0.0),
 		RetrievalRecallDepth:       getEnvOrDefaultUint64("RETRIEVAL_RECALL_DEPTH", 5000),
 		RecallMode:                 recallMode,
+		RelayHoldHours:             getEnvOrDefaultInt("WEVIBE_RELAY_HOLD_HOURS", 24),
+		RelayHoldExemptOrgs:        parseCSVEnv("WEVIBE_RELAY_HOLD_EXEMPT_ORGS"),
 	}
 
 	if cfg.RetrievalTemperature <= 0 {
@@ -119,4 +124,41 @@ func getEnvOrDefaultUint64(key string, def uint64) uint64 {
 	}
 
 	return parsed
+}
+
+func getEnvOrDefaultInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		log.Printf("WARNING: env var %s = %q is not a valid int; using default %d", key, v, def)
+		return def
+	}
+
+	return parsed
+}
+
+func parseCSVEnv(key string) []string {
+	raw := os.Getenv(key)
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		values = append(values, trimmed)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+
+	return values
 }

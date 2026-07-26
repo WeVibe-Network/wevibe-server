@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -38,9 +39,9 @@ func seedOrg(t *testing.T, pool *pgxpool.Pool, orgID string) {
 	t.Helper()
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `
-		INSERT INTO orgs (org_id, leader_pubkey, org_name, domain)
-		VALUES ($1, $2, $3, $4)
-	`, orgID, strings.Repeat("a", 64), "Test Org", "test.example.com")
+		INSERT INTO orgs (org_id, leader_pubkey, leader_wallet_address, org_name, domain)
+		VALUES ($1, $2, $3, $4, $5)
+	`, orgID, strings.Repeat("a", 64), "wevibe1testleaderwallet", "Test Org", "test.example.com")
 	if err != nil {
 		t.Fatalf("seed org: %v", err)
 	}
@@ -79,7 +80,11 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 		MatchedKeywords: []string{"Alpha", " beta ", "alpha"},
 	}
 
-	record, err := RecordServe(ctx, pool, req, strings.Repeat("d", 64))
+	reporterPubkey := strings.Repeat("d", 64)
+	seedMember(t, pool, orgID, req.ContributorID, "member")
+	seedMember(t, pool, orgID, reporterPubkey, "member")
+
+	record, err := RecordServe(ctx, pool, req, reporterPubkey)
 	if err != nil {
 		t.Fatalf("RecordServe failed: %v", err)
 	}
@@ -91,7 +96,7 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 
 	// Round-trip via the read path to confirm persistence, not just the
 	// return value from the post-INSERT SELECT inside RecordServe.
-	pending, err := GetPendingServes(ctx, pool, orgID, 10)
+	pending, err := GetPendingServes(ctx, pool, orgID, 10, 0)
 	if err != nil {
 		t.Fatalf("GetPendingServes failed: %v", err)
 	}
@@ -156,5 +161,186 @@ func TestRecordServe_RejectsEmptyMatchedKeywords(t *testing.T) {
 				t.Fatalf("expected error message to mention matched_keywords, got: %v", err)
 			}
 		})
+	}
+}
+
+func seedMember(t *testing.T, pool *pgxpool.Pool, orgID, pubkey, role string) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, active)
+		VALUES ($1, $2, $3, $4, 0, TRUE)
+	`, orgID, pubkey, strings.Repeat("1", 64), role)
+	if err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+}
+
+func TestPendingRelayHoldEligibility(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID := fmt.Sprintf("test-org-hold-%d", time.Now().UnixNano())
+	seedOrg(t, pool, orgID)
+
+	contributor := strings.Repeat("2", 64)
+	reporter := strings.Repeat("3", 64)
+	seedMember(t, pool, orgID, contributor, "member")
+	seedMember(t, pool, orgID, reporter, "member")
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO serve_events (
+			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
+			contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+		) VALUES
+			($1, 0, $2, $3, $4, 'n-serve-fresh', $5, ARRAY['alpha'], $6, 'incorrect', 'serve', 'pending', NOW()),
+			($1, 0, $7, $8, $9, 'n-serve-old',   $5, ARRAY['beta'],  $6, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
+			($1, 0, $10, $11, $12, 'n-deny-fresh', $5, ARRAY['gamma'], $6, 'incorrect', 'denial', 'pending', NOW()),
+			($1, 0, $13, $14, $15, 'n-deny-old',   $5, ARRAY['delta'], $6, 'incorrect', 'denial', 'pending', NOW() - interval '25 hours')
+	`, orgID,
+		fmt.Sprintf("%064x", 101), fmt.Sprintf("%064x", 201), strings.Repeat("a", 128), contributor, reporter,
+		fmt.Sprintf("%064x", 102), fmt.Sprintf("%064x", 202), strings.Repeat("b", 128),
+		fmt.Sprintf("%064x", 103), fmt.Sprintf("%064x", 203), strings.Repeat("c", 128),
+		fmt.Sprintf("%064x", 104), fmt.Sprintf("%064x", 204), strings.Repeat("d", 128),
+	)
+	if err != nil {
+		t.Fatalf("seed serve_events: %v", err)
+	}
+
+	servesHeld, err := GetPendingServes(ctx, pool, orgID, 20, 24)
+	if err != nil {
+		t.Fatalf("GetPendingServes(24): %v", err)
+	}
+	if len(servesHeld) != 1 || servesHeld[0].MemoryContentHash != fmt.Sprintf("%064x", 102) {
+		t.Fatalf("expected only aged serve at hold=24, got %+v", servesHeld)
+	}
+
+	servesNoHold, err := GetPendingServes(ctx, pool, orgID, 20, 0)
+	if err != nil {
+		t.Fatalf("GetPendingServes(0): %v", err)
+	}
+	if len(servesNoHold) != 2 {
+		t.Fatalf("expected 2 serves at hold=0, got %d", len(servesNoHold))
+	}
+
+	denialsHeld, err := GetPendingDenials(ctx, pool, orgID, 20, 24)
+	if err != nil {
+		t.Fatalf("GetPendingDenials(24): %v", err)
+	}
+	if len(denialsHeld) != 1 || denialsHeld[0].MemoryContentHash != fmt.Sprintf("%064x", 104) {
+		t.Fatalf("expected only aged denial at hold=24, got %+v", denialsHeld)
+	}
+
+	denialsNoHold, err := GetPendingDenials(ctx, pool, orgID, 20, 0)
+	if err != nil {
+		t.Fatalf("GetPendingDenials(0): %v", err)
+	}
+	if len(denialsNoHold) != 2 {
+		t.Fatalf("expected 2 denials at hold=0, got %d", len(denialsNoHold))
+	}
+}
+
+func TestHasPendingEventsRespectsHoldWindow(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID := fmt.Sprintf("test-org-has-pending-%d", time.Now().UnixNano())
+	seedOrg(t, pool, orgID)
+
+	contributor := strings.Repeat("4", 64)
+	reporter := strings.Repeat("5", 64)
+	seedMember(t, pool, orgID, contributor, "member")
+	seedMember(t, pool, orgID, reporter, "member")
+
+	memoryHash := fmt.Sprintf("%064x", 301)
+	_, err := pool.Exec(ctx, `
+		INSERT INTO serve_events (
+			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
+			contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+		) VALUES ($1, 0, $2, $3, $4, 'n-hold', $5, ARRAY['hold'], $6, 'incorrect', 'serve', 'pending', NOW())
+	`, orgID, memoryHash, fmt.Sprintf("%064x", 302), strings.Repeat("e", 128), contributor, reporter)
+	if err != nil {
+		t.Fatalf("insert pending row: %v", err)
+	}
+
+	hasHeld, err := HasPendingEvents(ctx, pool, orgID, 24)
+	if err != nil {
+		t.Fatalf("HasPendingEvents(24): %v", err)
+	}
+	if hasHeld {
+		t.Fatal("expected false at hold=24 with only fresh row")
+	}
+
+	hasNoHold, err := HasPendingEvents(ctx, pool, orgID, 0)
+	if err != nil {
+		t.Fatalf("HasPendingEvents(0): %v", err)
+	}
+	if !hasNoHold {
+		t.Fatal("expected true at hold=0 with fresh row")
+	}
+
+	_, err = pool.Exec(ctx, `
+		UPDATE serve_events
+		SET created_at = NOW() - interval '25 hours'
+		WHERE org_id = $1 AND memory_content_hash = $2
+	`, orgID, memoryHash)
+	if err != nil {
+		t.Fatalf("age pending row: %v", err)
+	}
+
+	hasAfterAge, err := HasPendingEvents(ctx, pool, orgID, 24)
+	if err != nil {
+		t.Fatalf("HasPendingEvents(24) after age: %v", err)
+	}
+	if !hasAfterAge {
+		t.Fatal("expected true at hold=24 after aging row")
+	}
+}
+
+func TestListOrgsWithEligiblePendingRespectsHoldAndExemptions(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgA := fmt.Sprintf("test-org-a-%d", time.Now().UnixNano())
+	orgB := fmt.Sprintf("test-org-b-%d", time.Now().UnixNano())
+	orgC := fmt.Sprintf("test-org-c-%d", time.Now().UnixNano())
+	seedOrg(t, pool, orgA)
+	seedOrg(t, pool, orgB)
+	seedOrg(t, pool, orgC)
+
+	sharedContributor := strings.Repeat("6", 64)
+	sharedReporter := strings.Repeat("7", 64)
+	seedMember(t, pool, orgA, sharedContributor, "member")
+	seedMember(t, pool, orgA, sharedReporter, "member")
+	seedMember(t, pool, orgB, sharedContributor, "member")
+	seedMember(t, pool, orgB, sharedReporter, "member")
+	seedMember(t, pool, orgC, sharedContributor, "member")
+	seedMember(t, pool, orgC, sharedReporter, "member")
+
+	_, err := pool.Exec(ctx, `
+		INSERT INTO serve_events (
+			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
+			contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+		) VALUES
+			($1, 0, $4, $5, $6, 'a-fresh', $7, ARRAY['a'], $8, 'incorrect', 'serve', 'pending', NOW()),
+			($2, 0, $9, $10, $11, 'b-old',  $7, ARRAY['b'], $8, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
+			($3, 0, $12, $13, $14, 'c-fresh', $7, ARRAY['c'], $8, 'incorrect', 'serve', 'pending', NOW())
+	`,
+		orgA,
+		orgB,
+		orgC,
+		fmt.Sprintf("%064x", 401), fmt.Sprintf("%064x", 402), strings.Repeat("f", 128), strings.Repeat("6", 64), strings.Repeat("7", 64),
+		fmt.Sprintf("%064x", 403), fmt.Sprintf("%064x", 404), strings.Repeat("8", 128),
+		fmt.Sprintf("%064x", 405), fmt.Sprintf("%064x", 406), strings.Repeat("9", 128),
+	)
+	if err != nil {
+		t.Fatalf("seed pending rows: %v", err)
+	}
+
+	orgs, err := ListOrgsWithEligiblePending(ctx, pool, 24, []string{orgC})
+	if err != nil {
+		t.Fatalf("ListOrgsWithEligiblePending: %v", err)
+	}
+	sort.Strings(orgs)
+	expected := []string{orgB, orgC}
+	if !reflect.DeepEqual(orgs, expected) {
+		t.Fatalf("eligible orgs mismatch: got=%v want=%v", orgs, expected)
 	}
 }
