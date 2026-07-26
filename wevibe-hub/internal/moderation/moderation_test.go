@@ -65,9 +65,11 @@ func addModerator(t *testing.T, pool *pgxpool.Pool, orgID string) string {
 	t.Helper()
 	pub, _, _ := ed25519.GenerateKey(nil)
 	pubkey := hex.EncodeToString(pub)
-	pool.Exec(context.Background(),
-		`INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch) VALUES ($1,$2,$2,'moderator',0)`,
-		orgID, pubkey)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate, join_epoch) VALUES ($1,$2,$2,'member',true,0)`,
+		orgID, pubkey); err != nil {
+		t.Fatalf("insert moderator: %v", err)
+	}
 	return pubkey
 }
 

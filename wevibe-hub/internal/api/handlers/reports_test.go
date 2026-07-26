@@ -46,7 +46,7 @@ func TestCreateReport_Success(t *testing.T) {
 
 	payload := protocol.CreateReportRequest{
 		MemoryCID: "cid-123",
-		Reason:    "spam",
+		Reason:    "incorrect",
 		Note:      "duplicate content",
 	}
 	body, _ := json.Marshal(payload)
@@ -81,8 +81,8 @@ func TestCreateReport_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("report not persisted: %v", err)
 	}
-	if rec.Reason != "spam" {
-		t.Fatalf("expected reason spam, got %s", rec.Reason)
+	if rec.Reason != "incorrect" {
+		t.Fatalf("expected reason incorrect, got %s", rec.Reason)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestCreateReport_Validation(t *testing.T) {
 
 	t.Run("missing memory", func(t *testing.T) {
 		payload := map[string]string{
-			"reason": "spam",
+			"reason": "incorrect",
 		}
 		body, _ := json.Marshal(payload)
 		url := fmt.Sprintf("/api/v1/orgs/%s/reports", env.orgID)
@@ -149,7 +149,7 @@ func TestListReports_FilterAndPagination(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		rec, err := reports.Create(ctx, env.pool, env.orgID, protocol.CreateReportRequest{
 			MemoryCID: fmt.Sprintf("cid-%d", i),
-			Reason:    "spam",
+			Reason:    "incorrect",
 		}, env.member.pubkeyHex, "member")
 		if err != nil {
 			t.Fatalf("create report: %v", err)
@@ -157,8 +157,8 @@ func TestListReports_FilterAndPagination(t *testing.T) {
 		ids = append(ids, rec.ID)
 	}
 
-	if _, err := reports.Update(ctx, env.pool, env.orgID, ids[1], env.moderator.pubkeyHex, "moderator", protocol.UpdateReportRequest{Resolution: "dismissed"}); err != nil {
-		t.Fatalf("update report: %v", err)
+	if _, err := reports.Update(ctx, env.pool, env.orgID, ids[1], env.leader.pubkeyHex, "leader", protocol.UpdateReportRequest{Resolution: "dismissed"}); err != nil {
+		t.Fatalf("resolve report: %v", err)
 	}
 
 	// Status filter
@@ -252,7 +252,7 @@ func TestGetReport_SuccessAndUnauthorized(t *testing.T) {
 	})
 }
 
-func TestUpdateReport_Escalate(t *testing.T) {
+func TestUpdateReport_AdvisoryVote(t *testing.T) {
 	env := setupReportTestEnv(t)
 	router := reportRouter()
 	ctx := context.Background()
@@ -265,7 +265,7 @@ func TestUpdateReport_Escalate(t *testing.T) {
 		t.Fatalf("create report: %v", err)
 	}
 
-	body, _ := json.Marshal(map[string]string{"action": "escalate"})
+	body, _ := json.Marshal(map[string]string{"vote": "uphold"})
 	url := fmt.Sprintf("/api/v1/orgs/%s/reports/%s", env.orgID, rec.ID)
 
 	req := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
@@ -276,38 +276,46 @@ func TestUpdateReport_Escalate(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
 	}
-	var updated protocol.ReportRecord
-	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+	var firstVoteResp protocol.ReportRecord
+	if err := json.NewDecoder(resp.Body).Decode(&firstVoteResp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if updated.Status != "escalated" {
-		t.Fatalf("expected escalated status, got %s", updated.Status)
+	if firstVoteResp.VoteCount != 1 {
+		t.Fatalf("expected vote_count 1, got %d", firstVoteResp.VoteCount)
 	}
-	if len(updated.EscalationVotes) != 1 {
-		t.Fatalf("expected 1 vote, got %d", len(updated.EscalationVotes))
-	}
-	if updated.EscalationVotes[0].Pubkey != env.moderator.pubkeyHex {
-		t.Fatalf("expected vote by moderator, got %s", updated.EscalationVotes[0].Pubkey)
-	}
-	if updated.EscalationVotes[0].VotedAt.IsZero() {
-		t.Fatalf("expected voted_at to be set")
+	if firstVoteResp.Status != "pending" {
+		t.Fatalf("expected pending status, got %s", firstVoteResp.Status)
 	}
 
-	// duplicate vote should not add another entry
+	// duplicate vote should not add another count
 	req2 := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("Authorization", env.moderator.authHeader(time.Now()))
 	resp2 := httptest.NewRecorder()
 	router.ServeHTTP(resp2, req2)
 	if resp2.Code != http.StatusOK {
-		t.Fatalf("expected 200 on second escalate, got %d", resp2.Code)
+		t.Fatalf("expected 200 on second vote, got %d", resp2.Code)
 	}
-	var updatedAgain protocol.ReportRecord
-	if err := json.NewDecoder(resp2.Body).Decode(&updatedAgain); err != nil {
+	var secondVoteResp protocol.ReportRecord
+	if err := json.NewDecoder(resp2.Body).Decode(&secondVoteResp); err != nil {
 		t.Fatalf("decode second response: %v", err)
 	}
-	if len(updatedAgain.EscalationVotes) != 1 {
-		t.Fatalf("expected single vote after duplicate, got %d", len(updatedAgain.EscalationVotes))
+	if secondVoteResp.VoteCount != 1 {
+		t.Fatalf("expected single vote_count after duplicate, got %d", secondVoteResp.VoteCount)
+	}
+	if secondVoteResp.Status != "pending" {
+		t.Fatalf("expected pending status on duplicate vote, got %s", secondVoteResp.Status)
+	}
+
+	dbRec, err := reports.Get(ctx, env.pool, env.orgID, rec.ID)
+	if err != nil {
+		t.Fatalf("fetch report: %v", err)
+	}
+	if dbRec.VoteCount != 1 {
+		t.Fatalf("expected db vote_count 1, got %d", dbRec.VoteCount)
+	}
+	if dbRec.Status != "pending" {
+		t.Fatalf("expected db status pending, got %s", dbRec.Status)
 	}
 }
 
@@ -319,13 +327,13 @@ func TestUpdateReport_ResolveActions(t *testing.T) {
 	type resolveCase struct {
 		action             string
 		expectedResolution string
-		expectClearedVotes bool
+		expectedDismissed  int
 	}
 
 	cases := []resolveCase{
-		{action: "dismiss", expectedResolution: "dismissed", expectClearedVotes: true},
-		{action: "archive", expectedResolution: "archived", expectClearedVotes: true},
-		{action: "set_validity", expectedResolution: "validity_set", expectClearedVotes: false},
+		{action: "dismiss", expectedResolution: "dismissed", expectedDismissed: 1},
+		{action: "dismiss_malicious", expectedResolution: "dismissed_malicious", expectedDismissed: 2},
+		{action: "upheld", expectedResolution: "upheld", expectedDismissed: 2},
 	}
 
 	for _, tc := range cases {
@@ -338,53 +346,83 @@ func TestUpdateReport_ResolveActions(t *testing.T) {
 				t.Fatalf("create report: %v", err)
 			}
 
-			if _, err := reports.Update(ctx, env.pool, env.orgID, rec.ID, env.moderator.pubkeyHex, "moderator", protocol.UpdateReportRequest{Resolution: "upheld"}); err != nil {
-				t.Fatalf("escalate before %s: %v", tc.action, err)
+			if _, err := reports.Update(ctx, env.pool, env.orgID, rec.ID, env.moderator.pubkeyHex, "member", protocol.UpdateReportRequest{Vote: "uphold"}); err != nil {
+				t.Fatalf("seed vote before %s: %v", tc.action, err)
 			}
 
-			body, _ := json.Marshal(map[string]string{"action": tc.action})
+			body, _ := json.Marshal(map[string]string{"resolution": tc.expectedResolution})
 			url := fmt.Sprintf("/api/v1/orgs/%s/reports/%s", env.orgID, rec.ID)
 			req := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", env.moderator.authHeader(time.Now()))
 			resp := httptest.NewRecorder()
 			router.ServeHTTP(resp, req)
-			if resp.Code != http.StatusOK {
-				t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
-			}
-
-			var updated protocol.ReportRecord
-			if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-
-			if updated.Status != "resolved" {
-				t.Fatalf("expected resolved status, got %s", updated.Status)
-			}
-			if updated.Resolution == nil || *updated.Resolution != tc.expectedResolution {
-				t.Fatalf("expected resolution %s, got %v", tc.expectedResolution, updated.Resolution)
-			}
-			if updated.ResolvedBy == nil || *updated.ResolvedBy != env.moderator.pubkeyHex {
-				t.Fatalf("expected resolved_by moderator, got %v", updated.ResolvedBy)
-			}
-			if updated.ResolvedAt == nil || updated.ResolvedAt.IsZero() {
-				t.Fatalf("expected resolved_at timestamp")
-			}
-
-			expectedVotes := 1
-			if tc.expectClearedVotes {
-				expectedVotes = 0
-			}
-			if len(updated.EscalationVotes) != expectedVotes {
-				t.Fatalf("expected %d escalation votes, got %d", expectedVotes, len(updated.EscalationVotes))
+			if resp.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d: %s", resp.Code, resp.Body.String())
 			}
 
 			dbRec, err := reports.Get(ctx, env.pool, env.orgID, rec.ID)
 			if err != nil {
 				t.Fatalf("fetch report: %v", err)
 			}
-			if len(dbRec.EscalationVotes) != expectedVotes {
-				t.Fatalf("db expected %d votes, got %d", expectedVotes, len(dbRec.EscalationVotes))
+
+			if dbRec.Status != "pending" {
+				t.Fatalf("expected pending status after moderator resolution attempt, got %s", dbRec.Status)
+			}
+			if dbRec.Resolution != nil {
+				t.Fatalf("expected nil resolution after moderator resolution attempt, got %v", dbRec.Resolution)
+			}
+
+			leaderBody, _ := json.Marshal(map[string]string{"resolution": tc.expectedResolution})
+			leaderReq := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(leaderBody))
+			leaderReq.Header.Set("Content-Type", "application/json")
+			leaderReq.Header.Set("Authorization", env.leader.authHeader(time.Now()))
+			leaderResp := httptest.NewRecorder()
+			router.ServeHTTP(leaderResp, leaderReq)
+			if leaderResp.Code != http.StatusOK {
+				t.Fatalf("leader resolve %s: expected 200, got %d: %s", tc.action, leaderResp.Code, leaderResp.Body.String())
+			}
+
+			var leaderUpdated protocol.ReportRecord
+			if err := json.NewDecoder(leaderResp.Body).Decode(&leaderUpdated); err != nil {
+				t.Fatalf("decode leader response: %v", err)
+			}
+
+			if tc.expectedResolution == "upheld" {
+				if leaderUpdated.Status != "upheld_pending_tx" {
+					t.Fatalf("expected status upheld_pending_tx, got %s", leaderUpdated.Status)
+				}
+			} else {
+				if leaderUpdated.Status != tc.expectedResolution {
+					t.Fatalf("expected status %s, got %s", tc.expectedResolution, leaderUpdated.Status)
+				}
+			}
+			if leaderUpdated.Resolution == nil || *leaderUpdated.Resolution != tc.expectedResolution {
+				t.Fatalf("expected resolution %s, got %v", tc.expectedResolution, leaderUpdated.Resolution)
+			}
+			if leaderUpdated.ResolvedBy == nil || *leaderUpdated.ResolvedBy != env.leader.pubkeyHex {
+				t.Fatalf("expected resolved_by %s, got %v", env.leader.pubkeyHex, leaderUpdated.ResolvedBy)
+			}
+			if leaderUpdated.ResolvedAt == nil {
+				t.Fatalf("expected resolved_at to be set")
+			}
+
+			if tc.expectedResolution == "upheld" {
+				if _, err := reports.Get(ctx, env.pool, env.orgID, rec.ID); err != nil {
+					t.Fatalf("expected upheld report to still exist: %v", err)
+				}
+			}
+
+			var dismissedCount int
+			if err := env.pool.QueryRow(ctx, `
+				SELECT dismissed_reports_count
+				FROM members
+				WHERE org_id = $1 AND pubkey = $2
+			`, env.orgID, env.member.pubkeyHex).Scan(&dismissedCount); err != nil {
+				t.Fatalf("query dismissed_reports_count: %v", err)
+			}
+			if dismissedCount != tc.expectedDismissed {
+				t.Fatalf("expected dismissed_reports_count %d, got %d", tc.expectedDismissed, dismissedCount)
 			}
 		})
 	}
@@ -397,7 +435,7 @@ func TestReportAuthEnforcement(t *testing.T) {
 	t.Run("non-member cannot create", func(t *testing.T) {
 		payload := protocol.CreateReportRequest{
 			MemoryCID: "cid-auth",
-			Reason:    "spam",
+			Reason:    "incorrect",
 		}
 		body, _ := json.Marshal(payload)
 		url := fmt.Sprintf("/api/v1/orgs/%s/reports", env.orgID)
@@ -430,7 +468,7 @@ func TestReportAuthEnforcement(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create report: %v", err)
 		}
-		body, _ := json.Marshal(map[string]string{"action": "dismiss"})
+		body, _ := json.Marshal(map[string]string{"resolution": "dismissed"})
 		url := fmt.Sprintf("/api/v1/orgs/%s/reports/%s", env.orgID, rec.ID)
 		req := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -484,11 +522,12 @@ func setupReportTestEnv(t *testing.T) reportTestEnv {
 		t.Fatalf("get epoch: %v", err)
 	}
 
-	invite := func(actor testActor, role string) {
+	invite := func(actor testActor, role string, canModerate bool) {
 		_, err := members.InviteMember(ctx, pool, orgID, epoch, protocol.InviteMemberRequest{
 			Pubkey:         actor.pubkeyHex,
 			X25519Pubkey:   randomHex(32),
 			Role:           role,
+			CanModerate:    canModerate,
 			SignedBy:       leader.pubkeyHex,
 			Signature:      strings.Repeat("b", 128),
 			EncEnvelope:    "ZW5j",
@@ -500,8 +539,8 @@ func setupReportTestEnv(t *testing.T) reportTestEnv {
 		}
 	}
 
-	invite(moderator, "moderator")
-	invite(member, "member")
+	invite(moderator, "member", true)
+	invite(member, "member", false)
 
 	t.Cleanup(func() {
 		ctx := context.Background()

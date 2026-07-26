@@ -464,10 +464,10 @@ func insertPendingSubmissionWithStoredExtraction(t *testing.T, pool *pgxpool.Poo
 	submissionHash := randHex(t, 32)
 	_, err = pool.Exec(context.Background(), `
 		INSERT INTO pending_submissions
-			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, stack_hint, memory_type, status, extraction_result)
+			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash, wrapped_dek_mod, contributor_sig, stack_hint, memory_type, status, extraction_result)
 		VALUES
-			($1, $2, 0, $3, $4, $5, $6, ARRAY[]::TEXT[], $7, $8, $9)
-	`, submissionHash, orgID, contributorPubkey, randHex(t, 32), randHex(t, 32), strings.Repeat("f", 128), protocol.MemoryTypeMemory, protocol.SubmissionStatusPendingKeyword, extractionData)
+			($1, $2, 0, $3, $4, $5, $6, $7, $8, $9, $10, ARRAY[]::TEXT[], $11, $12, $13)
+	`, submissionHash, orgID, contributorPubkey, randHex(t, 32), randHex(t, 32), randHex(t, 32), randHex(t, 32), randHex(t, 32), randHex(t, 32), strings.Repeat("f", 128), protocol.MemoryTypeMemory, protocol.SubmissionStatusPendingKeyword, extractionData)
 	if err != nil {
 		t.Fatalf("insert pending submission: %v", err)
 	}

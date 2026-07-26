@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,9 +19,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/api/handlers"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 )
 
 func testPoolMod(t *testing.T) *pgxpool.Pool {
@@ -38,10 +41,15 @@ func testPoolMod(t *testing.T) *pgxpool.Pool {
 }
 
 func setupOrgForModeration(t *testing.T, pool *pgxpool.Pool) (orgID, contributorPubkey string) {
+	orgID, contributor := setupOrgForModerationWithActor(t, pool)
+	return orgID, contributor.pubHex
+}
+
+func setupOrgForModerationWithActor(t *testing.T, pool *pgxpool.Pool) (orgID string, contributor voteActor) {
 	ctx := context.Background()
 	orgID = "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	leaderPubkey := strings.Repeat("a", 64)
-	contributorPubkey = strings.Repeat("b", 64)
+	contributor = newVoteActor(t)
 
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
@@ -58,6 +66,14 @@ func setupOrgForModeration(t *testing.T, pool *pgxpool.Pool) (orgID, contributor
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
 
+	_, err = pool.Exec(ctx, `
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_contribute, join_epoch)
+		VALUES ($1, $2, $3, 'member', true, 0)
+	`, orgID, contributor.pubHex, randHex(t, 32))
+	if err != nil {
+		t.Fatalf("insert contributor member: %v", err)
+	}
+
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM pending_submissions WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
@@ -65,7 +81,7 @@ func setupOrgForModeration(t *testing.T, pool *pgxpool.Pool) (orgID, contributor
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 
-	return orgID, contributorPubkey
+	return orgID, contributor
 }
 
 type voteActor struct {
@@ -102,38 +118,87 @@ func randHex(t *testing.T, n int) string {
 	return hex.EncodeToString(buf)
 }
 
-func TestSubmitMemory_RejectsZeroEpoch(t *testing.T) {
+func TestSubmitMemory_AcceptsValidEpochZeroSubmission(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)
 
-	orgID, contributorPubkey := setupOrgForModeration(t, pool)
+	orgID, contributor := setupOrgForModerationWithActor(t, pool)
+
+	ciphertext := randHex(t, 32)
+	wrapped := randHex(t, 32)
+	plaintextHash := randHex(t, 32)
+	salt := randHex(t, 32)
+
+	ciphertextBytes, err := hex.DecodeString(ciphertext)
+	if err != nil {
+		t.Fatalf("decode ciphertext: %v", err)
+	}
+	wrappedBytes, err := hex.DecodeString(wrapped)
+	if err != nil {
+		t.Fatalf("decode wrapped dek: %v", err)
+	}
+
+	combined := append(ciphertextBytes, wrappedBytes...)
+	submissionHashBytes := sha256.Sum256(combined)
+	submissionHash := hex.EncodeToString(submissionHashBytes[:])
+
+	ciphertextHashBytes := sha256.Sum256(ciphertextBytes)
+	ciphertextHash := hex.EncodeToString(ciphertextHashBytes[:])
+
+	wrappedDekHashBytes := sha256.Sum256(wrappedBytes)
+	wrappedDekHash := hex.EncodeToString(wrappedDekHashBytes[:])
+
+	canonical := verify.SubmitMemoryMessage(
+		orgID,
+		0,
+		submissionHash,
+		contributor.pubHex,
+		protocol.MemoryTypeMemory,
+		ciphertextHash,
+		plaintextHash,
+		salt,
+		wrappedDekHash,
+	)
+	sig := hex.EncodeToString(ed25519.Sign(contributor.priv, canonical))
 
 	reqBody := protocol.SubmitMemoryRequest{
 		OrgID:             orgID,
 		EpochID:           0,
-		Ciphertext:        strings.Repeat("a", 64),
-		WrappedDekMod:     strings.Repeat("b", 64),
-		SubmissionHash:    strings.Repeat("c", 64),
-		ContributorPubkey: contributorPubkey,
-		ContributorSig:    strings.Repeat("d", 128),
+		Ciphertext:        ciphertext,
+		PlaintextHash:     plaintextHash,
+		Salt:              salt,
+		CiphertextHash:    ciphertextHash,
+		WrappedDekHash:    wrappedDekHash,
+		WrappedDekMod:     wrapped,
+		StackHint:         []string{},
+		SubmissionHash:    submissionHash,
+		ContributorPubkey: contributor.pubHex,
+		ContributorSig:    sig,
 		MemoryType:        protocol.MemoryTypeMemory,
 	}
 	body, _ := json.Marshal(reqBody)
 
 	r := chi.NewRouter()
-	r.Post("/v1/orgs/{orgID}/submit", handlers.SubmitMemory)
+	r.Route("/v1/orgs/{orgID}", func(r chi.Router) {
+		r.Use(auth.RequireVerifiedMembership(pool))
+		r.Post("/submit", handlers.SubmitMemory)
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/orgs/"+orgID+"/submit", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", contributor.authHeader(time.Now()))
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "epoch_id") {
-		t.Errorf("expected error message to mention epoch_id, got: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), `"pending"`) {
+		t.Fatalf("expected response status pending, got: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), submissionHash) {
+		t.Fatalf("expected response to include submission hash %s, got: %s", submissionHash, w.Body.String())
 	}
 }
 
@@ -141,7 +206,7 @@ func TestSubmitMemory_RejectsNegativeEpoch(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)
 
-	orgID, contributorPubkey := setupOrgForModeration(t, pool)
+	orgID, contributor := setupOrgForModerationWithActor(t, pool)
 
 	reqBody := protocol.SubmitMemoryRequest{
 		OrgID:             orgID,
@@ -149,17 +214,25 @@ func TestSubmitMemory_RejectsNegativeEpoch(t *testing.T) {
 		Ciphertext:        strings.Repeat("a", 64),
 		WrappedDekMod:     strings.Repeat("b", 64),
 		SubmissionHash:    strings.Repeat("c", 64),
-		ContributorPubkey: contributorPubkey,
+		PlaintextHash:     strings.Repeat("e", 64),
+		Salt:              strings.Repeat("1", 64),
+		CiphertextHash:    strings.Repeat("2", 64),
+		WrappedDekHash:    strings.Repeat("3", 64),
+		ContributorPubkey: contributor.pubHex,
 		ContributorSig:    strings.Repeat("d", 128),
 		MemoryType:        protocol.MemoryTypeMemory,
 	}
 	body, _ := json.Marshal(reqBody)
 
 	r := chi.NewRouter()
-	r.Post("/v1/orgs/{orgID}/submit", handlers.SubmitMemory)
+	r.Route("/v1/orgs/{orgID}", func(r chi.Router) {
+		r.Use(auth.RequireVerifiedMembership(pool))
+		r.Post("/submit", handlers.SubmitMemory)
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/orgs/"+orgID+"/submit", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", contributor.authHeader(time.Now()))
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
@@ -167,13 +240,16 @@ func TestSubmitMemory_RejectsNegativeEpoch(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
+	if !strings.Contains(w.Body.String(), "epoch_id is required") {
+		t.Errorf("expected epoch_id error message, got: %s", w.Body.String())
+	}
 }
 
 func TestSubmitMemory_RejectsNonexistentEpoch(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)
 
-	orgID, contributorPubkey := setupOrgForModeration(t, pool)
+	orgID, contributor := setupOrgForModerationWithActor(t, pool)
 
 	reqBody := protocol.SubmitMemoryRequest{
 		OrgID:             orgID,
@@ -181,17 +257,25 @@ func TestSubmitMemory_RejectsNonexistentEpoch(t *testing.T) {
 		Ciphertext:        strings.Repeat("a", 64),
 		WrappedDekMod:     strings.Repeat("b", 64),
 		SubmissionHash:    strings.Repeat("c", 64),
-		ContributorPubkey: contributorPubkey,
+		PlaintextHash:     strings.Repeat("e", 64),
+		Salt:              strings.Repeat("1", 64),
+		CiphertextHash:    strings.Repeat("2", 64),
+		WrappedDekHash:    strings.Repeat("3", 64),
+		ContributorPubkey: contributor.pubHex,
 		ContributorSig:    strings.Repeat("d", 128),
 		MemoryType:        protocol.MemoryTypeMemory,
 	}
 	body, _ := json.Marshal(reqBody)
 
 	r := chi.NewRouter()
-	r.Post("/v1/orgs/{orgID}/submit", handlers.SubmitMemory)
+	r.Route("/v1/orgs/{orgID}", func(r chi.Router) {
+		r.Use(auth.RequireVerifiedMembership(pool))
+		r.Post("/submit", handlers.SubmitMemory)
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/orgs/"+orgID+"/submit", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", contributor.authHeader(time.Now()))
 	w := httptest.NewRecorder()
 
 	r.ServeHTTP(w, req)
@@ -208,23 +292,23 @@ func TestVoteOnSubmission_AdvisoryTallies(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)
 
-	orgID, contributorPubkey := setupOrgForModeration(t, pool)
+	orgID, contributor := setupOrgForModerationWithActor(t, pool)
 	ctx := context.Background()
 
 	mod1 := newVoteActor(t)
 	mod2 := newVoteActor(t)
 
 	_, err := pool.Exec(ctx, `
-        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch)
-        VALUES ($1, $2, $3, 'moderator', 0)
-    `, orgID, mod1.pubHex, randHex(t, 32))
+	        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate, join_epoch)
+	        VALUES ($1, $2, $3, 'member', true, 0)
+	    `, orgID, mod1.pubHex, randHex(t, 32))
 	if err != nil {
 		t.Fatalf("insert moderator 1: %v", err)
 	}
 	_, err = pool.Exec(ctx, `
-        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch)
-        VALUES ($1, $2, $3, 'moderator', 0)
-    `, orgID, mod2.pubHex, randHex(t, 32))
+	        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate, join_epoch)
+	        VALUES ($1, $2, $3, 'member', true, 0)
+	    `, orgID, mod2.pubHex, randHex(t, 32))
 	if err != nil {
 		t.Fatalf("insert moderator 2: %v", err)
 	}
@@ -234,10 +318,10 @@ func TestVoteOnSubmission_AdvisoryTallies(t *testing.T) {
 	wrapped := randHex(t, 32)
 
 	_, err = pool.Exec(ctx, `
-        INSERT INTO pending_submissions
-			(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, wrapped_dek_mod, contributor_sig, stack_hint, memory_type, status)
-		VALUES ($1, $2, 0, $3, $4, $5, $6, ARRAY[]::TEXT[], $7, $8)
-	`, submissionHash, orgID, contributorPubkey, ciphertext, wrapped, strings.Repeat("f", 128), protocol.MemoryTypeMemory, protocol.SubmissionStatusPendingKeyword)
+	        INSERT INTO pending_submissions
+				(submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash, wrapped_dek_mod, contributor_sig, stack_hint, memory_type, status)
+			VALUES ($1, $2, 0, $3, $4, $5, $6, $7, $8, $9, $10, ARRAY[]::TEXT[], $11, $12)
+		`, submissionHash, orgID, contributor.pubHex, ciphertext, randHex(t, 32), randHex(t, 32), randHex(t, 32), randHex(t, 32), wrapped, strings.Repeat("f", 128), protocol.MemoryTypeMemory, protocol.SubmissionStatusPendingKeyword)
 	if err != nil {
 		t.Fatalf("insert pending submission: %v", err)
 	}

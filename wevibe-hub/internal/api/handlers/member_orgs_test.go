@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -36,11 +37,17 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey string) {
+func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey string, priv ed25519.PrivateKey) {
 	ctx := context.Background()
 	orgID = "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
 	leaderPubkey := strings.Repeat("a", 64)
-	memberPubkey = strings.Repeat("b", 64)
+
+	pub, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+	priv = privKey
+	memberPubkey = hex.EncodeToString(pub)
 
 	orgReq := protocol.CreateOrgRequest{
 		LeaderPubkey:       leaderPubkey,
@@ -52,7 +59,7 @@ func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey s
 		Signature:          strings.Repeat("d", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
 	}
-	_, err := orgs.CreateOrg(ctx, pool, orgID, orgReq)
+	_, err = orgs.CreateOrg(ctx, pool, orgID, orgReq)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
@@ -76,7 +83,7 @@ func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey s
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 
-	return orgID, memberPubkey
+	return orgID, memberPubkey, priv
 }
 
 func signTimestamp(priv ed25519.PrivateKey, timestamp string) string {
@@ -88,11 +95,7 @@ func TestGetMemberOrgs_ValidSignature(t *testing.T) {
 	pool := testPool(t)
 	handlers.SetPool(pool)
 
-	orgID, memberPubkey := setupOrgWithMember(t, pool)
-
-	priv := ed25519.NewKeyFromSeed(make([]byte, 32))
-	memberPubkeyBytes, _ := hex.DecodeString(memberPubkey)
-	copy(priv[:32], memberPubkeyBytes)
+	orgID, memberPubkey, priv := setupOrgWithMember(t, pool)
 
 	timestamp := time.Now().Format(time.RFC3339)
 	sig := signTimestamp(priv, timestamp)
@@ -130,7 +133,7 @@ func TestGetMemberOrgs_InvalidSignature(t *testing.T) {
 	pool := testPool(t)
 	handlers.SetPool(pool)
 
-	_, memberPubkey := setupOrgWithMember(t, pool)
+	_, memberPubkey, _ := setupOrgWithMember(t, pool)
 
 	timestamp := time.Now().Format(time.RFC3339)
 	wrongSig := strings.Repeat("a", 128)
@@ -154,11 +157,7 @@ func TestGetMemberOrgs_ExpiredTimestamp(t *testing.T) {
 	pool := testPool(t)
 	handlers.SetPool(pool)
 
-	_, memberPubkey := setupOrgWithMember(t, pool)
-
-	priv := ed25519.NewKeyFromSeed(make([]byte, 32))
-	memberPubkeyBytes, _ := hex.DecodeString(memberPubkey)
-	copy(priv[:32], memberPubkeyBytes)
+	_, memberPubkey, priv := setupOrgWithMember(t, pool)
 
 	oldTimestamp := time.Now().Add(-10 * time.Minute).Format(time.RFC3339)
 	sig := signTimestamp(priv, oldTimestamp)
@@ -216,14 +215,10 @@ func TestGetMemberOrgs_InactiveMemberExcluded(t *testing.T) {
 	handlers.SetPool(pool)
 	ctx := context.Background()
 
-	orgID, memberPubkey := setupOrgWithMember(t, pool)
+	orgID, memberPubkey, priv := setupOrgWithMember(t, pool)
 
 	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	members.RemoveMember(ctx, pool, orgID, memberPubkey, epoch)
-
-	priv := ed25519.NewKeyFromSeed(make([]byte, 32))
-	memberPubkeyBytes, _ := hex.DecodeString(memberPubkey)
-	copy(priv[:32], memberPubkeyBytes)
 
 	timestamp := time.Now().Format(time.RFC3339)
 	sig := signTimestamp(priv, timestamp)
@@ -256,7 +251,11 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 	handlers.SetPool(pool)
 	ctx := context.Background()
 
-	memberPubkey := strings.Repeat("b", 64)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ed25519 key: %v", err)
+	}
+	memberPubkey := hex.EncodeToString(pub)
 	leaderPubkey1 := strings.Repeat("a", 64)
 	leaderPubkey2 := strings.Repeat("c", 64)
 	orgID1 := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
@@ -305,10 +304,6 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 			pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", data.orgID)
 		}
 	})
-
-	priv := ed25519.NewKeyFromSeed(make([]byte, 32))
-	memberPubkeyBytes, _ := hex.DecodeString(memberPubkey)
-	copy(priv[:32], memberPubkeyBytes)
 
 	timestamp := time.Now().Format(time.RFC3339)
 	sig := signTimestamp(priv, timestamp)
