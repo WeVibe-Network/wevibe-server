@@ -33,6 +33,7 @@ import { useDashboardState } from '@/lib/use-dashboard-state';
 import { GuardCard } from '@/components/ui/states';
 import InfoTooltip from '@/components/ui/tooltip';
 import SearchableModelCombobox, { type SearchableModelOption } from '@/components/ui/searchable-model-combobox';
+import { KeywordsSection } from '@/components/org-settings/keywords-section';
 
 const HUB_RESPONSE_PUBKEY_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
 const EXTRACTION_SYSTEM_PROMPT_MAX_BYTES = 16384;
@@ -1453,6 +1454,10 @@ export default function SettingsPage() {
                 )}
               </section>
             </>
+          )}
+
+          {isLeader && (
+            <KeywordsSection />
           )}
 
           {isLeader && (

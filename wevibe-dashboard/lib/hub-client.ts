@@ -531,6 +531,22 @@ export async function getKeywordCandidates(orgId: string): Promise<KeywordCandid
   return result ?? [];
 }
 
+const KEYWORD_FORMAT_REGEX = /^[a-z][a-z0-9_]{1,39}$/;
+
+export async function addKeyword(orgId: string, keyword: string): Promise<{ status: string; keyword: string }> {
+  const normalized = keyword.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error('Keyword is required');
+  }
+  if (!KEYWORD_FORMAT_REGEX.test(normalized)) {
+    throw new Error(`Keyword must match ${KEYWORD_FORMAT_REGEX.source}`);
+  }
+  return hubFetch<{ status: string; keyword: string }>(`/v1/orgs/${orgId}/keywords`, {
+    method: 'POST',
+    body: JSON.stringify({ keyword: normalized }),
+  });
+}
+
 export interface RecoveryShareEntry {
   share_index: number;
   holder_pubkey: string;

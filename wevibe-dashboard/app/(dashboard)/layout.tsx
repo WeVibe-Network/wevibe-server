@@ -1,4 +1,5 @@
 import Sidebar from '@/components/layout/sidebar';
+import { KeywordSeedingBanner } from '@/components/layout/keyword-seeding-banner';
 import TabNav from '@/components/layout/tab-nav';
 import Topbar from '@/components/layout/topbar';
 import { IdentityProvider } from '@/lib/identity-context';
@@ -13,6 +14,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="flex flex-1 flex-col overflow-hidden">
             <Topbar />
             <TabNav />
+            <KeywordSeedingBanner />
             <main className="flex-1 overflow-auto p-6">{children}</main>
           </div>
         </div>
