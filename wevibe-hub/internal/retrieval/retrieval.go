@@ -3,7 +3,9 @@ package retrieval
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -67,6 +69,17 @@ type CandidateScore struct {
 	RankPosition    int
 	Disposition     string
 }
+
+// ChainWeightRecord is the chain-authoritative keyword weight set for one memory.
+type ChainWeightRecord struct {
+	ContentHashHex string            // lowercase-hex CID, matches candidate ID
+	Weights        map[string]string // keyword -> raw decimal-rational string from the chain record
+}
+
+// ChainWeightFetcher fetches chain records for the given content hashes in one batch.
+type ChainWeightFetcher func(ctx context.Context, contentHashes [][]byte) ([]ChainWeightRecord, error)
+
+var ErrChainUnavailable = errors.New("chain unavailable")
 
 type ProbabilisticRanker struct {
 	Temperature       float64
@@ -456,7 +469,11 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 	return nil
 }
 
-func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
+func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int, chainFetch ChainWeightFetcher) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
+	if chainFetch == nil {
+		return nil, false, nil, fmt.Errorf("chain weight fetcher required: %w", ErrChainUnavailable)
+	}
+
 	filterConditions := []map[string]any{
 		{"key": "org_id", "match": map[string]any{"value": orgID}},
 	}
@@ -678,6 +695,91 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			memoryCreatedEpoch: memoryCreatedEpoch,
 		}
 	}
+
+	candidatesTotal := len(cands)
+	droppedMissing := 0
+	droppedMalformed := 0
+	chainFound := 0
+
+	validCands := make([]RankCandidate, 0, len(cands))
+	contentHashes := make([][]byte, 0, len(cands))
+	for _, cand := range cands {
+		decoded, decodeErr := hex.DecodeString(strings.TrimSpace(cand.ID))
+		if decodeErr != nil {
+			log.Printf("[recall] ERROR recall candidate dropped: malformed cid org=%s cid=%s: %v", orgID, cand.ID, decodeErr)
+			droppedMalformed++
+			delete(richDataByCID, cand.ID)
+			continue
+		}
+		validCands = append(validCands, cand)
+		contentHashes = append(contentHashes, decoded)
+	}
+
+	chainRecords, err := chainFetch(ctx, contentHashes)
+	if err != nil {
+		return nil, false, nil, fmt.Errorf("fetch chain keyword weights: %w (%v)", ErrChainUnavailable, err)
+	}
+
+	chainByCID := make(map[string]ChainWeightRecord, len(chainRecords))
+	for _, rec := range chainRecords {
+		normalizedCID := strings.ToLower(strings.TrimSpace(rec.ContentHashHex))
+		if normalizedCID == "" {
+			continue
+		}
+		chainByCID[normalizedCID] = rec
+	}
+
+	filteredCands := make([]RankCandidate, 0, len(validCands))
+	for _, cand := range validCands {
+		normalizedCID := strings.ToLower(strings.TrimSpace(cand.ID))
+		rec, found := chainByCID[normalizedCID]
+		if !found {
+			log.Printf("[recall] WARNING recall candidate dropped: not on chain org=%s cid=%s", orgID, cand.ID)
+			droppedMissing++
+			delete(richDataByCID, cand.ID)
+			continue
+		}
+		chainFound++
+
+		overlayWeights := make(map[string]float64, len(rec.Weights))
+		overlayKeywords := make([]protocol.KeywordWithWeight, 0, len(rec.Weights))
+		malformed := false
+		for keyword, rawWeight := range rec.Weights {
+			normalizedKeyword := strings.TrimSpace(keyword)
+			if normalizedKeyword == "" {
+				continue
+			}
+
+			parsedWeight, parseErr := strconv.ParseFloat(strings.TrimSpace(rawWeight), 64)
+			if parseErr != nil || math.IsNaN(parsedWeight) || math.IsInf(parsedWeight, 0) {
+				log.Printf("[recall] ERROR recall candidate dropped: malformed chain keyword weight org=%s cid=%s keyword=%s weight=%q", orgID, cand.ID, normalizedKeyword, rawWeight)
+				droppedMalformed++
+				malformed = true
+				break
+			}
+
+			overlayWeights[normalizedKeyword] = parsedWeight
+			overlayKeywords = append(overlayKeywords, protocol.KeywordWithWeight{Keyword: normalizedKeyword, Weight: parsedWeight})
+		}
+		if malformed {
+			delete(richDataByCID, cand.ID)
+			continue
+		}
+
+		cand.KeywordWeights = overlayWeights
+		rich := richDataByCID[cand.ID]
+		rich.keywords = overlayKeywords
+		richDataByCID[cand.ID] = rich
+		filteredCands = append(filteredCands, cand)
+	}
+	cands = filteredCands
+
+	wlog.Op(ctx, "hub.recall_chain_weight_overlay", slog.LevelInfo,
+		slog.String("phase", "outcome"),
+		slog.Int("candidates", candidatesTotal),
+		slog.Int("chain_found", chainFound),
+		slog.Int("dropped_missing", droppedMissing),
+		slog.Int("dropped_malformed", droppedMalformed))
 
 	out := ScoreAndRank(cands, RankQuery{KeywordWeights: queryWeightsMap}, RankOpts{
 		Gate:               false,
@@ -1071,6 +1173,7 @@ func EnsureCollection(ctx context.Context, client *QdrantClient, orgID string) e
 func QueryByKeywords(
 	ctx context.Context,
 	client *QdrantClient,
+	chainFetch ChainWeightFetcher,
 	orgID string,
 	accessibleEpochs []int32,
 	keywordWeights []protocol.KeywordWithWeight,
@@ -1081,7 +1184,7 @@ func QueryByKeywords(
 	relevanceFloor float64,
 	surfaceBudget int,
 ) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
-	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget)
+	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget, chainFetch)
 }
 
 type OrgMemoryPayload struct {

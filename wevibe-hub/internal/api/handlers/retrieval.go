@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -125,6 +126,11 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	effectiveFloor, effectiveBudget, defaultedFields := resolveRecallGovernor(req.RelevanceFloor, req.SurfaceBudget)
+	if len(defaultedFields) > 0 {
+		log.Printf("[recall] WARNING recall governor defaults applied org=%s agent=%s defaulted=%v floor=%.4f budget=%d test_mode=%v", req.OrgID, agentLogID, defaultedFields, effectiveFloor, effectiveBudget, recallModeIsTest())
+	}
+
 	ctx := r.Context()
 	if recallModeIsTest() {
 		log.Printf("[recall] TEST MODE bypass throttles org=%s agent=%s", req.OrgID, agentLogID)
@@ -226,18 +232,49 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var chainRecs []chain.MemoryBatchResult
+	chainFetch := func(ctx context.Context, hashes [][]byte) ([]retrieval.ChainWeightRecord, error) {
+		recs, _, err := chainClient.GetMemoriesBatch(ctx, req.OrgID, hashes)
+		if err != nil {
+			return nil, err
+		}
+		chainRecs = recs
+
+		weightRecs := make([]retrieval.ChainWeightRecord, 0, len(recs))
+		for _, rec := range recs {
+			weights := make(map[string]string)
+			for _, kw := range rec.Keywords {
+				if kw == nil {
+					continue
+				}
+				weights[kw.Keyword] = kw.Weight
+			}
+			weightRecs = append(weightRecs, retrieval.ChainWeightRecord{
+				ContentHashHex: hex.EncodeToString(rec.ContentHash),
+				Weights:        weights,
+			})
+		}
+
+		return weightRecs, nil
+	}
+
 	log.Printf("[recall] qdrant QueryByKeywords start org=%s agent=%s vecDim=%d kw=%d model=%s limit=%d includeDormant=%v", req.OrgID, agentLogID, len(req.Vector), len(req.KeywordWeights), req.EmbeddingModelID, req.Limit, req.IncludeDormant)
 	results, contested, scorecard, err := retrieval.QueryByKeywords(
-		ctx, qdrantClient, req.OrgID, accessibleEpochs,
-		req.KeywordWeights, req.Vector, req.EmbeddingModelID, uint64(req.Limit), req.IncludeDormant, req.RelevanceFloor, req.SurfaceBudget,
+		ctx, qdrantClient, chainFetch, req.OrgID, accessibleEpochs,
+		req.KeywordWeights, req.Vector, req.EmbeddingModelID, uint64(req.Limit), req.IncludeDormant, effectiveFloor, effectiveBudget,
 	)
 	if err != nil {
+		if errors.Is(err, retrieval.ErrChainUnavailable) {
+			log.Printf("[recall] ERROR chain GetMemoriesBatch FAILED org=%s: %v", req.OrgID, err)
+			WriteError(w, http.StatusServiceUnavailable, "chain_unavailable", "chain unavailable")
+			return
+		}
 		log.Printf("[recall] qdrant QueryByKeywords FAILED org=%s: %v", req.OrgID, err)
 		WriteError(w, http.StatusInternalServerError, "query_failed", "query failed", err.Error())
 		return
 	}
 	log.Printf("[recall] qdrant returned %d candidates contested=%v org=%s", len(results), contested, req.OrgID)
-	persistRecallQueryLog(req, scorecard, contested)
+	persistRecallQueryLog(req, scorecard, contested, effectiveFloor, effectiveBudget)
 
 	if req.SessionID != "" && len(results) > 0 {
 		rows, err := pool.Query(ctx, `
@@ -264,19 +301,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	contentHashes := make([][]byte, 0, len(results))
-	cidToIndex := make(map[string]int, len(results))
-	for i, res := range results {
-		hashBytes, err := hex.DecodeString(res.CID)
-		if err != nil {
-			log.Printf("[recall] ERROR malformed CID skipped org=%s cid=%s: %v", req.OrgID, res.CID, err)
-			continue
-		}
-		contentHashes = append(contentHashes, hashBytes)
-		cidToIndex[res.CID] = i
-	}
-
-	if len(contentHashes) == 0 {
+	if len(results) == 0 {
 		receipt, receiptErr := receipts.CreateReceipt(
 			ctx, pool, nodePrivkeyHex,
 			req.OrgID, 0, accessibleEpochs,
@@ -295,19 +320,8 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chainMemories, notFound, err := chainClient.GetMemoriesBatch(ctx, req.OrgID, contentHashes)
-	if err != nil {
-		log.Printf("[recall] ERROR chain GetMemoriesBatch FAILED org=%s hashCount=%d: %v", req.OrgID, len(contentHashes), err)
-		WriteError(w, http.StatusServiceUnavailable, "chain_unavailable", "chain unavailable")
-		return
-	}
-
-	if len(notFound) > 0 {
-		log.Printf("[recall] WARNING qdrant-chain mismatch org=%s missingOnChain=%d", req.OrgID, len(notFound))
-	}
-
-	chainMap := make(map[string]chain.MemoryBatchResult, len(chainMemories))
-	for _, cm := range chainMemories {
+	chainMap := make(map[string]chain.MemoryBatchResult, len(chainRecs))
+	for _, cm := range chainRecs {
 		chainMap[hex.EncodeToString(cm.ContentHash)] = cm
 	}
 
@@ -619,7 +633,37 @@ func truncateForLog(value string, max int) string {
 	return value[:max]
 }
 
-func persistRecallQueryLog(req protocol.QueryRequest, scorecard []retrieval.CandidateScore, contested bool) {
+// resolveRecallGovernor returns the effective relevance floor / surface budget.
+// A field the client omitted (nil) gets the mode governor default; an explicit value
+// (including 0, the bench test-mode bypass) is honored as sent.
+func resolveRecallGovernor(floor *float64, budget *int) (float64, int, []string) {
+	defaultFloor := 0.55
+	defaultBudget := 3
+	if recallModeIsTest() {
+		defaultFloor = 0
+		defaultBudget = 1000
+	}
+
+	effectiveFloor := defaultFloor
+	effectiveBudget := defaultBudget
+	defaulted := make([]string, 0, 2)
+
+	if floor == nil {
+		defaulted = append(defaulted, "relevance_floor")
+	} else {
+		effectiveFloor = *floor
+	}
+
+	if budget == nil {
+		defaulted = append(defaulted, "surface_budget")
+	} else {
+		effectiveBudget = *budget
+	}
+
+	return effectiveFloor, effectiveBudget, defaulted
+}
+
+func persistRecallQueryLog(req protocol.QueryRequest, scorecard []retrieval.CandidateScore, contested bool, effectiveFloor float64, effectiveBudget int) {
 	if pool == nil {
 		return
 	}
@@ -636,8 +680,8 @@ func persistRecallQueryLog(req protocol.QueryRequest, scorecard []retrieval.Cand
 		AgentPubkey:      req.AgentPubkey,
 		SessionID:        req.SessionID,
 		KeywordWeights:   req.KeywordWeights,
-		RelevanceFloor:   req.RelevanceFloor,
-		SurfaceBudget:    req.SurfaceBudget,
+		RelevanceFloor:   effectiveFloor,
+		SurfaceBudget:    effectiveBudget,
 		EmbeddingModelID: req.EmbeddingModelID,
 		VectorDim:        len(req.Vector),
 		LimitN:           req.Limit,

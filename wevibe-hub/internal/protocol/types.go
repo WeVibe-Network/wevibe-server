@@ -167,7 +167,7 @@ type SubmitMemoryRequest struct {
 	Keywords             json.RawMessage `json:"keywords,omitempty"`
 	// Producer-model provenance (T3): immutable fields carrying the provenance
 	// identity of the producer memory that injected into this submission.
-	ProducerModelId    string `json:"producer_model_id,omitempty"`
+	ProducerModelId        string `json:"producer_model_id,omitempty"`
 	AttestationSessionHash string `json:"attestation_session_hash,omitempty"`
 }
 
@@ -207,7 +207,7 @@ type PendingQueueItem struct {
 	Votes                  int       `json:"votes"`
 	VoterPubkeys           []string  `json:"voter_pubkeys,omitempty"`
 	// Producer-model provenance (T3): immutable fields carried from submission.
-	ProducerModelId      string `json:"producer_model_id,omitempty"`
+	ProducerModelId        string `json:"producer_model_id,omitempty"`
 	AttestationSessionHash string `json:"attestation_session_hash,omitempty"`
 }
 
@@ -285,8 +285,8 @@ type QueryRequest struct {
 	Limit                  int                 `json:"limit"`
 	SessionID              string              `json:"session_id,omitempty"`
 	IncludeDormant         bool                `json:"include_dormant,omitempty"`
-	RelevanceFloor         float64             `json:"relevance_floor,omitempty"`
-	SurfaceBudget          int                 `json:"surface_budget,omitempty"`
+	RelevanceFloor         *float64            `json:"relevance_floor,omitempty"`
+	SurfaceBudget          *int                `json:"surface_budget,omitempty"`
 	McVersion              int                 `json:"mc_version,omitempty"`
 }
 
@@ -383,7 +383,7 @@ type IndexEntry struct {
 	VectorDim              int                 `json:"vector_dim,omitempty"`
 	McVersion              uint32              `json:"mc_version,omitempty"`
 	// Producer-model provenance (T3): immutable fields carried in Qdrant payload.
-	ProducerModelId      string `json:"producer_model_id,omitempty"`
+	ProducerModelId        string `json:"producer_model_id,omitempty"`
 	AttestationSessionHash string `json:"attestation_session_hash,omitempty"`
 }
 
