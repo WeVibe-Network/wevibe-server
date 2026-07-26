@@ -30,6 +30,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 type ChainWatcher struct {
@@ -398,6 +399,12 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 			if err := w.processCloseOrgBookkeeping(ctx, txHashHex, height, timestamp,
 				m.OrgId); err != nil {
 				w.logger.Error("processCloseOrgBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
+		case *orgtypes.MsgRegisterOrg:
+			if err := w.processRegisterOrgBookkeeping(ctx, txHashHex, height, timestamp,
+				m.Leader, m.Name, m.Domain, m.Description, m.TechStack, m.FocusAreas); err != nil {
+				w.logger.Error("processRegisterOrgBookkeeping failed", "err", err, "leader_fp", wlog.Fingerprint([]byte(m.Leader)))
 			}
 
 		case *memorytypes.MsgSubmitCommitment:
@@ -789,6 +796,58 @@ func (w *ChainWatcher) processCloseOrgBookkeeping(ctx context.Context, txHash st
 			"org_id", orgID,
 			"tx_hash", txHash)
 	}
+
+	return nil
+}
+
+func (w *ChainWatcher) processRegisterOrgBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, leader, name, domain, description, techStack, focusAreas string) error {
+	orgID, err := orgs.GetOrgIDByLeader(ctx, w.db, leader)
+	if err != nil {
+		return fmt.Errorf("lookup org by leader: %w", err)
+	}
+
+	if orgID == "" {
+		w.logger.Info("register-org sync skipped: hub org row not present yet (leader POST /v1/orgs will create it)",
+			"leader_fp", wlog.Fingerprint([]byte(leader)),
+			"tx_hash", txHash,
+			"height", blockHeight)
+		return nil
+	}
+
+	tag, err := w.db.Exec(ctx, `
+		UPDATE orgs
+		SET org_name = $2,
+		    domain = $3,
+		    description = $4,
+		    tech_stack = $5,
+		    focus_areas = $6,
+		    updated_at = NOW()
+		WHERE org_id = $1
+	`, orgID, name, domain, description, techStack, focusAreas)
+	if err != nil {
+		return fmt.Errorf("sync org profile from chain: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		w.logger.Warn("org row vanished during register-org sync",
+			"org_id", orgID,
+			"tx_hash", txHash)
+		return nil
+	}
+
+	w.logger.Info("synced org profile from chain register-org",
+		"org_id", orgID,
+		"tx_hash", txHash,
+		"height", blockHeight,
+		"name_len", len(name),
+		"name_fp", wlog.Fingerprint([]byte(name)),
+		"domain_len", len(domain),
+		"domain_fp", wlog.Fingerprint([]byte(domain)),
+		"description_len", len(description),
+		"description_fp", wlog.Fingerprint([]byte(description)),
+		"tech_stack_len", len(techStack),
+		"tech_stack_fp", wlog.Fingerprint([]byte(techStack)),
+		"focus_areas_len", len(focusAreas),
+		"focus_areas_fp", wlog.Fingerprint([]byte(focusAreas)))
 
 	return nil
 }
