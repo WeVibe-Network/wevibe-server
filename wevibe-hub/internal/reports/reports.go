@@ -74,13 +74,13 @@ func Create(ctx context.Context, pool *pgxpool.Pool, orgID string, req protocol.
 
 func List(ctx context.Context, pool *pgxpool.Pool, orgID string, status *string, limit, offset int) ([]protocol.ReportRecord, int, error) {
 	args := []any{orgID}
-	where := "WHERE org_id = $1"
+	where := "WHERE r.org_id = $1"
 	if status != nil && *status != "" {
-		where += " AND status = $2"
+		where += " AND r.status = $2"
 		args = append(args, *status)
 	}
 
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM reports %s", where)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM reports r %s", where)
 	var total int
 	if err := pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -247,7 +247,10 @@ func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, act
 	}
 
 	if resolution == "" {
-		return getReportRecordTx(ctx, tx, orgID, reportID)
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return getReportRecord(ctx, pool, orgID, reportID)
 	}
 
 	if actorRole != "leader" {
@@ -256,16 +259,17 @@ func Update(ctx context.Context, pool *pgxpool.Pool, orgID, reportID string, act
 
 	if resolution == "upheld" {
 		_, err = tx.Exec(ctx, `
-			DELETE FROM reports WHERE org_id = $1 AND id = $2
-		`, orgID, reportID)
+			UPDATE reports SET status = $1, resolution = $2, resolved_by = $3, resolved_at = $4, updated_at = NOW()
+			WHERE org_id = $5 AND id = $6
+		`, "upheld_pending_tx", resolution, actorPubkey, time.Now().UTC(), orgID, reportID)
 		if err != nil {
-			return nil, fmt.Errorf("mark report upheld: %w", err)
+			return nil, fmt.Errorf("mark report upheld_pending_tx: %w", err)
 		}
 	} else {
 		_, err = tx.Exec(ctx, `
 			UPDATE reports SET status = $1, resolution = $2, resolved_by = $3, resolved_at = $4, updated_at = NOW()
 			WHERE org_id = $5 AND id = $6
-		`, "resolved", resolution, actorPubkey, time.Now().UTC(), orgID, reportID)
+		`, resolution, resolution, actorPubkey, time.Now().UTC(), orgID, reportID)
 		if err != nil {
 			return nil, fmt.Errorf("update report: %w", err)
 		}
