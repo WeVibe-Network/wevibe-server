@@ -395,3 +395,59 @@ func GetEpochManifest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(manifest)
 }
+
+func GetCurrentChainEpoch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	var epoch uint64
+	defer func() {
+		attrs := []slog.Attr{
+			slog.String("phase", "outcome"),
+			slog.String("status", status),
+			slog.Uint64("epoch", epoch),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+		}
+		wlog.Op(ctx, "hub.chain_epoch", slog.LevelInfo, attrs...)
+	}()
+
+	if chainClient == nil {
+		http.Error(w, `{"error":"chain unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	if orgID == "" {
+		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		return
+	}
+	wlog.Op(ctx, "hub.chain_epoch", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID))
+
+	var err error
+	epoch, err = chainClient.GetCurrentChainEpoch(ctx)
+	if err != nil {
+		wlog.Op(ctx, "hub.chain_epoch", slog.LevelError,
+			slog.String("phase", "error"),
+			slog.String("org", orgID),
+			slog.String("error", err.Error()))
+		http.Error(w, `{"error":"chain epoch unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	if epoch == 0 {
+		wlog.Op(ctx, "hub.chain_epoch", slog.LevelError,
+			slog.String("phase", "error"),
+			slog.String("org", orgID),
+			slog.String("error", "chain epoch not initialized"))
+		http.Error(w, `{"error":"chain epoch not initialized"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	status = "ok"
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"epoch_id":         epoch,
+		"epoch_identifier": "wevibe_epoch",
+	})
+}

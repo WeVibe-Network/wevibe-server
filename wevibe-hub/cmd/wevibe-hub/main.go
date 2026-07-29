@@ -282,6 +282,7 @@ func main() {
 		r.Get("/extraction-profile", handlers.GetExtractionProfile)
 		r.Post("/join", handlers.SubmitJoinRequest)
 		r.Get("/epoch/{epochID}/manifest", handlers.GetEpochManifest)
+		r.Get("/epoch/current/chain", handlers.GetCurrentChainEpoch)
 		r.Put("/extraction-profile", handlers.SetExtractionProfile)
 
 		// Membership-required routes

@@ -21,6 +21,7 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	authztypes "github.com/cosmos/cosmos-sdk/x/authz"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
+	epochstypes "github.com/cosmos/cosmos-sdk/x/epochs/types"
 	attesttypes "github.com/wevibe-network/wevibe-chain/x/attestation/types"
 	bwtypes "github.com/wevibe-network/wevibe-chain/x/bandwidth/types"
 	emissionstypes "github.com/wevibe-network/wevibe-chain/x/emissions/types"
@@ -63,6 +64,7 @@ type GrpcClient struct {
 	memoryQuery    memorytypes.QueryClient
 	orgQuery       orgtypes.QueryClient
 	serveQuery     servetypes.QueryClient
+	epochsQuery    epochstypes.QueryClient
 	attestQuery    attesttypes.QueryClient
 	bandwidthQuery bwtypes.QueryClient
 	emissionsQuery emissionstypes.QueryClient
@@ -141,6 +143,7 @@ func NewGrpcClient(grpcURL, chainID, mnemonic string) (*GrpcClient, error) {
 		memoryQuery:    memorytypes.NewQueryClient(conn),
 		orgQuery:       orgtypes.NewQueryClient(conn),
 		serveQuery:     servetypes.NewQueryClient(conn),
+		epochsQuery:    epochstypes.NewQueryClient(conn),
 		attestQuery:    attesttypes.NewQueryClient(conn),
 		bandwidthQuery: bwtypes.NewQueryClient(conn),
 		emissionsQuery: emissionstypes.NewQueryClient(conn),
@@ -179,6 +182,17 @@ func (c *GrpcClient) GetMemoryQueryClient() memorytypes.QueryClient {
 
 func (c *GrpcClient) GetServeQueryClient() servetypes.QueryClient {
 	return c.serveQuery
+}
+
+func (c *GrpcClient) GetCurrentChainEpoch(ctx context.Context) (uint64, error) {
+	resp, err := c.epochsQuery.CurrentEpoch(ctx, &epochstypes.QueryCurrentEpochRequest{Identifier: "wevibe_epoch"})
+	if err != nil {
+		return 0, fmt.Errorf("query current chain epoch: %w", err)
+	}
+	if resp.CurrentEpoch < 0 {
+		return 0, fmt.Errorf("query current chain epoch: negative epoch %d", resp.CurrentEpoch)
+	}
+	return uint64(resp.CurrentEpoch), nil
 }
 
 func (c *GrpcClient) GetAttestationQueryClient() attesttypes.QueryClient {
