@@ -18,7 +18,7 @@
 -- ============================================================
 
 -- WeVibe Network Hub — PostgreSQL Schema
--- Version: 3.0 (memory_type=memory single-type + SSOT directive)
+-- Version: 3.1 (RECALL-PIVOT: outcome events + derived standing; wipe required)
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -435,7 +435,7 @@ CREATE TABLE IF NOT EXISTS serve_events (
     contributor_id      TEXT        NOT NULL,
     model_id            TEXT        NOT NULL DEFAULT '',
     turn_count          INTEGER     NOT NULL DEFAULT 0,
-    matched_keywords    TEXT[]      NOT NULL,
+    matched_keywords    TEXT[]      NOT NULL DEFAULT '{}',
     reporter_pubkey     TEXT        NOT NULL,
     reason              TEXT,
     event_type          TEXT        NOT NULL DEFAULT 'serve'
@@ -454,6 +454,47 @@ CREATE INDEX IF NOT EXISTS idx_serve_events_org_status ON serve_events(org_id, s
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
 CREATE INDEX IF NOT EXISTS idx_serve_events_pending_created ON serve_events(created_at) WHERE status = 'pending';
+
+-- Content-free E3 use-leg outcome events reported by MCP (refs only).
+-- fingerprint = sha256(canonical wevibe-event-v1 body); it is the dedup key.
+CREATE TABLE IF NOT EXISTS outcome_events (
+    id                  BIGSERIAL   PRIMARY KEY,
+    org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    epoch_id            INTEGER     NOT NULL,
+    memory_content_hash TEXT        NOT NULL,
+    signer_pubkey       TEXT        NOT NULL,
+    nonce               TEXT        NOT NULL,
+    signature           TEXT        NOT NULL,
+    episode_ref         TEXT        NOT NULL,
+    worked              BOOLEAN     NOT NULL,
+    evidence_ref        TEXT        NOT NULL,
+    fingerprint         TEXT        NOT NULL UNIQUE,
+    session_id          TEXT,
+    reporter_pubkey     TEXT        NOT NULL,
+    status              TEXT        NOT NULL DEFAULT 'pending'
+                                    CHECK (status IN ('pending', 'submitted', 'failed')),
+    tx_hash             TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    submitted_at        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_outcome_events_org_status ON outcome_events(org_id, status);
+
+-- DERIVED projection only: standing = f(events, anchored policy_version); wipe-safe.
+-- Rebuildable projection; never authoritative.
+CREATE TABLE IF NOT EXISTS memory_standing (
+    memory_cid    TEXT        NOT NULL,
+    org_id        TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
+    standing_bps  INTEGER     NOT NULL,
+    serve_count   INTEGER     NOT NULL DEFAULT 0,
+    denial_count  INTEGER     NOT NULL DEFAULT 0,
+    denial_rate   REAL        NOT NULL DEFAULT 0,
+    trusted       BOOLEAN     NOT NULL DEFAULT FALSE,
+    archived      BOOLEAN     NOT NULL DEFAULT FALSE,
+    policy_version TEXT       NOT NULL,
+    computed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (memory_cid, org_id)
+);
 
 -- ── Decision notes ─────────────────────────────────────────────────────────
 -- Member-authenticated moderation decision notes (hub-only; never relayed to chain).
@@ -486,7 +527,6 @@ CREATE TABLE IF NOT EXISTS query_log (
     agent_pubkey       TEXT             NOT NULL,
     session_id         TEXT             NOT NULL DEFAULT '',
     query_text         TEXT,                 -- v1: always NULL (hub never receives raw query); reserved for future opt-in MCP forward
-    keyword_weights    JSONB            NOT NULL DEFAULT '[]'::jsonb,
     relevance_floor    DOUBLE PRECISION NOT NULL DEFAULT 0,
     surface_budget     INTEGER          NOT NULL DEFAULT 0,
     embedding_model_id TEXT             NOT NULL DEFAULT '',
@@ -501,10 +541,9 @@ CREATE TABLE IF NOT EXISTS query_log (
 CREATE TABLE IF NOT EXISTS query_candidate_scores (
     query_id          TEXT             NOT NULL REFERENCES query_log(query_id) ON DELETE CASCADE,
     memory_cid        TEXT             NOT NULL,
-    keyword_score     DOUBLE PRECISION NOT NULL DEFAULT 0,
     vector_score      DOUBLE PRECISION NOT NULL DEFAULT 0,
-    gamma             DOUBLE PRECISION NOT NULL DEFAULT 0,
-    delta             DOUBLE PRECISION NOT NULL DEFAULT 0,
+    standing_bps      INTEGER          NOT NULL DEFAULT 0,
+    keyword_overlap   DOUBLE PRECISION NOT NULL DEFAULT 0,
     capped_boost      DOUBLE PRECISION NOT NULL DEFAULT 0,
     combined_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
     matched_keywords  TEXT[]           NOT NULL DEFAULT '{}',
@@ -564,7 +603,6 @@ CREATE TABLE IF NOT EXISTS memory_keywords (
     memory_cid  TEXT    NOT NULL,
     org_id      TEXT    NOT NULL,
     keyword     TEXT    NOT NULL,
-    weight      REAL    NOT NULL DEFAULT 0.0,
     PRIMARY KEY (memory_cid, keyword),
     FOREIGN KEY (org_id, keyword) REFERENCES org_keywords(org_id, keyword)
 );

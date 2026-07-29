@@ -89,10 +89,7 @@ func TestRedriveApproveMemory_DispatchesBookkeepingWithTxFields(t *testing.T) {
 					ContributorWallet:      "wevibe1wallet",
 					ProducerModelId:        "gpt-5.3-codex",
 					AttestationSessionHash: []byte{0xCA, 0xFE},
-					Keywords: []*memorytypes.KeywordWeight{
-						{Keyword: "alpha"},
-						{Keyword: "beta"},
-					},
+					Keywords:               []string{"alpha", "beta"},
 				},
 				&memorytypes.MsgApproveMemory{
 					OrgId:         "wevibe-org-0",

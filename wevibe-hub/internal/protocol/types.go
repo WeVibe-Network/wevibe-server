@@ -20,7 +20,6 @@ const (
 	MaxKeywordsPerMemory   = 20
 	MaxMemoryChars         = 2000
 	MaxNegativeSignalChars = 1000
-	KeywordWeightTolerance = 0.02
 	KeywordFormatRegex     = `^[a-z][a-z0-9_]{1,39}$`
 
 	// MaxBatchMemories is the maximum number of memories a leader can include

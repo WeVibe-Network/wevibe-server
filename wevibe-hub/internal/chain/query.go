@@ -404,15 +404,12 @@ type MemoryBatchResult struct {
 	EncryptedBlob     []byte
 	WrappedDekEnc     []byte
 	Capsule           []byte
-	Keywords          []*memorytypes.KeywordWeight
+	Keywords          []string
 	ContributorPubkey string
 	Epoch             uint64
 	State             int32
 	MemoryType        string
-	ServeCountTotal   uint64
-	DenialCountTotal  uint64
 	LastActiveEpoch   uint64
-	ArchivedEpoch     uint64
 }
 
 func (c *GrpcClient) GetMemoriesBatch(ctx context.Context, orgID string, contentHashes [][]byte) ([]MemoryBatchResult, [][]byte, error) {
@@ -468,10 +465,7 @@ func (c *GrpcClient) GetMemoriesBatch(ctx context.Context, orgID string, content
 				Epoch:             m.Epoch,
 				State:             int32(m.State),
 				MemoryType:        mapChainMemoryTypeToString(m.MemoryType),
-				ServeCountTotal:   m.ServeCountTotal,
-				DenialCountTotal:  m.DenialCountTotal,
 				LastActiveEpoch:   m.LastActiveEpoch,
-				ArchivedEpoch:     m.ArchivedEpoch,
 			})
 		}
 

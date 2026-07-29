@@ -3,8 +3,10 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	sdktypes "github.com/cosmos/cosmos-sdk/types"
@@ -33,6 +35,7 @@ func TestRelayPendingEventsByOrgWithDeps_FoldsEpochsIntoSingleTxPreservingOrder(
 	submitted := make([][]sdktypes.Msg, 0, 1)
 	serveMarks := make([]markCall, 0, 1)
 	denialMarks := make([]markCall, 0, 1)
+	outcomeMarks := make([]markCall, 0, 1)
 
 	deps := relayPendingDeps{
 		getPendingServes: func(context.Context, poolType, string, int) ([]serves.ServeEventRecord, error) {
@@ -51,6 +54,9 @@ func TestRelayPendingEventsByOrgWithDeps_FoldsEpochsIntoSingleTxPreservingOrder(
 			denialFetches++
 			return nil, nil
 		},
+		getPendingOutcomes: func(context.Context, poolType, string, int) ([]serves.OutcomeEventRecord, error) {
+			return nil, nil
+		},
 		submitRelayBatch: func(_ context.Context, _ *chain.GrpcClient, _ poolType, _ string, _ string, msgs []sdktypes.Msg) (string, error) {
 			submitted = append(submitted, append([]sdktypes.Msg(nil), msgs...))
 			return "tx-folded", nil
@@ -61,6 +67,10 @@ func TestRelayPendingEventsByOrgWithDeps_FoldsEpochsIntoSingleTxPreservingOrder(
 		},
 		markDenialsSubmitted: func(_ context.Context, _ poolType, ids []int64, txHash string) error {
 			denialMarks = append(denialMarks, markCall{ids: append([]int64(nil), ids...), txHash: txHash})
+			return nil
+		},
+		markOutcomes: func(_ context.Context, _ poolType, ids []int64, _ string, txHash string) error {
+			outcomeMarks = append(outcomeMarks, markCall{ids: append([]int64(nil), ids...), txHash: txHash})
 			return nil
 		},
 		logRelayTxSubmission: func(string, int, int, string) {},
@@ -102,6 +112,9 @@ func TestRelayPendingEventsByOrgWithDeps_FoldsEpochsIntoSingleTxPreservingOrder(
 	if !reflect.DeepEqual(denialMarks[0].ids, []int64{101, 102}) {
 		t.Fatalf("unexpected denial IDs marked: got %v want %v", denialMarks[0].ids, []int64{101, 102})
 	}
+	if len(outcomeMarks) != 1 || len(outcomeMarks[0].ids) != 0 {
+		t.Fatalf("unexpected outcome marks for no outcome events: %+v", outcomeMarks)
+	}
 }
 
 func TestRelayPendingEventsByOrgWithDeps_MessageCapFlushesAtEpochBoundary(t *testing.T) {
@@ -135,6 +148,9 @@ func TestRelayPendingEventsByOrgWithDeps_MessageCapFlushesAtEpochBoundary(t *tes
 			denialFetches++
 			return nil, nil
 		},
+		getPendingOutcomes: func(context.Context, poolType, string, int) ([]serves.OutcomeEventRecord, error) {
+			return nil, nil
+		},
 		submitRelayBatch: func(_ context.Context, _ *chain.GrpcClient, _ poolType, _ string, _ string, msgs []sdktypes.Msg) (string, error) {
 			txCount++
 			submitted = append(submitted, append([]sdktypes.Msg(nil), msgs...))
@@ -142,6 +158,7 @@ func TestRelayPendingEventsByOrgWithDeps_MessageCapFlushesAtEpochBoundary(t *tes
 		},
 		markServesSubmitted:  func(context.Context, poolType, []int64, string) error { return nil },
 		markDenialsSubmitted: func(context.Context, poolType, []int64, string) error { return nil },
+		markOutcomes:         func(context.Context, poolType, []int64, string, string) error { return nil },
 		logRelayTxSubmission: func(string, int, int, string) {},
 	}
 
@@ -198,6 +215,9 @@ func TestRelayPendingEventsByOrgWithDeps_MarksIDsWithEachFlushedTxHash(t *testin
 			denialFetches++
 			return nil, nil
 		},
+		getPendingOutcomes: func(context.Context, poolType, string, int) ([]serves.OutcomeEventRecord, error) {
+			return nil, nil
+		},
 		submitRelayBatch: func(_ context.Context, _ *chain.GrpcClient, _ poolType, _ string, _ string, _ []sdktypes.Msg) (string, error) {
 			txCount++
 			return fmt.Sprintf("tx-%d", txCount), nil
@@ -210,6 +230,7 @@ func TestRelayPendingEventsByOrgWithDeps_MarksIDsWithEachFlushedTxHash(t *testin
 			denialMarks = append(denialMarks, markCall{ids: append([]int64(nil), ids...), txHash: txHash})
 			return nil
 		},
+		markOutcomes:         func(context.Context, poolType, []int64, string, string) error { return nil },
 		logRelayTxSubmission: func(string, int, int, string) {},
 	}
 
@@ -243,6 +264,74 @@ func TestRelayPendingEventsByOrgWithDeps_MarksIDsWithEachFlushedTxHash(t *testin
 	}
 }
 
+func TestRelayPendingEventsByOrgWithDeps_FoldsOutcomeEvents(t *testing.T) {
+	outcomes := []serves.OutcomeEventRecord{
+		makeOutcomeRecord(201, 10, 0x51),
+		makeOutcomeRecord(202, 11, 0x61),
+	}
+	outcomeFetches := 0
+	submitted := make([][]sdktypes.Msg, 0, 1)
+	outcomeMarks := make([]markCall, 0, 1)
+
+	deps := relayPendingDeps{
+		getPendingServes:  func(context.Context, poolType, string, int) ([]serves.ServeEventRecord, error) { return nil, nil },
+		getPendingDenials: func(context.Context, poolType, string, int) ([]serves.ServeEventRecord, error) { return nil, nil },
+		getPendingOutcomes: func(context.Context, poolType, string, int) ([]serves.OutcomeEventRecord, error) {
+			if outcomeFetches == 0 {
+				outcomeFetches++
+				return append([]serves.OutcomeEventRecord(nil), outcomes...), nil
+			}
+			outcomeFetches++
+			return nil, nil
+		},
+		submitRelayBatch: func(_ context.Context, _ *chain.GrpcClient, _ poolType, _ string, _ string, msgs []sdktypes.Msg) (string, error) {
+			submitted = append(submitted, append([]sdktypes.Msg(nil), msgs...))
+			return "tx-outcome", nil
+		},
+		markServesSubmitted:  func(context.Context, poolType, []int64, string) error { return nil },
+		markDenialsSubmitted: func(context.Context, poolType, []int64, string) error { return nil },
+		markOutcomes: func(_ context.Context, _ poolType, ids []int64, status, txHash string) error {
+			if status != "submitted" {
+				t.Fatalf("unexpected outcome status: %s", status)
+			}
+			outcomeMarks = append(outcomeMarks, markCall{ids: append([]int64(nil), ids...), txHash: txHash})
+			return nil
+		},
+		logRelayTxSubmission: func(string, int, int, string) {},
+	}
+
+	err := relayPendingEventsByOrgWithDeps(context.Background(), &chain.GrpcClient{}, nil, "org-test", deps)
+	if err != nil {
+		t.Fatalf("relayPendingEventsByOrgWithDeps returned error: %v", err)
+	}
+	if len(submitted) != 1 || len(submitted[0]) != 2 {
+		t.Fatalf("expected one tx with two outcome messages, got %+v", submitted)
+	}
+	assertOutcomeMsgEpoch(t, submitted[0][0], 10)
+	assertOutcomeMsgEpoch(t, submitted[0][1], 11)
+	if len(outcomeMarks) != 1 || !reflect.DeepEqual(outcomeMarks[0].ids, []int64{201, 202}) || outcomeMarks[0].txHash != "tx-outcome" {
+		t.Fatalf("unexpected outcome marks: %+v", outcomeMarks)
+	}
+}
+
+func TestCanonicalOutcomeEventBody_ChainGoldenVector(t *testing.T) {
+	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
+		EpisodeRef: []byte{0x10, 0x11}, Worked: true, EvidenceRef: []byte{0x12},
+	}}}
+	body, err := servetypes.CanonicalEventBody(servetypes.EventType_EVENT_TYPE_OUTCOME, "org-a", bytes.Repeat([]byte{0x01}, 32), 7, bytes.Repeat([]byte{0x02}, 32), []byte{0x03, 0x04}, entry)
+	if err != nil {
+		t.Fatalf("CanonicalEventBody returned error: %v", err)
+	}
+	expected := "wevibe-event-v1\noutcome\norg-a\n" + strings.Repeat("01", 32) + "\n7\n" + strings.Repeat("02", 32) + "\n1011\nworked=true\n12\n0304"
+	if string(body) != expected {
+		t.Fatalf("canonical body mismatch:\ngot  %q\nwant %q", string(body), expected)
+	}
+	sum := sha256.Sum256([]byte(expected))
+	if got := fmt.Sprintf("%x", servetypes.ComputeEventFingerprint(body)); got != fmt.Sprintf("%x", sum[:]) {
+		t.Fatalf("fingerprint mismatch: got %s want %x", got, sum[:])
+	}
+}
+
 func makeServeRecord(id int64, epoch int, seed byte) serves.ServeEventRecord {
 	return serves.ServeEventRecord{
 		ID:                id,
@@ -267,6 +356,32 @@ func makeDenialRecord(id int64, epoch int, seed byte) serves.ServeEventRecord {
 	record.ServeFingerprint = hex32(seed + 4)
 	record.Reason = "spam"
 	return record
+}
+
+func makeOutcomeRecord(id int64, epoch int, seed byte) serves.OutcomeEventRecord {
+	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
+		EpisodeRef:  []byte{seed + 4},
+		Worked:      true,
+		EvidenceRef: []byte{seed + 5},
+	}}}
+	body, err := servetypes.CanonicalEventBody(servetypes.EventType_EVENT_TYPE_OUTCOME, "org-test", bytes.Repeat([]byte{seed}, 32), uint64(epoch), bytes.Repeat([]byte{seed + 1}, 32), []byte{seed + 2}, entry)
+	if err != nil {
+		panic(err)
+	}
+	return serves.OutcomeEventRecord{
+		ID:                id,
+		OrgID:             "org-test",
+		EpochID:           epoch,
+		MemoryContentHash: hex32(seed),
+		SignerPubkey:      hex32(seed + 1),
+		Nonce:             fmt.Sprintf("%02x", seed+2),
+		Signature:         hex64(seed + 3),
+		EpisodeRef:        fmt.Sprintf("%02x", seed+4),
+		Worked:            true,
+		EvidenceRef:       fmt.Sprintf("%02x", seed+5),
+		Fingerprint:       fmt.Sprintf("%x", servetypes.ComputeEventFingerprint(body)),
+		ReporterPubkey:    fmt.Sprintf("reporter-%d", id),
+	}
 }
 
 func hex32(seed byte) string {
@@ -296,5 +411,16 @@ func assertDenialMsgEpoch(t *testing.T, msg sdktypes.Msg, wantEpoch uint64) {
 	}
 	if denialMsg.Epoch != wantEpoch {
 		t.Fatalf("unexpected denial epoch: got %d want %d", denialMsg.Epoch, wantEpoch)
+	}
+}
+
+func assertOutcomeMsgEpoch(t *testing.T, msg sdktypes.Msg, wantEpoch uint64) {
+	t.Helper()
+	outcomeMsg, ok := msg.(*servetypes.MsgSubmitEventBatch)
+	if !ok {
+		t.Fatalf("expected MsgSubmitEventBatch, got %T", msg)
+	}
+	if outcomeMsg.Epoch != wantEpoch {
+		t.Fatalf("unexpected outcome epoch: got %d want %d", outcomeMsg.Epoch, wantEpoch)
 	}
 }

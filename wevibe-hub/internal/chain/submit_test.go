@@ -23,7 +23,6 @@ func TestBuildServeBatchMsg_MapsEntries(t *testing.T) {
 		ContributorWallet: "wevibe1wallet",
 		ModelID:           "model-1",
 		TurnCount:         3,
-		MatchedKeywords:   []string{"alpha", "beta"},
 	}}
 
 	msg, err := client.BuildServeBatchMsg("org-1", 7, entries)
@@ -42,9 +41,6 @@ func TestBuildServeBatchMsg_MapsEntries(t *testing.T) {
 	if msg.Serves[0].ContributorWallet != "wevibe1wallet" {
 		t.Fatalf("unexpected contributor wallet: got %q", msg.Serves[0].ContributorWallet)
 	}
-	if len(msg.Serves[0].MatchedKeywords) != 2 {
-		t.Fatalf("unexpected matched keyword count: got %d want %d", len(msg.Serves[0].MatchedKeywords), 2)
-	}
 	if len(msg.Serves[0].ServeKeyPubkey) != 32 {
 		t.Fatalf("unexpected serve key pubkey length: got %d want %d", len(msg.Serves[0].ServeKeyPubkey), 32)
 	}
@@ -53,7 +49,7 @@ func TestBuildServeBatchMsg_MapsEntries(t *testing.T) {
 	}
 }
 
-func TestBuildServeBatchMsg_RejectsEmptyMatchedKeywords(t *testing.T) {
+func TestBuildServeBatchMsg_AllowsEmptyMatchedKeywords(t *testing.T) {
 	client := &GrpcClient{}
 	_, err := client.BuildServeBatchMsg("org-1", 9, []ServeEntryInput{{
 		MemoryContentHash: bytes32(0x11),
@@ -65,8 +61,8 @@ func TestBuildServeBatchMsg_RejectsEmptyMatchedKeywords(t *testing.T) {
 		ModelID:           "model-1",
 		TurnCount:         3,
 	}})
-	if err == nil {
-		t.Fatalf("expected validation error for empty matched keywords")
+	if err != nil {
+		t.Fatalf("BuildServeBatchMsg returned error for metadata-only matched keywords: %v", err)
 	}
 }
 
@@ -100,6 +96,59 @@ func TestBuildDenialBatchMsg_MapsEntries(t *testing.T) {
 	if len(msg.Entries[0].ServeFingerprint) != 32 {
 		t.Fatalf("unexpected serve fingerprint length: got %d want %d", len(msg.Entries[0].ServeFingerprint), 32)
 	}
+}
+
+func TestBuildEventBatchMsg_MapsOutcome(t *testing.T) {
+	client := &GrpcClient{}
+	msg, err := client.BuildEventBatchMsg("org-1", []OutcomeEventInput{{
+		EpochID:           12,
+		MemoryContentHash: hexOf(bytes32(0x51)),
+		SignerPubkey:      hexOf(bytes32(0x52)),
+		Nonce:             "01",
+		Signature:         hexOf(bytes64(0x53)),
+		EpisodeRef:        "aa",
+		Worked:            true,
+		EvidenceRef:       "bb",
+	}})
+	if err != nil {
+		t.Fatalf("BuildEventBatchMsg returned error: %v", err)
+	}
+	if msg.OrgId != "org-1" || msg.Epoch != 12 {
+		t.Fatalf("unexpected batch identity: org=%s epoch=%d", msg.OrgId, msg.Epoch)
+	}
+	if len(msg.Events) != 1 {
+		t.Fatalf("unexpected event count: %d", len(msg.Events))
+	}
+	if msg.Events[0].GetOutcome() == nil || !msg.Events[0].GetOutcome().Worked {
+		t.Fatalf("missing outcome body")
+	}
+}
+
+func TestBuildEventBatchMsg_RejectsInvalidHex(t *testing.T) {
+	client := &GrpcClient{}
+	_, err := client.BuildEventBatchMsg("org-1", []OutcomeEventInput{{
+		EpochID:           12,
+		MemoryContentHash: "not-hex",
+		SignerPubkey:      hexOf(bytes32(0x52)),
+		Nonce:             "01",
+		Signature:         hexOf(bytes64(0x53)),
+		EpisodeRef:        "aa",
+		Worked:            true,
+		EvidenceRef:       "bb",
+	}})
+	if err == nil {
+		t.Fatalf("expected invalid hex error")
+	}
+}
+
+func hexOf(b []byte) string {
+	const chars = "0123456789abcdef"
+	out := make([]byte, len(b)*2)
+	for i, v := range b {
+		out[i*2] = chars[v>>4]
+		out[i*2+1] = chars[v&0x0f]
+	}
+	return string(out)
 }
 
 func bytes64(b byte) []byte {

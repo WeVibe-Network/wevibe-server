@@ -3,9 +3,7 @@ package retrieval
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,7 +17,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
@@ -46,10 +43,8 @@ func OrgCollectionName(orgID string) string {
 const EMBED_DIM = 768
 const contestedThreshold = 0.20
 
-const (
-	DenialDecayBPS = 500
-	ServeBoostBPS  = 100
-)
+const defaultStandingBps int32 = 10000
+const defaultStandingThresholdBps int32 = 1500
 
 type scoredResult struct {
 	result             protocol.MemoryResult
@@ -59,7 +54,8 @@ type scoredResult struct {
 
 type CandidateScore struct {
 	CID             string
-	KeywordScore    float64
+	StandingBps     int32
+	KeywordOverlap  float64
 	VectorScore     float64
 	Gamma           float64
 	Delta           float64
@@ -69,17 +65,6 @@ type CandidateScore struct {
 	RankPosition    int
 	Disposition     string
 }
-
-// ChainWeightRecord is the chain-authoritative keyword weight set for one memory.
-type ChainWeightRecord struct {
-	ContentHashHex string            // lowercase-hex CID, matches candidate ID
-	Weights        map[string]string // keyword -> raw decimal-rational string from the chain record
-}
-
-// ChainWeightFetcher fetches chain records for the given content hashes in one batch.
-type ChainWeightFetcher func(ctx context.Context, contentHashes [][]byte) ([]ChainWeightRecord, error)
-
-var ErrChainUnavailable = errors.New("chain unavailable")
 
 type ProbabilisticRanker struct {
 	Temperature       float64
@@ -381,27 +366,31 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 		contentFlags[i] = f
 	}
 
-	// Build keyword_weights map from entry.Keywords (canonical source).
-	// Per D-4.2, Qdrant stores per-keyword weights so retrieval ranking can
-	// reflect serve boost / denial decay / idle decay signals. Flat keyword
-	// arrays and confidence_bps (killed by D-4.1) are no longer stored.
-	keywordWeights := make(map[string]float64, len(entry.Keywords))
+	keywords := make([]string, 0, len(entry.Keywords))
+	seenKeywords := make(map[string]struct{}, len(entry.Keywords))
 	for _, kw := range entry.Keywords {
 		keyword := strings.ToLower(strings.TrimSpace(kw.Keyword))
 		if keyword == "" {
 			continue
 		}
-		keywordWeights[keyword] = kw.Weight
+		if _, seen := seenKeywords[keyword]; seen {
+			continue
+		}
+		seenKeywords[keyword] = struct{}{}
+		keywords = append(keywords, keyword)
 	}
+	sort.Strings(keywords)
 
 	payloadMap := map[string]any{
-		"cid":             entry.CID,
-		"org_id":          entry.OrgID,
-		"epoch_id":        entry.EpochID,
-		"content_flags":   contentFlags,
-		"keyword_weights": keywordWeights,
-		"lifecycle_state": entry.LifecycleState,
-		"memory_type":     entry.MemoryType,
+		"cid":               entry.CID,
+		"org_id":            entry.OrgID,
+		"epoch_id":          entry.EpochID,
+		"content_flags":     contentFlags,
+		"keywords":          keywords,
+		"standing_bps":      defaultStandingBps,
+		"standing_archived": false,
+		"lifecycle_state":   entry.LifecycleState,
+		"memory_type":       entry.MemoryType,
 		// Producer-model provenance (T3): immutable fields carried in Qdrant payload.
 		// These are rebuildable read-index fields, not authority — the source of truth
 		// is pending_submissions + chain types. SESSION_REFERENCED means a session
@@ -469,11 +458,7 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 	return nil
 }
 
-func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int, chainFetch ChainWeightFetcher) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
-	if chainFetch == nil {
-		return nil, false, nil, fmt.Errorf("chain weight fetcher required: %w", ErrChainUnavailable)
-	}
-
+func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
 	filterConditions := []map[string]any{
 		{"key": "org_id", "match": map[string]any{"value": orgID}},
 	}
@@ -492,18 +477,17 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		})
 	}
 
-	queryWeightsMap := make(map[string]float64, len(keywordWeights))
+	queryKeywords := make([]string, 0, len(keywordWeights))
 	for _, kw := range keywordWeights {
 		normalized := strings.ToLower(strings.TrimSpace(kw.Keyword))
 		if normalized == "" {
 			continue
 		}
-		queryWeightsMap[normalized] = kw.Weight
+		queryKeywords = append(queryKeywords, normalized)
 	}
 
-	// Per D-9.3: score = vector_similarity + Σ(query_weight × memory_weight) × boost_factor.
-	// boostFactor scales the keyword contribution relative to vector similarity.
-	// confidence_bps was killed by D-4.1 and is no longer part of ranking.
+	// Recall-pivot scoring: vector similarity plus a capped keyword-overlap boost
+	// scaled by Qdrant-projected memory standing.
 	const keywordBoostFactor = 0.1
 	const keywordBoostDelta = 0.15
 
@@ -621,7 +605,8 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		lifecycleState     string
 		memoryType         string
 		contentFlags       []string
-		keywords           []protocol.KeywordWithWeight
+		keywords           []string
+		standingBps        int32
 		memoryCreatedEpoch uint64
 	}
 
@@ -661,26 +646,21 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		vectorScore := r.Score
 
 		contentFlags := getRESTStringSlice(payload, "content_flags")
-		storedWeights := getRESTStringFloatMap(payload, "keyword_weights")
+		keywords := normalizeKeywords(getRESTStringSlice(payload, "keywords"))
+		standingBps := getRESTInt32(payload, "standing_bps", defaultStandingBps)
+		standingArchived := getRESTBool(payload, "standing_archived")
 
 		lifecycleState, _ := payload["lifecycle_state"].(string)
 		lifecycleState = strings.ToUpper(strings.TrimSpace(lifecycleState))
 		memoryType, _ := payload["memory_type"].(string)
 		memoryType = strings.TrimSpace(memoryType)
 
-		keywords := make([]protocol.KeywordWithWeight, 0, len(storedWeights))
-		for keyword, weight := range storedWeights {
-			keyword = strings.TrimSpace(keyword)
-			if keyword == "" {
-				continue
-			}
-			keywords = append(keywords, protocol.KeywordWithWeight{Keyword: keyword, Weight: weight})
-		}
-
 		cands = append(cands, RankCandidate{
 			ID:             cid,
 			VectorScore:    vectorScore,
-			KeywordWeights: storedWeights,
+			Keywords:       keywords,
+			StandingBps:    standingBps,
+			Archived:       standingArchived,
 			PendingDenials: pendingDenialCounts[cid],
 			Age:            ageFrom(currentEpoch, memoryCreatedEpoch),
 		})
@@ -692,104 +672,27 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			memoryType:         memoryType,
 			contentFlags:       contentFlags,
 			keywords:           keywords,
+			standingBps:        standingBps,
 			memoryCreatedEpoch: memoryCreatedEpoch,
 		}
 	}
 
 	candidatesTotal := len(cands)
-	droppedMissing := 0
-	droppedMalformed := 0
-	chainFound := 0
-
-	validCands := make([]RankCandidate, 0, len(cands))
-	contentHashes := make([][]byte, 0, len(cands))
-	for _, cand := range cands {
-		decoded, decodeErr := hex.DecodeString(strings.TrimSpace(cand.ID))
-		if decodeErr != nil {
-			log.Printf("[recall] ERROR recall candidate dropped: malformed cid org=%s cid=%s: %v", orgID, cand.ID, decodeErr)
-			droppedMalformed++
-			delete(richDataByCID, cand.ID)
-			continue
-		}
-		validCands = append(validCands, cand)
-		contentHashes = append(contentHashes, decoded)
-	}
-
-	chainRecords, err := chainFetch(ctx, contentHashes)
-	if err != nil {
-		return nil, false, nil, fmt.Errorf("fetch chain keyword weights: %w (%v)", ErrChainUnavailable, err)
-	}
-
-	chainByCID := make(map[string]ChainWeightRecord, len(chainRecords))
-	for _, rec := range chainRecords {
-		normalizedCID := strings.ToLower(strings.TrimSpace(rec.ContentHashHex))
-		if normalizedCID == "" {
-			continue
-		}
-		chainByCID[normalizedCID] = rec
-	}
-
-	filteredCands := make([]RankCandidate, 0, len(validCands))
-	for _, cand := range validCands {
-		normalizedCID := strings.ToLower(strings.TrimSpace(cand.ID))
-		rec, found := chainByCID[normalizedCID]
-		if !found {
-			log.Printf("[recall] WARNING recall candidate dropped: not on chain org=%s cid=%s", orgID, cand.ID)
-			droppedMissing++
-			delete(richDataByCID, cand.ID)
-			continue
-		}
-		chainFound++
-
-		overlayWeights := make(map[string]float64, len(rec.Weights))
-		overlayKeywords := make([]protocol.KeywordWithWeight, 0, len(rec.Weights))
-		malformed := false
-		for keyword, rawWeight := range rec.Weights {
-			normalizedKeyword := strings.TrimSpace(keyword)
-			if normalizedKeyword == "" {
-				continue
-			}
-
-			parsedWeight, parseErr := strconv.ParseFloat(strings.TrimSpace(rawWeight), 64)
-			if parseErr != nil || math.IsNaN(parsedWeight) || math.IsInf(parsedWeight, 0) {
-				log.Printf("[recall] ERROR recall candidate dropped: malformed chain keyword weight org=%s cid=%s keyword=%s weight=%q", orgID, cand.ID, normalizedKeyword, rawWeight)
-				droppedMalformed++
-				malformed = true
-				break
-			}
-
-			overlayWeights[normalizedKeyword] = parsedWeight
-			overlayKeywords = append(overlayKeywords, protocol.KeywordWithWeight{Keyword: normalizedKeyword, Weight: parsedWeight})
-		}
-		if malformed {
-			delete(richDataByCID, cand.ID)
-			continue
-		}
-
-		cand.KeywordWeights = overlayWeights
-		rich := richDataByCID[cand.ID]
-		rich.keywords = overlayKeywords
-		richDataByCID[cand.ID] = rich
-		filteredCands = append(filteredCands, cand)
-	}
-	cands = filteredCands
-
-	wlog.Op(ctx, "hub.recall_chain_weight_overlay", slog.LevelInfo,
+	wlog.Op(ctx, "hub.recall_standing_projection", slog.LevelInfo,
 		slog.String("phase", "outcome"),
 		slog.Int("candidates", candidatesTotal),
-		slog.Int("chain_found", chainFound),
-		slog.Int("dropped_missing", droppedMissing),
-		slog.Int("dropped_malformed", droppedMalformed))
+		slog.Int("qdrant_projected", len(cands)))
 
-	out := ScoreAndRank(cands, RankQuery{KeywordWeights: queryWeightsMap}, RankOpts{
-		Gate:               false,
-		KeywordBoostFactor: keywordBoostFactor,
-		Delta:              keywordBoostDelta,
-		NewMemBoost:        ranker.NewMemBoostMult > 0 && ranker.NewMemBoostWindow > 0,
-		Grace:              float64(ranker.GraceEpochs),
-		BoostWindow:        float64(ranker.NewMemBoostWindow),
-		NewMemMult:         ranker.NewMemBoostMult,
-		Floor:              relevanceFloor,
+	out := ScoreAndRank(cands, RankQuery{Keywords: queryKeywords}, RankOpts{
+		Gate:                 false,
+		KeywordBoostFactor:   keywordBoostFactor,
+		Delta:                keywordBoostDelta,
+		NewMemBoost:          ranker.NewMemBoostMult > 0 && ranker.NewMemBoostWindow > 0,
+		Grace:                float64(ranker.GraceEpochs),
+		BoostWindow:          float64(ranker.NewMemBoostWindow),
+		NewMemMult:           ranker.NewMemBoostMult,
+		Floor:                relevanceFloor,
+		StandingThresholdBps: defaultStandingThresholdBps,
 	})
 
 	wlog.Op(ctx, "hub.recall_floor_gate", slog.LevelInfo,
@@ -812,11 +715,12 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		keywordMatches := make([]protocol.KeywordMatchDetail, 0, len(row.KeywordMatches))
 		for _, match := range row.KeywordMatches {
 			keywordMatches = append(keywordMatches, protocol.KeywordMatchDetail{
-				Keyword:      match.Keyword,
-				QueryWeight:  match.QueryWeight,
-				MemoryWeight: match.MemoryWeight,
-				Product:      match.Product,
+				Keyword: match.Keyword,
 			})
+		}
+		resultKeywords := make([]protocol.KeywordWithWeight, 0, len(richData.keywords))
+		for _, keyword := range richData.keywords {
+			resultKeywords = append(resultKeywords, protocol.KeywordWithWeight{Keyword: keyword, Weight: 1})
 		}
 
 		unmatchedQuery := append([]string{}, row.UnmatchedQuery...)
@@ -829,7 +733,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 				LifecycleState:  richData.lifecycleState,
 				MemoryType:      richData.memoryType,
 				ContentFlags:    richData.contentFlags,
-				Keywords:        richData.keywords,
+				Keywords:        resultKeywords,
 				MatchedKeywords: matchedKeywords,
 				Breakdown: &protocol.ScoringBreakdown{
 					KeywordScore:   row.KeywordBoost,
@@ -870,7 +774,8 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		}
 
 		if breakdown := sr.result.Breakdown; breakdown != nil {
-			candidate.KeywordScore = breakdown.KeywordScore
+			candidate.StandingBps = richDataByCID[sr.result.CID].standingBps
+			candidate.KeywordOverlap = breakdown.KeywordScore
 			candidate.VectorScore = breakdown.VectorScore
 			candidate.Gamma = breakdown.Gamma
 			candidate.Delta = breakdown.Delta
@@ -894,7 +799,8 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		sort.Strings(matched)
 		candidateScores = append(candidateScores, CandidateScore{
 			CID:             row.ID,
-			KeywordScore:    row.KeywordBoost,
+			StandingBps:     richDataByCID[row.ID].standingBps,
+			KeywordOverlap:  row.KeywordBoost,
 			VectorScore:     row.VectorScore,
 			Gamma:           row.Gamma,
 			Delta:           row.Delta,
@@ -903,6 +809,15 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			MatchedKeywords: matched,
 			RankPosition:    -1,
 			Disposition:     "below_floor",
+		})
+	}
+	for _, row := range out.StandingDropped {
+		candidateScores = append(candidateScores, CandidateScore{
+			CID:          row.ID,
+			StandingBps:  richDataByCID[row.ID].standingBps,
+			VectorScore:  row.VectorScore,
+			RankPosition: -1,
+			Disposition:  "below_standing",
 		})
 	}
 
@@ -1140,18 +1055,38 @@ func getRESTUint64(payload map[string]any, key string) uint64 {
 	}
 }
 
-func getRESTStringFloatMap(payload map[string]any, key string) map[string]float64 {
-	result := make(map[string]float64)
-	if v, ok := payload[key]; ok {
-		if obj, ok := v.(map[string]any); ok {
-			for k, val := range obj {
-				if f, ok := val.(float64); ok {
-					result[k] = f
-				}
-			}
-		}
+func getRESTInt32(payload map[string]any, key string, fallback int32) int32 {
+	v, ok := payload[key]
+	if !ok {
+		return fallback
 	}
-	return result
+	switch typed := v.(type) {
+	case float64:
+		return int32(typed)
+	case float32:
+		return int32(typed)
+	case int:
+		return int32(typed)
+	case int32:
+		return typed
+	case int64:
+		return int32(typed)
+	case uint64:
+		return int32(typed)
+	case uint32:
+		return int32(typed)
+	default:
+		return fallback
+	}
+}
+
+func getRESTBool(payload map[string]any, key string) bool {
+	v, ok := payload[key]
+	if !ok {
+		return false
+	}
+	b, _ := v.(bool)
+	return b
 }
 
 func AddToIndex(ctx context.Context, client *QdrantClient, entry protocol.IndexEntry) error {
@@ -1173,7 +1108,6 @@ func EnsureCollection(ctx context.Context, client *QdrantClient, orgID string) e
 func QueryByKeywords(
 	ctx context.Context,
 	client *QdrantClient,
-	chainFetch ChainWeightFetcher,
 	orgID string,
 	accessibleEpochs []int32,
 	keywordWeights []protocol.KeywordWithWeight,
@@ -1184,7 +1118,7 @@ func QueryByKeywords(
 	relevanceFloor float64,
 	surfaceBudget int,
 ) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
-	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget, chainFetch)
+	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget)
 }
 
 type OrgMemoryPayload struct {
@@ -1282,53 +1216,7 @@ func ScrollOrgMemoryPayloads(ctx context.Context, client *QdrantClient, orgID st
 	return memories, nil
 }
 
-func (c *QdrantClient) setPointKeywordWeights(ctx context.Context, orgID string, pointID any, weights map[string]float64) error {
-	payloadWeights := make(map[string]any, len(weights))
-	for k, v := range weights {
-		payloadWeights[k] = v
-	}
-
-	setPayloadReq := map[string]any{
-		"payload": map[string]any{
-			"keyword_weights": payloadWeights,
-		},
-		"points": []any{pointID},
-	}
-
-	reqBody, err := json.Marshal(setPayloadReq)
-	if err != nil {
-		return fmt.Errorf("marshal set payload request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/collections/%s/points/payload", c.restURL, OrgCollectionName(orgID))
-	req, err := c.newRequest(ctx, "POST", url, reqBody)
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	httpClient := &http.Client{Timeout: 10 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("execute set payload request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errResp map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
-			return fmt.Errorf("set payload failed: %v", errResp)
-		}
-		return fmt.Errorf("set payload failed with status %d", resp.StatusCode)
-	}
-
-	return nil
-}
-
-// UpdateKeywordWeights pushes the latest per-keyword weights for a single
-// memory point to Qdrant. Used by the hub after a serve/denial TX is
-// confirmed on-chain (D-4.2) and by SyncKeywordWeightsFromChain on startup
-// (D-2.5) to reconcile Qdrant with chain state.
-func (c *QdrantClient) UpdateKeywordWeights(ctx context.Context, orgID string, memoryCID string, weights map[string]float64) error {
+func (c *QdrantClient) UpdateStanding(ctx context.Context, orgID string, memoryCID string, standingBps int32, archived bool) error {
 	if c == nil {
 		return fmt.Errorf("qdrant client unavailable")
 	}
@@ -1340,19 +1228,14 @@ func (c *QdrantClient) UpdateKeywordWeights(ctx context.Context, orgID string, m
 	if memoryCID == "" {
 		return fmt.Errorf("memory cid required")
 	}
-
-	payloadWeights := make(map[string]any, len(weights))
-	for k, v := range weights {
-		key := strings.ToLower(strings.TrimSpace(k))
-		if key == "" {
-			continue
-		}
-		payloadWeights[key] = v
+	if standingBps < 0 || standingBps > 10000 {
+		return fmt.Errorf("standing bps must be in [0,10000]")
 	}
 
 	setPayloadReq := map[string]any{
 		"payload": map[string]any{
-			"keyword_weights": payloadWeights,
+			"standing_bps":      standingBps,
+			"standing_archived": archived,
 		},
 		"filter": map[string]any{
 			"must": []map[string]any{
@@ -1476,47 +1359,38 @@ func UpdateMemoryKeywords(ctx context.Context, client *QdrantClient, orgID strin
 		resp.Body.Close()
 
 		for _, point := range scrollResp.Result.Points {
-			storedWeights := getRESTStringFloatMap(point.Payload, "keyword_weights")
-			if len(storedWeights) == 0 {
+			storedKeywords := normalizeKeywords(getRESTStringSlice(point.Payload, "keywords"))
+			if len(storedKeywords) == 0 {
 				continue
 			}
 
-			rewritten := make(map[string]float64, len(storedWeights))
+			rewritten := make([]string, 0, len(storedKeywords))
+			seen := make(map[string]struct{}, len(storedKeywords))
 			changed := false
 
-			for storedKeyword, storedWeight := range storedWeights {
-				lowerStored := strings.ToLower(strings.TrimSpace(storedKeyword))
-				if lowerStored == "" {
-					continue
-				}
-
+			for _, lowerStored := range storedKeywords {
 				nextKeyword := lowerStored
 				if _, ok := oldKeywordSet[lowerStored]; ok {
 					nextKeyword = newKeyword
 					changed = true
 				}
-
-				if existing, exists := rewritten[nextKeyword]; exists {
-					// Keyword already present after rewrite (e.g. merging two
-					// keywords into one). Keep the maximum weight to preserve
-					// the strongest signal.
-					if storedWeight > existing {
-						rewritten[nextKeyword] = storedWeight
-					}
+				if _, exists := seen[nextKeyword]; exists {
 					if nextKeyword != lowerStored {
 						changed = true
 					}
 					continue
 				}
-				rewritten[nextKeyword] = storedWeight
+				seen[nextKeyword] = struct{}{}
+				rewritten = append(rewritten, nextKeyword)
 			}
 
 			if !changed {
 				continue
 			}
 
-			if err := client.setPointKeywordWeights(ctx, orgID, point.ID, rewritten); err != nil {
-				return fmt.Errorf("update point keyword weights: %w", err)
+			sort.Strings(rewritten)
+			if err := client.setPointKeywords(ctx, orgID, point.ID, rewritten); err != nil {
+				return fmt.Errorf("update point keywords: %w", err)
 			}
 		}
 
@@ -1524,6 +1398,43 @@ func UpdateMemoryKeywords(ctx context.Context, client *QdrantClient, orgID strin
 		if offset == nil {
 			break
 		}
+	}
+
+	return nil
+}
+
+func (c *QdrantClient) setPointKeywords(ctx context.Context, orgID string, pointID any, keywords []string) error {
+	setPayloadReq := map[string]any{
+		"payload": map[string]any{
+			"keywords": keywords,
+		},
+		"points": []any{pointID},
+	}
+
+	reqBody, err := json.Marshal(setPayloadReq)
+	if err != nil {
+		return fmt.Errorf("marshal set payload request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/collections/%s/points/payload", c.restURL, OrgCollectionName(orgID))
+	req, err := c.newRequest(ctx, "POST", url, reqBody)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("execute set payload request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil {
+			return fmt.Errorf("set payload failed: %v", errResp)
+		}
+		return fmt.Errorf("set payload failed with status %d", resp.StatusCode)
 	}
 
 	return nil
@@ -1636,73 +1547,6 @@ func stableID(cid string) uint64 {
 		h *= 1099511628211
 	}
 	return h
-}
-
-func ApplyServeBoostLocal(ctx context.Context, db DBExecutor, memoryCID string, orgID string) error {
-	if db == nil {
-		return fmt.Errorf("database unavailable")
-	}
-	_, err := db.Exec(ctx, `
-		UPDATE memory_keywords
-		SET weight = LEAST(1.0, weight + $1)
-		WHERE memory_cid = $2 AND org_id = $3
-	`, float64(ServeBoostBPS)/10000.0, memoryCID, orgID)
-	if err != nil {
-		return fmt.Errorf("apply serve boost: %w", err)
-	}
-	return nil
-}
-
-func ApplyDenialDecayLocal(ctx context.Context, db DBExecutor, memoryCID string, orgID string) error {
-	if db == nil {
-		return fmt.Errorf("database unavailable")
-	}
-	_, err := db.Exec(ctx, `
-		UPDATE memory_keywords
-		SET weight = GREATEST(0.0, weight - $1)
-		WHERE memory_cid = $2 AND org_id = $3
-	`, float64(DenialDecayBPS)/10000.0, memoryCID, orgID)
-	if err != nil {
-		return fmt.Errorf("apply denial decay: %w", err)
-	}
-	return nil
-}
-
-// GetKeywordWeights returns the current per-keyword weights for a single
-// memory from PostgreSQL (the local mirror of chain state). Used after
-// ApplyServeBoostLocal / ApplyDenialDecayLocal to push the updated weights
-// into the Qdrant payload.
-func GetKeywordWeights(ctx context.Context, db DBQueryer, orgID, memoryCID string) (map[string]float64, error) {
-	if db == nil {
-		return nil, fmt.Errorf("database unavailable")
-	}
-	rows, err := db.Query(ctx, `
-		SELECT keyword, weight
-		FROM memory_keywords
-		WHERE org_id = $1 AND memory_cid = $2
-	`, orgID, memoryCID)
-	if err != nil {
-		return nil, fmt.Errorf("query keyword weights: %w", err)
-	}
-	defer rows.Close()
-
-	weights := make(map[string]float64)
-	for rows.Next() {
-		var keyword string
-		var weight float64
-		if err := rows.Scan(&keyword, &weight); err != nil {
-			return nil, fmt.Errorf("scan keyword weight: %w", err)
-		}
-		weights[strings.ToLower(strings.TrimSpace(keyword))] = weight
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate keyword weights: %w", err)
-	}
-	return weights, nil
-}
-
-type DBExecutor interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
 type DBQueryer interface {

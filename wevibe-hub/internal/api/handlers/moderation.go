@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"log/slog"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -1118,7 +1117,6 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 
 		keywords := make([]string, 0, len(payload.Classified))
 		seenKeywords := make(map[string]struct{}, len(payload.Classified))
-		var weightSum float64
 		for _, kw := range payload.Classified {
 			keyword := strings.TrimSpace(kw.Keyword)
 			if keyword == "" {
@@ -1130,16 +1128,7 @@ func PrepareBatchForChain(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			seenKeywords[keyword] = struct{}{}
-			if math.IsNaN(kw.Weight) || math.IsInf(kw.Weight, 0) {
-				http.Error(w, `{"error":"invalid classified keyword weight"}`, http.StatusBadRequest)
-				return
-			}
-			weightSum += kw.Weight
 			keywords = append(keywords, keyword)
-		}
-		if math.Abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
-			http.Error(w, `{"error":"classified keyword weights must sum to 1"}`, http.StatusBadRequest)
-			return
 		}
 
 		batch = append(batch, preparedBatchMemory{

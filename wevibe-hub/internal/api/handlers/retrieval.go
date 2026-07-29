@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -232,43 +231,12 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var chainRecs []chain.MemoryBatchResult
-	chainFetch := func(ctx context.Context, hashes [][]byte) ([]retrieval.ChainWeightRecord, error) {
-		recs, _, err := chainClient.GetMemoriesBatch(ctx, req.OrgID, hashes)
-		if err != nil {
-			return nil, err
-		}
-		chainRecs = recs
-
-		weightRecs := make([]retrieval.ChainWeightRecord, 0, len(recs))
-		for _, rec := range recs {
-			weights := make(map[string]string)
-			for _, kw := range rec.Keywords {
-				if kw == nil {
-					continue
-				}
-				weights[kw.Keyword] = kw.Weight
-			}
-			weightRecs = append(weightRecs, retrieval.ChainWeightRecord{
-				ContentHashHex: hex.EncodeToString(rec.ContentHash),
-				Weights:        weights,
-			})
-		}
-
-		return weightRecs, nil
-	}
-
 	log.Printf("[recall] qdrant QueryByKeywords start org=%s agent=%s vecDim=%d kw=%d model=%s limit=%d includeDormant=%v", req.OrgID, agentLogID, len(req.Vector), len(req.KeywordWeights), req.EmbeddingModelID, req.Limit, req.IncludeDormant)
 	results, contested, scorecard, err := retrieval.QueryByKeywords(
-		ctx, qdrantClient, chainFetch, req.OrgID, accessibleEpochs,
+		ctx, qdrantClient, req.OrgID, accessibleEpochs,
 		req.KeywordWeights, req.Vector, req.EmbeddingModelID, uint64(req.Limit), req.IncludeDormant, effectiveFloor, effectiveBudget,
 	)
 	if err != nil {
-		if errors.Is(err, retrieval.ErrChainUnavailable) {
-			log.Printf("[recall] ERROR chain GetMemoriesBatch FAILED org=%s: %v", req.OrgID, err)
-			WriteError(w, http.StatusServiceUnavailable, "chain_unavailable", "chain unavailable")
-			return
-		}
 		log.Printf("[recall] qdrant QueryByKeywords FAILED org=%s: %v", req.OrgID, err)
 		WriteError(w, http.StatusInternalServerError, "query_failed", "query failed", err.Error())
 		return
@@ -317,6 +285,23 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewEncoder(w).Encode(protocol.QueryResponse{Results: []protocol.MemoryResult{}, Contested: false, ReceiptID: receipt.ReceiptID}); err != nil {
 			log.Printf("[recall] ERROR encode zero-result response FAILED org=%s: %v", req.OrgID, err)
 		}
+		return
+	}
+
+	chainHashes := make([][]byte, 0, len(results))
+	for _, res := range results {
+		hashBytes, err := hex.DecodeString(res.CID)
+		if err != nil {
+			log.Printf("[recall] ERROR invalid candidate cid org=%s cid=%s: %v", req.OrgID, res.CID, err)
+			WriteError(w, http.StatusInternalServerError, "query_failed", "query failed", err.Error())
+			return
+		}
+		chainHashes = append(chainHashes, hashBytes)
+	}
+	chainRecs, _, err := chainClient.GetMemoriesBatch(ctx, req.OrgID, chainHashes)
+	if err != nil {
+		log.Printf("[recall] ERROR chain GetMemoriesBatch FAILED org=%s: %v", req.OrgID, err)
+		WriteError(w, http.StatusServiceUnavailable, "chain_unavailable", "chain unavailable")
 		return
 	}
 
@@ -582,10 +567,7 @@ func GetMemory(w http.ResponseWriter, r *http.Request) {
 			"contributor_pubkey": cm.ContributorPubkey,
 			"state":              cm.State,
 			"memory_type":        cm.MemoryType,
-			"serve_count_total":  cm.ServeCountTotal,
-			"denial_count_total": cm.DenialCountTotal,
 			"last_active_epoch":  cm.LastActiveEpoch,
-			"archived_epoch":     cm.ArchivedEpoch,
 			"source":             "chain",
 		})
 		return
@@ -679,7 +661,6 @@ func persistRecallQueryLog(req protocol.QueryRequest, scorecard []retrieval.Cand
 		OrgID:            req.OrgID,
 		AgentPubkey:      req.AgentPubkey,
 		SessionID:        req.SessionID,
-		KeywordWeights:   req.KeywordWeights,
 		RelevanceFloor:   effectiveFloor,
 		SurfaceBudget:    effectiveBudget,
 		EmbeddingModelID: req.EmbeddingModelID,

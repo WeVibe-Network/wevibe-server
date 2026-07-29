@@ -16,16 +16,6 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
-func passthroughChainWeightFetcher() ChainWeightFetcher {
-	return func(ctx context.Context, contentHashes [][]byte) ([]ChainWeightRecord, error) {
-		records := make([]ChainWeightRecord, 0, len(contentHashes))
-		for _, hash := range contentHashes {
-			records = append(records, ChainWeightRecord{ContentHashHex: fmt.Sprintf("%x", hash), Weights: map[string]string{}})
-		}
-		return records, nil
-	}
-}
-
 func qdrantAvailable() bool {
 	conn, err := net.DialTimeout("tcp", "localhost:6333", 1*time.Second)
 	if err != nil {
@@ -93,13 +83,12 @@ func TestAddToIndex_WithQdrant(t *testing.T) {
 	}
 
 	entry := protocol.IndexEntry{
-		CID:            uuid.New().String(),
-		OrgID:          "test-org",
-		EpochID:        1,
-		Keywords:       []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 0.5}, {Keyword: "token2", Weight: 0.5}},
-		KeywordWeights: map[string]float64{"token1": 0.5, "token2": 0.5},
-		ContentFlags:   []string{"flag1"},
-		Vector:         make([]float32, EMBED_DIM),
+		CID:          uuid.New().String(),
+		OrgID:        "test-org",
+		EpochID:      1,
+		Keywords:     []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 0.5}, {Keyword: "token2", Weight: 0.5}},
+		ContentFlags: []string{"flag1"},
+		Vector:       make([]float32, EMBED_DIM),
 	}
 
 	err = AddToIndex(ctx, client, entry)
@@ -121,7 +110,7 @@ func TestQueryByKeywords_WithQdrant(t *testing.T) {
 	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	ctx := context.Background()
-	_, _, _, err = QueryByKeywords(ctx, client, passthroughChainWeightFetcher(), "test-org", []int32{1}, []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 1.0}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
+	_, _, _, err = QueryByKeywords(ctx, client, "test-org", []int32{1}, []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 1.0}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
 	}
@@ -151,20 +140,19 @@ func TestAddAndQueryRoundtrip(t *testing.T) {
 	vec[0] = 0.1
 
 	entry := protocol.IndexEntry{
-		CID:            testCID,
-		OrgID:          "roundtrip-org",
-		EpochID:        0,
-		Keywords:       []protocol.KeywordWithWeight{{Keyword: uniqueToken, Weight: 1.0}},
-		KeywordWeights: map[string]float64{uniqueToken: 1.0},
-		ContentFlags:   []string{},
-		Vector:         vec,
+		CID:          testCID,
+		OrgID:        "roundtrip-org",
+		EpochID:      0,
+		Keywords:     []protocol.KeywordWithWeight{{Keyword: uniqueToken, Weight: 1.0}},
+		ContentFlags: []string{},
+		Vector:       vec,
 	}
 
 	if err := AddToIndex(ctx, client, entry); err != nil {
 		t.Fatalf("AddToIndex failed: %v", err)
 	}
 
-	results, _, _, err := QueryByKeywords(ctx, client, passthroughChainWeightFetcher(), "roundtrip-org",
+	results, _, _, err := QueryByKeywords(ctx, client, "roundtrip-org",
 		[]int32{0},
 		[]protocol.KeywordWithWeight{{Keyword: uniqueToken, Weight: 1.0}},
 		vec,
@@ -255,12 +243,12 @@ func TestQueryPoints_EmbeddingModelFilterAppliedConditionally(t *testing.T) {
 	orgID := "filter-org"
 	vector := make([]float32, EMBED_DIM)
 
-	_, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "nomic-embed-text:v1.5", 5, false, 0, 0, passthroughChainWeightFetcher())
+	_, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "nomic-embed-text:v1.5", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints with embedding model id failed: %v", err)
 	}
 
-	_, _, _, err = client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0, passthroughChainWeightFetcher())
+	_, _, _, err = client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints without embedding model id failed: %v", err)
 	}
@@ -309,7 +297,7 @@ func TestQueryPointsMissingCollectionReturnsEmpty(t *testing.T) {
 	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	vector := make([]float32, EMBED_DIM)
-	results, contested, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0, passthroughChainWeightFetcher())
+	results, contested, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints returned unexpected error: %v", err)
 	}

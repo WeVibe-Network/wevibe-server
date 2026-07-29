@@ -29,20 +29,22 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/standing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 type ChainWatcher struct {
-	chainClient   *GrpcClient
-	db            *pgxpool.Pool
-	logger        *slog.Logger
-	subscriber    *CometBFTSubscriber
-	txDecoder     TxDecoderFunc
-	notifHub      *notifications.NotificationHub
-	dispatcher    *notifications.Dispatcher
-	qdrantClient  *retrieval.QdrantClient
-	umbralService *umbral.Service
+	chainClient    *GrpcClient
+	db             *pgxpool.Pool
+	logger         *slog.Logger
+	subscriber     *CometBFTSubscriber
+	txDecoder      TxDecoderFunc
+	notifHub       *notifications.NotificationHub
+	dispatcher     *notifications.Dispatcher
+	qdrantClient   *retrieval.QdrantClient
+	umbralService  *umbral.Service
+	standingPolicy *standing.Policy
 }
 
 type TxDecoderFunc func(txBytes []byte) (TxInterface, error)
@@ -97,6 +99,10 @@ func NewChainWatcher(chainClient *GrpcClient, db *pgxpool.Pool, logger *slog.Log
 
 func (w *ChainWatcher) SetDispatcher(dispatcher *notifications.Dispatcher) {
 	w.dispatcher = dispatcher
+}
+
+func (w *ChainWatcher) SetStandingPolicy(pol *standing.Policy) {
+	w.standingPolicy = pol
 }
 
 func (w *ChainWatcher) Start(ctx context.Context) error {
@@ -317,7 +323,7 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 					if sc.OrgId == m.OrgId && string(sc.ContentHash) == string(m.ContentHash) {
 						keywords = make([]string, len(sc.Keywords))
 						for i, kw := range sc.Keywords {
-							keywords[i] = kw.Keyword
+							keywords[i] = kw
 						}
 						contributorID = sc.ContributorId
 						contributorWallet = sc.ContributorWallet
@@ -369,6 +375,12 @@ func (w *ChainWatcher) processTx(ctx context.Context, txHash []byte, height int6
 			if err := w.processDenialBatchBookkeeping(ctx, txHashHex, height, timestamp,
 				m.OrgId, m.Epoch, denials); err != nil {
 				w.logger.Error("processDenialBatchBookkeeping failed", "err", err, "org_id", m.OrgId)
+			}
+
+		case *servetypes.MsgSubmitEventBatch:
+			if err := w.processEventBatchBookkeeping(ctx, txHashHex, height, timestamp,
+				m.OrgId, m.Epoch, m.Events); err != nil {
+				w.logger.Error("processEventBatchBookkeeping failed", "err", err, "org_id", m.OrgId)
 			}
 
 		case *orgtypes.MsgAddMember:

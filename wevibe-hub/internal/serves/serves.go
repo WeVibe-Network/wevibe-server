@@ -7,12 +7,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
-	EventTypeServe  = "serve"
-	EventTypeDenial = "denial"
+	EventTypeServe   = "serve"
+	EventTypeDenial  = "denial"
+	EventTypeOutcome = "outcome"
 )
 
 type RecordServeRequest struct {
@@ -26,12 +28,25 @@ type RecordServeRequest struct {
 	ModelID           string `json:"model_id"`
 	TurnCount         int    `json:"turn_count"`
 	SessionID         string `json:"session_id,omitempty"`
-	// MatchedKeywords is the intersection of the served memory's keywords and
-	// the query's keyword set, computed at retrieval time. Required, non-empty.
-	// Per DECISIONS.md D-4.2 Implementation Clarifications (DMO-007).
-	// Chain x/serve rejects empty sets per CO-031 Rev 2 (chain commit 533d18b);
-	// hub enforces the same constraint to avoid producing un-broadcastable rows.
+	// MatchedKeywords is optional descriptive metadata: the intersection of the
+	// served memory's keywords and the query's keyword set, computed at retrieval
+	// time when available. Empty / absent input is accepted and persists as '{}'.
 	MatchedKeywords []string `json:"matched_keywords"`
+}
+
+type RecordOutcomeRequest struct {
+	OrgID             string `json:"org_id"`
+	EpochID           int    `json:"epoch"`
+	EventType         string `json:"event_type"`
+	MemoryContentHash string `json:"memory_hash"`
+	SignerPubkey      string `json:"signer_pubkey"`
+	Nonce             string `json:"nonce"`
+	Signature         string `json:"signature"`
+	EpisodeRef        string `json:"episode_ref"`
+	Worked            bool   `json:"worked"`
+	EvidenceRef       string `json:"evidence_ref"`
+	Fingerprint       string `json:"fingerprint"`
+	SessionID         string `json:"session_id,omitempty"`
 }
 
 type RecordDenialRequest struct {
@@ -68,17 +83,36 @@ type ServeEventRecord struct {
 	SubmittedAt       *time.Time `json:"submitted_at,omitempty"`
 }
 
-// normalizeMatchedKeywords validates and canonicalises the matched-keyword
-// set supplied by the serve reporter. Behaviour:
-//   - empty / missing input → error (chain x/serve rejects empty sets per
-//     CO-031 Rev 2; hub enforces the same contract before persistence).
+type OutcomeEventRecord struct {
+	ID                int64      `json:"id"`
+	OrgID             string     `json:"org_id"`
+	EpochID           int        `json:"epoch_id"`
+	MemoryContentHash string     `json:"memory_content_hash"`
+	SignerPubkey      string     `json:"signer_pubkey"`
+	Nonce             string     `json:"nonce"`
+	Signature         string     `json:"signature"`
+	EpisodeRef        string     `json:"episode_ref"`
+	Worked            bool       `json:"worked"`
+	EvidenceRef       string     `json:"evidence_ref"`
+	Fingerprint       string     `json:"fingerprint"`
+	SessionID         string     `json:"session_id,omitempty"`
+	ReporterPubkey    string     `json:"reporter_pubkey"`
+	Status            string     `json:"status"`
+	TxHash            *string    `json:"tx_hash,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	SubmittedAt       *time.Time `json:"submitted_at,omitempty"`
+}
+
+// normalizeMatchedKeywords canonicalises the optional matched-keyword set
+// supplied by the serve reporter. Behaviour:
+//   - empty / missing input → []string{} accepted.
 //   - each entry is lowercased and trimmed; entries that collapse to "" error.
 //   - duplicates (post-normalization) are dropped, preserving first-seen order.
 //
 // Returns the canonical slice on success. Never returns nil + nil err.
 func normalizeMatchedKeywords(raw []string) ([]string, error) {
 	if len(raw) == 0 {
-		return nil, fmt.Errorf("matched_keywords is required")
+		return []string{}, nil
 	}
 
 	normalized := make([]string, 0, len(raw))
@@ -93,10 +127,6 @@ func normalizeMatchedKeywords(raw []string) ([]string, error) {
 		}
 		seen[cleaned] = struct{}{}
 		normalized = append(normalized, cleaned)
-	}
-
-	if len(normalized) == 0 {
-		return nil, fmt.Errorf("matched_keywords is required")
 	}
 
 	return normalized, nil
@@ -303,6 +333,138 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 	}
 
 	return &record, nil
+}
+
+func validateHexField(name, value string, bytes int) error {
+	if value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("%s must be valid hex", name)
+	}
+	if len(decoded) != bytes {
+		return fmt.Errorf("%s must be %d hex characters (%d bytes)", name, bytes*2, bytes)
+	}
+	return nil
+}
+
+func validateRequiredString(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	return nil
+}
+
+func validateOutcomeRequest(req RecordOutcomeRequest, reporterPubkey string) error {
+	if err := validateRequiredString("org_id", req.OrgID); err != nil {
+		return err
+	}
+	if req.EpochID < 0 {
+		return fmt.Errorf("epoch must be non-negative")
+	}
+	if req.EventType != EventTypeOutcome {
+		return fmt.Errorf("event_type must be %q", EventTypeOutcome)
+	}
+	if err := validateHexField("memory_hash", req.MemoryContentHash, 32); err != nil {
+		return err
+	}
+	if err := validateHexField("signer_pubkey", req.SignerPubkey, 32); err != nil {
+		return err
+	}
+	if err := validateRequiredString("nonce", req.Nonce); err != nil {
+		return err
+	}
+	if _, err := hex.DecodeString(req.Nonce); err != nil {
+		return fmt.Errorf("nonce must be valid hex")
+	}
+	if err := validateHexField("signature", req.Signature, 64); err != nil {
+		return err
+	}
+	if err := validateRequiredString("episode_ref", req.EpisodeRef); err != nil {
+		return err
+	}
+	if err := validateRequiredString("evidence_ref", req.EvidenceRef); err != nil {
+		return err
+	}
+	if err := validateHexField("fingerprint", req.Fingerprint, 32); err != nil {
+		return err
+	}
+	if err := validateRequiredString("reporter_pubkey", reporterPubkey); err != nil {
+		return err
+	}
+	return nil
+}
+
+func RecordOutcome(ctx context.Context, pool *pgxpool.Pool, req RecordOutcomeRequest, reporterPubkey string) (bool, error) {
+	if err := validateOutcomeRequest(req, reporterPubkey); err != nil {
+		return false, err
+	}
+
+	tag, err := pool.Exec(ctx, `
+		INSERT INTO outcome_events (org_id, epoch_id, memory_content_hash, signer_pubkey, nonce, signature, episode_ref, worked, evidence_ref, fingerprint, session_id, reporter_pubkey, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), $12, 'pending')
+		ON CONFLICT (fingerprint) DO NOTHING
+	`, req.OrgID, req.EpochID, req.MemoryContentHash, req.SignerPubkey, req.Nonce, req.Signature, req.EpisodeRef, req.Worked, req.EvidenceRef, req.Fingerprint, req.SessionID, reporterPubkey)
+	if err != nil {
+		return false, fmt.Errorf("insert outcome event: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func PendingOutcomeEvents(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int) ([]OutcomeEventRecord, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, org_id, epoch_id, memory_content_hash, signer_pubkey, nonce, signature, episode_ref, worked, evidence_ref, fingerprint, COALESCE(session_id, ''), reporter_pubkey, status, tx_hash, created_at, submitted_at
+		FROM outcome_events
+		WHERE org_id = $1 AND status = 'pending'
+		ORDER BY created_at ASC
+		LIMIT $2
+	`, orgID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query pending outcome events: %w", err)
+	}
+	defer rows.Close()
+
+	return scanOutcomeEvents(rows)
+}
+
+func scanOutcomeEvents(rows pgx.Rows) ([]OutcomeEventRecord, error) {
+	records := make([]OutcomeEventRecord, 0)
+	for rows.Next() {
+		var r OutcomeEventRecord
+		err := rows.Scan(
+			&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
+			&r.SignerPubkey, &r.Nonce, &r.Signature, &r.EpisodeRef,
+			&r.Worked, &r.EvidenceRef, &r.Fingerprint, &r.SessionID,
+			&r.ReporterPubkey, &r.Status, &r.TxHash, &r.CreatedAt, &r.SubmittedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan outcome event: %w", err)
+		}
+		records = append(records, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return records, nil
+}
+
+func MarkOutcomeEvents(ctx context.Context, pool *pgxpool.Pool, ids []int64, status, txHash string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if status != "submitted" && status != "failed" {
+		return fmt.Errorf("outcome status must be submitted or failed")
+	}
+	_, err := pool.Exec(ctx, `
+		UPDATE outcome_events
+		SET status = $1, tx_hash = $2, submitted_at = CASE WHEN $1 = 'submitted' THEN NOW() ELSE submitted_at END
+		WHERE id = ANY($3)
+	`, status, txHash, ids)
+	if err != nil {
+		return fmt.Errorf("mark outcome events: %w", err)
+	}
+	return nil
 }
 
 func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int, holdHours int) ([]ServeEventRecord, error) {

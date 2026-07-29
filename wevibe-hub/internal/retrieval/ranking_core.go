@@ -9,13 +9,15 @@ import (
 type RankCandidate struct {
 	ID             string
 	VectorScore    float64
-	KeywordWeights map[string]float64
+	Keywords       []string
+	StandingBps    int32
+	Archived       bool
 	PendingDenials int
 	Age            int
 }
 
 type RankQuery struct {
-	KeywordWeights map[string]float64
+	Keywords []string
 }
 
 // RankOpts mirrors rank.mjs options.
@@ -35,13 +37,14 @@ type RankOpts struct {
 	// is below Floor is dropped before pending-denials and the D-9.4 freshness
 	// boost — mirrors wevibe-sim/recall-sim/pipeline/rank.mjs scoreDetailed.
 	Floor float64
+	// StandingThresholdBps is the edge archival visibility threshold. Candidates
+	// at or below it, or explicitly archived by standing projection, are dropped
+	// before scoring.
+	StandingThresholdBps int32
 }
 
 type RankKeywordMatch struct {
-	Keyword      string
-	QueryWeight  float64
-	MemoryWeight float64
-	Product      float64
+	Keyword string
 }
 
 type RankedRow struct {
@@ -58,11 +61,12 @@ type RankedRow struct {
 }
 
 type DropCount struct {
-	Gate   int
-	Vector int
-	Kept   int
-	Total  int
-	Floor  int
+	Gate     int
+	Vector   int
+	Kept     int
+	Total    int
+	Floor    int
+	Standing int
 }
 
 type RankOutput struct {
@@ -71,7 +75,8 @@ type RankOutput struct {
 	// FloorDropped carries the candidates dropped by the relevance floor, each
 	// with Final set to its PRE-FRESHNESS combined score (VectorScore+CappedBoost),
 	// so the caller can persist below_floor observability (recall inspector).
-	FloorDropped []RankedRow
+	FloorDropped    []RankedRow
+	StandingDropped []RankedRow
 }
 
 type rankedRowWithIndex struct {
@@ -79,70 +84,48 @@ type rankedRowWithIndex struct {
 	index int
 }
 
-func normalizeWeightMap(weights map[string]float64) map[string]float64 {
-	normalized := make(map[string]float64)
-	if len(weights) == 0 {
-		return normalized
+func normalizeKeywords(keywords []string) []string {
+	if len(keywords) == 0 {
+		return []string{}
 	}
-
-	rawKeys := make([]string, 0, len(weights))
-	for rawKey := range weights {
-		rawKeys = append(rawKeys, rawKey)
-	}
-	sort.Strings(rawKeys)
-
-	for _, rawKey := range rawKeys {
-		keyword := strings.ToLower(strings.TrimSpace(rawKey))
+	set := make(map[string]struct{}, len(keywords))
+	for _, rawKeyword := range keywords {
+		keyword := strings.ToLower(strings.TrimSpace(rawKeyword))
 		if keyword == "" {
 			continue
 		}
-
-		weight := weights[rawKey]
-		if math.IsNaN(weight) || math.IsInf(weight, 0) {
-			normalized[keyword] = 0
-			continue
-		}
-
-		normalized[keyword] = weight
+		set[keyword] = struct{}{}
 	}
-
+	normalized := make([]string, 0, len(set))
+	for keyword := range set {
+		normalized = append(normalized, keyword)
+	}
+	sort.Strings(normalized)
 	return normalized
 }
 
-func keywordScore(memoryWeights, queryWeights map[string]float64) (float64, []string, []RankKeywordMatch) {
-	if len(memoryWeights) == 0 || len(queryWeights) == 0 {
+func keywordOverlap(memoryKeywords, queryKeywords []string) (float64, []string, []RankKeywordMatch) {
+	if len(memoryKeywords) == 0 || len(queryKeywords) == 0 {
 		return 0, []string{}, []RankKeywordMatch{}
 	}
 
-	keywords := make([]string, 0, len(memoryWeights))
-	for keyword := range memoryWeights {
-		keywords = append(keywords, keyword)
+	memorySet := make(map[string]struct{}, len(memoryKeywords))
+	for _, keyword := range memoryKeywords {
+		memorySet[keyword] = struct{}{}
 	}
-	sort.Strings(keywords)
 
-	boost := 0.0
 	matched := make([]string, 0)
 	matchedDetails := make([]RankKeywordMatch, 0)
 
-	for _, keyword := range keywords {
-		queryWeight, ok := queryWeights[keyword]
-		if !ok {
+	for _, keyword := range queryKeywords {
+		if _, ok := memorySet[keyword]; !ok {
 			continue
 		}
-
-		memoryWeight := memoryWeights[keyword]
-		product := queryWeight * memoryWeight
-		boost += product
 		matched = append(matched, keyword)
-		matchedDetails = append(matchedDetails, RankKeywordMatch{
-			Keyword:      keyword,
-			QueryWeight:  queryWeight,
-			MemoryWeight: memoryWeight,
-			Product:      product,
-		})
+		matchedDetails = append(matchedDetails, RankKeywordMatch{Keyword: keyword})
 	}
 
-	return boost, matched, matchedDetails
+	return float64(len(matched)) / float64(len(queryKeywords)), matched, matchedDetails
 }
 
 func unmatchedQueryKeywords(sortedQueryKeywords []string, matched []string) []string {
@@ -170,32 +153,34 @@ func unmatchedQueryKeywords(sortedQueryKeywords []string, matched []string) []st
 }
 
 func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOutput {
-	normalizedQueryWeights := normalizeWeightMap(query.KeywordWeights)
-	queryKeywords := make([]string, 0, len(normalizedQueryWeights))
-	for keyword := range normalizedQueryWeights {
-		queryKeywords = append(queryKeywords, keyword)
-	}
-	sort.Strings(queryKeywords)
+	queryKeywords := normalizeKeywords(query.Keywords)
 
 	rows := make([]rankedRowWithIndex, 0, len(cands))
 	floorDropped := make([]RankedRow, 0)
+	standingDropped := make([]RankedRow, 0)
 	drops := DropCount{Total: len(cands)}
 
 	for i, cand := range cands {
+		if cand.Archived || cand.StandingBps <= opts.StandingThresholdBps {
+			standingDropped = append(standingDropped, RankedRow{ID: cand.ID, VectorScore: cand.VectorScore})
+			drops.Standing++
+			continue
+		}
 		if cand.VectorScore <= 0 {
 			drops.Vector++
 			continue
 		}
 
-		candidateKeywordWeights := normalizeWeightMap(cand.KeywordWeights)
-		boost, matched, matchedDetails := keywordScore(candidateKeywordWeights, normalizedQueryWeights)
+		candidateKeywords := normalizeKeywords(cand.Keywords)
+		overlap, matched, matchedDetails := keywordOverlap(candidateKeywords, queryKeywords)
 
-		if opts.Gate && len(normalizedQueryWeights) > 0 && len(matched) == 0 {
+		if opts.Gate && len(queryKeywords) > 0 && len(matched) == 0 {
 			drops.Gate++
 			continue
 		}
 
-		gammaBoost := boost * opts.KeywordBoostFactor
+		standingFactor := float64(cand.StandingBps) / 10000.0
+		gammaBoost := opts.KeywordBoostFactor * overlap * standingFactor
 		cappedBoost := gammaBoost
 		if opts.Delta > 0 {
 			deltaCap := opts.Delta * cand.VectorScore
@@ -210,7 +195,7 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 				ID:             cand.ID,
 				Final:          final,
 				VectorScore:    cand.VectorScore,
-				KeywordBoost:   boost,
+				KeywordBoost:   overlap,
 				Gamma:          opts.KeywordBoostFactor,
 				Delta:          opts.Delta,
 				CappedBoost:    cappedBoost,
@@ -240,7 +225,7 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 				ID:             cand.ID,
 				Final:          final,
 				VectorScore:    cand.VectorScore,
-				KeywordBoost:   boost,
+				KeywordBoost:   overlap,
 				Gamma:          opts.KeywordBoostFactor,
 				Delta:          opts.Delta,
 				CappedBoost:    cappedBoost,
@@ -267,8 +252,9 @@ func ScoreAndRank(cands []RankCandidate, query RankQuery, opts RankOpts) RankOut
 	drops.Kept = len(outputRows)
 
 	return RankOutput{
-		Rows:         outputRows,
-		Drops:        drops,
-		FloorDropped: floorDropped,
+		Rows:            outputRows,
+		Drops:           drops,
+		FloorDropped:    floorDropped,
+		StandingDropped: standingDropped,
 	}
 }

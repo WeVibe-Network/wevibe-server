@@ -2,11 +2,15 @@ package chain
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/cosmos/cosmos-sdk/types"
 	"github.com/jackc/pgx/v5/pgxpool"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 type ServeEntryInput struct {
@@ -18,11 +22,21 @@ type ServeEntryInput struct {
 	ContributorWallet string
 	ModelID           string
 	TurnCount         uint32
-	// MatchedKeywords is the intersection of the served memory's keywords and
-	// the query's keyword set, computed at retrieval time. Required, non-empty.
-	// Per DECISIONS.md D-4.2 Implementation Clarifications (DMO-007) and
-	// chain x/serve which rejects empty sets at keeper.go:458-460.
+	// MatchedKeywords is optional descriptive metadata from retrieval. It is not
+	// sent to chain; x/serve v2 records serves without keyword payloads.
 	MatchedKeywords []string
+}
+
+type OutcomeEventInput struct {
+	EpochID           uint64
+	MemoryContentHash string
+	SignerPubkey      string
+	Nonce             string
+	Signature         string
+	EpisodeRef        string
+	Worked            bool
+	EvidenceRef       string
+	Fingerprint       string
 }
 
 type DenialEntryInput struct {
@@ -53,10 +67,6 @@ func buildServeEntries(entries []ServeEntryInput) ([]*servetypes.ServeEntry, err
 		if len(e.Nonce) == 0 {
 			return nil, fmt.Errorf("entry %d: nonce cannot be empty", i)
 		}
-		if len(e.MatchedKeywords) == 0 {
-			return nil, fmt.Errorf("entry %d: matched_keywords cannot be empty", i)
-		}
-
 		serves[i] = &servetypes.ServeEntry{
 			MemoryContentHash: e.MemoryContentHash,
 			ServeKeyPubkey:    e.ServeKeyPubkey,
@@ -66,11 +76,93 @@ func buildServeEntries(entries []ServeEntryInput) ([]*servetypes.ServeEntry, err
 			ContributorWallet: e.ContributorWallet,
 			ModelId:           e.ModelID,
 			TurnCount:         e.TurnCount,
-			MatchedKeywords:   e.MatchedKeywords,
 		}
 	}
 
 	return serves, nil
+}
+
+func buildOutcomeEventEntries(orgID string, entries []OutcomeEventInput) (uint64, []*servetypes.EventEntry, error) {
+	if len(entries) == 0 {
+		return 0, nil, fmt.Errorf("at least one entry required")
+	}
+
+	epoch := entries[0].EpochID
+	if epoch == 0 {
+		return 0, nil, fmt.Errorf("entry 0: epoch_id is required")
+	}
+	events := make([]*servetypes.EventEntry, len(entries))
+	for i, e := range entries {
+		if e.EpochID != epoch {
+			return 0, nil, fmt.Errorf("entry %d: mixed epoch_id in event batch", i)
+		}
+		memoryHash, err := decodeHexField(e.MemoryContentHash, "memory_content_hash", 32)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		signerPubkey, err := decodeHexField(e.SignerPubkey, "signer_pubkey", 32)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		nonce, err := decodeHexField(e.Nonce, "nonce", 0)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		signature, err := decodeHexField(e.Signature, "signature", 64)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		episodeRef, err := decodeHexField(e.EpisodeRef, "episode_ref", 0)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		evidenceRef, err := decodeHexField(e.EvidenceRef, "evidence_ref", 0)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+
+		event := &servetypes.EventEntry{
+			EventType:         servetypes.EventType_EVENT_TYPE_OUTCOME,
+			MemoryContentHash: memoryHash,
+			SignerPubkey:      signerPubkey,
+			Nonce:             nonce,
+			Signature:         signature,
+			Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
+				EpisodeRef:  episodeRef,
+				Worked:      e.Worked,
+				EvidenceRef: evidenceRef,
+			}},
+		}
+
+		if e.Fingerprint != "" {
+			canonical, err := servetypes.CanonicalEventBody(event.EventType, orgID, memoryHash, epoch, signerPubkey, nonce, event)
+			if err != nil {
+				return 0, nil, fmt.Errorf("entry %d: canonical event body: %w", i, err)
+			}
+			computed := hex.EncodeToString(servetypes.ComputeEventFingerprint(canonical))
+			if computed != e.Fingerprint {
+				return 0, nil, fmt.Errorf("entry %d: fingerprint mismatch", i)
+			}
+		}
+
+		events[i] = event
+	}
+
+	return epoch, events, nil
+}
+
+func decodeHexField(value, field string, exactLen int) ([]byte, error) {
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be hex: %w", field, err)
+	}
+	if exactLen > 0 && len(decoded) != exactLen {
+		return nil, fmt.Errorf("%s must be %d bytes, got %d", field, exactLen, len(decoded))
+	}
+	if exactLen == 0 && len(decoded) == 0 {
+		return nil, fmt.Errorf("%s cannot be empty", field)
+	}
+	return decoded, nil
 }
 
 func buildDenialEntries(entries []DenialEntryInput) ([]*servetypes.DenialEntry, error) {
@@ -137,6 +229,33 @@ func (c *GrpcClient) BuildDenialBatchMsg(orgID string, epoch uint64, entries []D
 		OrgId:   orgID,
 		Epoch:   epoch,
 		Entries: denials,
+	}, nil
+}
+
+func (c *GrpcClient) BuildEventBatchMsg(orgID string, entries []OutcomeEventInput) (*servetypes.MsgSubmitEventBatch, error) {
+	start := time.Now()
+	epoch, events, err := buildOutcomeEventEntries(orgID, entries)
+	if err != nil {
+		wlog.Op(context.Background(), "chain.event_batch_relay", slog.LevelError,
+			slog.String("org", orgID),
+			slog.Uint64("epoch", epoch),
+			slog.Int("count", len(entries)),
+			slog.String("status", "err"),
+			slog.String("err", err.Error()),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()))
+		return nil, err
+	}
+	wlog.Op(context.Background(), "chain.event_batch_relay", slog.LevelInfo,
+		slog.String("org", orgID),
+		slog.Uint64("epoch", epoch),
+		slog.Int("count", len(events)),
+		slog.String("status", "ok"),
+		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
+	return &servetypes.MsgSubmitEventBatch{
+		Signer: "",
+		OrgId:  orgID,
+		Epoch:  epoch,
+		Events: events,
 	}, nil
 }
 

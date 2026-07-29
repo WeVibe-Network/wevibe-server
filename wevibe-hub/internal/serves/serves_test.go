@@ -116,15 +116,14 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 	}
 }
 
-// TestRecordServe_RejectsEmptyMatchedKeywords verifies the strict validator
-// contract: an empty or absent matched_keywords payload yields a validation
-// error that the HTTP handler surfaces as 400 (the handler catches the
-// "matched_keywords" substring in the error message). Chain x/serve rejects
-// empty sets per CO-031 Rev 2 — the hub mirrors that constraint at ingress.
-func TestRecordServe_RejectsEmptyMatchedKeywords(t *testing.T) {
+// TestRecordServe_AcceptsEmptyMatchedKeywords verifies the recall-pivot
+// contract: matched_keywords is optional descriptive metadata, so empty or
+// absent payloads persist as an empty Postgres TEXT[] instead of rejecting the
+// serve.
+func TestRecordServe_AcceptsEmptyMatchedKeywords(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
-	orgID := fmt.Sprintf("test-org-co033a-reject-%d", time.Now().UnixNano())
+	orgID := fmt.Sprintf("test-org-pivot-empty-kw-%d", time.Now().UnixNano())
 	seedOrg(t, pool, orgID)
 
 	baseReq := RecordServeRequest{
@@ -138,6 +137,9 @@ func TestRecordServe_RejectsEmptyMatchedKeywords(t *testing.T) {
 		ModelID:           "test-model",
 		TurnCount:         1,
 	}
+	seedMember(t, pool, orgID, baseReq.ContributorID, "member")
+	reporterPubkey := strings.Repeat("d", 64)
+	seedMember(t, pool, orgID, reporterPubkey, "member")
 
 	cases := []struct {
 		name string
@@ -151,16 +153,107 @@ func TestRecordServe_RejectsEmptyMatchedKeywords(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			req := baseReq
+			req.MemoryContentHash = fmt.Sprintf("%064x", time.Now().UnixNano())
 			req.MatchedKeywords = c.in
 
-			_, err := RecordServe(ctx, pool, req, strings.Repeat("d", 64))
-			if err == nil {
-				t.Fatal("expected validation error, got nil")
+			record, err := RecordServe(ctx, pool, req, reporterPubkey)
+			if err != nil {
+				t.Fatalf("RecordServe failed: %v", err)
 			}
-			if !strings.Contains(err.Error(), "matched_keywords") {
-				t.Fatalf("expected error message to mention matched_keywords, got: %v", err)
+			if len(record.MatchedKeywords) != 0 {
+				t.Fatalf("matched keywords: got=%v want empty", record.MatchedKeywords)
 			}
 		})
+	}
+}
+
+func TestRecordOutcome_DedupsAndPendingRelay(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID := fmt.Sprintf("test-org-outcome-%d", time.Now().UnixNano())
+	seedOrg(t, pool, orgID)
+
+	req := RecordOutcomeRequest{
+		OrgID:             orgID,
+		EpochID:           7,
+		EventType:         EventTypeOutcome,
+		MemoryContentHash: strings.Repeat("a", 64),
+		SignerPubkey:      strings.Repeat("b", 64),
+		Nonce:             "01",
+		Signature:         strings.Repeat("c", 128),
+		EpisodeRef:        "episode:test",
+		Worked:            true,
+		EvidenceRef:       "evidence:test",
+		Fingerprint:       strings.Repeat("d", 64),
+		SessionID:         "session-test",
+	}
+	reporterPubkey := strings.Repeat("e", 64)
+
+	inserted, err := RecordOutcome(ctx, pool, req, reporterPubkey)
+	if err != nil {
+		t.Fatalf("RecordOutcome failed: %v", err)
+	}
+	if !inserted {
+		t.Fatal("first RecordOutcome insert reported duplicate")
+	}
+
+	inserted, err = RecordOutcome(ctx, pool, req, reporterPubkey)
+	if err != nil {
+		t.Fatalf("RecordOutcome duplicate failed: %v", err)
+	}
+	if inserted {
+		t.Fatal("duplicate RecordOutcome insert was not deduped")
+	}
+
+	pending, err := PendingOutcomeEvents(ctx, pool, orgID, 10)
+	if err != nil {
+		t.Fatalf("PendingOutcomeEvents failed: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending outcome count: got=%d want=1", len(pending))
+	}
+	if pending[0].Fingerprint != req.Fingerprint || pending[0].ReporterPubkey != reporterPubkey {
+		t.Fatalf("pending outcome mismatch: got=%+v", pending[0])
+	}
+
+	if err := MarkOutcomeEvents(ctx, pool, []int64{pending[0].ID}, "submitted", "tx-outcome"); err != nil {
+		t.Fatalf("MarkOutcomeEvents failed: %v", err)
+	}
+	pending, err = PendingOutcomeEvents(ctx, pool, orgID, 10)
+	if err != nil {
+		t.Fatalf("PendingOutcomeEvents after mark failed: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after mark: got=%d want=0", len(pending))
+	}
+}
+
+func TestRecordOutcome_RejectsInvalidEventType(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID := fmt.Sprintf("test-org-outcome-invalid-%d", time.Now().UnixNano())
+	seedOrg(t, pool, orgID)
+
+	req := RecordOutcomeRequest{
+		OrgID:             orgID,
+		EpochID:           1,
+		EventType:         "serve",
+		MemoryContentHash: strings.Repeat("a", 64),
+		SignerPubkey:      strings.Repeat("b", 64),
+		Nonce:             "01",
+		Signature:         strings.Repeat("c", 128),
+		EpisodeRef:        "episode:test",
+		Worked:            false,
+		EvidenceRef:       "evidence:test",
+		Fingerprint:       strings.Repeat("d", 64),
+	}
+
+	_, err := RecordOutcome(ctx, pool, req, strings.Repeat("e", 64))
+	if err == nil {
+		t.Fatal("expected invalid event_type error, got nil")
+	}
+	if !strings.Contains(err.Error(), "event_type") {
+		t.Fatalf("expected event_type error, got: %v", err)
 	}
 }
 

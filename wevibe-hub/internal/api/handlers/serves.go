@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	sdktypes "github.com/cosmos/cosmos-sdk/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
@@ -126,6 +128,172 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 		"status":           "recorded",
 		"serve_key_pubkey": record.ServeKeyPubkey,
 	})
+}
+
+func RecordEvent(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	start := time.Now()
+	status := "err"
+	fingerprint8 := ""
+	defer func() {
+		wlog.Op(ctx, "hub.record_event", slog.LevelInfo,
+			slog.String("status", status),
+			slog.String("fingerprint", fingerprint8),
+			slog.Int64("dur_ms", time.Since(start).Milliseconds()))
+	}()
+
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+	orgID := chi.URLParam(r, "orgID")
+	if orgID == "" {
+		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		return
+	}
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized: valid Authorization header required"}`, http.StatusUnauthorized)
+		return
+	}
+	ts, err := time.Parse(time.RFC3339, signed.Timestamp)
+	if err != nil {
+		http.Error(w, `{"error":"invalid timestamp format, use RFC3339"}`, http.StatusBadRequest)
+		return
+	}
+	now := time.Now()
+	if now.Sub(ts) > 5*time.Minute || ts.Sub(now) > 5*time.Minute {
+		http.Error(w, `{"error":"timestamp expired or too far in future"}`, http.StatusUnauthorized)
+		return
+	}
+	if err := verify.RequestSignature(signed.Pubkey, signed.Signature, []byte(signed.Timestamp)); err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	role, err := members.GetMemberRole(ctx, pool, orgID, signed.Pubkey)
+	if err != nil || role == "" {
+		http.Error(w, `{"error":"forbidden: org member required"}`, http.StatusForbidden)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
+		return
+	}
+	if hasContentFields(body) {
+		http.Error(w, `{"error":"content fields are not allowed"}`, http.StatusBadRequest)
+		return
+	}
+
+	var req serves.RecordOutcomeRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	req.OrgID = orgID
+	fingerprint8 = first8(req.Fingerprint)
+	if req.EventType != serves.EventTypeOutcome {
+		http.Error(w, `{"error":"unsupported event_type"}`, http.StatusBadRequest)
+		return
+	}
+
+	canonical, signerPubkey, signature, verifyErr := canonicalOutcomeRequestBody(req)
+	if verifyErr != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"validation: %s"}`, verifyErr.Error()), http.StatusBadRequest)
+		return
+	}
+	computed := hex.EncodeToString(servetypes.ComputeEventFingerprint(canonical))
+	if computed != req.Fingerprint {
+		http.Error(w, `{"error":"fingerprint mismatch"}`, http.StatusBadRequest)
+		return
+	}
+	if !ed25519.Verify(ed25519.PublicKey(signerPubkey), canonical, signature) {
+		http.Error(w, `{"error":"event signature verification failed"}`, http.StatusUnauthorized)
+		return
+	}
+
+	inserted, err := serves.RecordOutcome(ctx, pool, req, signed.Pubkey)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"validation: %s"}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	enqueueServeRelay(orgID)
+	status = "ok"
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "recorded",
+		"deduped": !inserted,
+	})
+}
+
+func hasContentFields(body []byte) bool {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false
+	}
+	for _, field := range []string{"text", "content", "plaintext", "score", "scores", "verdict", "verdicts"} {
+		if _, ok := raw[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalOutcomeRequestBody(req serves.RecordOutcomeRequest) ([]byte, []byte, []byte, error) {
+	memoryHash, err := decodeExactHex("memory_hash", req.MemoryContentHash, 32)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	signerPubkey, err := decodeExactHex("signer_pubkey", req.SignerPubkey, ed25519.PublicKeySize)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	nonce, err := hex.DecodeString(req.Nonce)
+	if err != nil || len(nonce) == 0 {
+		return nil, nil, nil, fmt.Errorf("nonce must be non-empty hex")
+	}
+	signature, err := decodeExactHex("signature", req.Signature, ed25519.SignatureSize)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	episodeRef, err := hex.DecodeString(req.EpisodeRef)
+	if err != nil || len(episodeRef) == 0 {
+		return nil, nil, nil, fmt.Errorf("episode_ref must be non-empty hex")
+	}
+	evidenceRef, err := hex.DecodeString(req.EvidenceRef)
+	if err != nil || len(evidenceRef) == 0 {
+		return nil, nil, nil, fmt.Errorf("evidence_ref must be non-empty hex")
+	}
+	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
+		EpisodeRef:  episodeRef,
+		Worked:      req.Worked,
+		EvidenceRef: evidenceRef,
+	}}}
+	body, err := servetypes.CanonicalEventBody(servetypes.EventType_EVENT_TYPE_OUTCOME, req.OrgID, memoryHash, uint64(req.EpochID), signerPubkey, nonce, entry)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return body, signerPubkey, signature, nil
+}
+
+func decodeExactHex(field, value string, want int) ([]byte, error) {
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be valid hex", field)
+	}
+	if len(decoded) != want {
+		return nil, fmt.Errorf("%s must be %d bytes", field, want)
+	}
+	return decoded, nil
+}
+
+func first8(value string) string {
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
 }
 
 const (
@@ -272,7 +440,7 @@ func serveRelayWorker() {
 		delete(serveRelayQueued, orgID)
 		serveRelayMu.Unlock()
 
-		hasPending, pendingErr := serves.HasPendingEvents(context.Background(), pool, orgID, effectiveRelayHoldHours(orgID))
+		hasPending, pendingErr := hasPendingRelayEvents(context.Background(), pool, orgID, effectiveRelayHoldHours(orgID))
 		if pendingErr != nil {
 			slog.Error("serve relay pending check failed", "org_id", orgID, "err", pendingErr)
 			continue
@@ -283,20 +451,38 @@ func serveRelayWorker() {
 	}
 }
 
+func hasPendingRelayEvents(ctx context.Context, p poolType, orgID string, holdHours int) (bool, error) {
+	hasServes, err := serves.HasPendingEvents(ctx, p, orgID, holdHours)
+	if err != nil {
+		return false, err
+	}
+	if hasServes {
+		return true, nil
+	}
+	outcomes, err := serves.PendingOutcomeEvents(ctx, p, orgID, 1)
+	if err != nil {
+		return false, err
+	}
+	return len(outcomes) > 0, nil
+}
+
 type relayPendingDeps struct {
 	getPendingServes     func(context.Context, poolType, string, int) ([]serves.ServeEventRecord, error)
 	getPendingDenials    func(context.Context, poolType, string, int) ([]serves.ServeEventRecord, error)
+	getPendingOutcomes   func(context.Context, poolType, string, int) ([]serves.OutcomeEventRecord, error)
 	submitRelayBatch     func(context.Context, *chain.GrpcClient, poolType, string, string, []sdktypes.Msg) (string, error)
 	markServesSubmitted  func(context.Context, poolType, []int64, string) error
 	markDenialsSubmitted func(context.Context, poolType, []int64, string) error
+	markOutcomes         func(context.Context, poolType, []int64, string, string) error
 	logRelayTxSubmission func(orgID string, msgCount, epochCount int, txHash string)
 }
 
 type relayTxBatch struct {
-	msgs      []sdktypes.Msg
-	serveIDs  []int64
-	denialIDs []int64
-	epochs    int
+	msgs       []sdktypes.Msg
+	serveIDs   []int64
+	denialIDs  []int64
+	outcomeIDs []int64
+	epochs     int
 }
 
 func relayPendingEventsByOrg(ctx context.Context, cc *chain.GrpcClient, p poolType, orgID string) error {
@@ -307,13 +493,17 @@ func relayPendingEventsByOrg(ctx context.Context, cc *chain.GrpcClient, p poolTy
 		getPendingDenials: func(ctx context.Context, p poolType, orgID string, limit int) ([]serves.ServeEventRecord, error) {
 			return serves.GetPendingDenials(ctx, p, orgID, limit, effectiveRelayHoldHours(orgID))
 		},
+		getPendingOutcomes: func(ctx context.Context, p poolType, orgID string, limit int) ([]serves.OutcomeEventRecord, error) {
+			return serves.PendingOutcomeEvents(ctx, p, orgID, limit)
+		},
 		submitRelayBatch: func(ctx context.Context, cc *chain.GrpcClient, db poolType, faucetURL, orgID string, msgs []sdktypes.Msg) (string, error) {
 			return cc.SubmitRelayBatch(ctx, db, faucetURL, orgID, msgs)
 		},
 		markServesSubmitted:  serves.MarkServesSubmitted,
 		markDenialsSubmitted: serves.MarkDenialsSubmitted,
+		markOutcomes:         serves.MarkOutcomeEvents,
 		logRelayTxSubmission: func(orgID string, msgCount, epochCount int, txHash string) {
-			slog.Info("relay submitted serve/denial tx",
+			slog.Info("relay submitted recall event tx",
 				"org_id", orgID,
 				"entries", msgCount,
 				"epochs", epochCount,
@@ -352,17 +542,22 @@ func relayPendingEventsByOrgWithDeps(ctx context.Context, cc *chain.GrpcClient, 
 		if err != nil {
 			return fmt.Errorf("load pending denials: %w", err)
 		}
-		if len(serveRecords) == 0 && len(denialRecords) == 0 {
+		outcomeRecords, err := deps.getPendingOutcomes(ctx, p, orgID, serveRelayFetchLimit)
+		if err != nil {
+			return fmt.Errorf("load pending outcomes: %w", err)
+		}
+		if len(serveRecords) == 0 && len(denialRecords) == 0 && len(outcomeRecords) == 0 {
 			return nil
 		}
 
 		servesByEpoch := groupRecordsByEpoch(serveRecords)
 		denialsByEpoch := groupRecordsByEpoch(denialRecords)
-		epochs := sortedUnionEpochs(servesByEpoch, denialsByEpoch)
+		outcomesByEpoch := groupOutcomeRecordsByEpoch(outcomeRecords)
+		epochs := sortedUnionEpochs3(servesByEpoch, denialsByEpoch, outcomesByEpoch)
 
 		batch := relayTxBatch{msgs: make([]sdktypes.Msg, 0, maxRelayMsgsPerTx)}
 		for _, epochID := range epochs {
-			epochMsgs, serveIDs, denialIDs, buildErr := buildRelayEpochMessages(cc, orgID, epochID, servesByEpoch[epochID], denialsByEpoch[epochID])
+			epochMsgs, serveIDs, denialIDs, outcomeIDs, buildErr := buildRelayEpochMessages(cc, orgID, epochID, servesByEpoch[epochID], denialsByEpoch[epochID], outcomesByEpoch[epochID])
 			if buildErr != nil {
 				return buildErr
 			}
@@ -381,6 +576,7 @@ func relayPendingEventsByOrgWithDeps(ctx context.Context, cc *chain.GrpcClient, 
 			batch.msgs = append(batch.msgs, epochMsgs...)
 			batch.serveIDs = append(batch.serveIDs, serveIDs...)
 			batch.denialIDs = append(batch.denialIDs, denialIDs...)
+			batch.outcomeIDs = append(batch.outcomeIDs, outcomeIDs...)
 			batch.epochs++
 		}
 
@@ -392,21 +588,22 @@ func relayPendingEventsByOrgWithDeps(ctx context.Context, cc *chain.GrpcClient, 
 	}
 }
 
-func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, serveRecords, denialRecords []serves.ServeEventRecord) ([]sdktypes.Msg, []int64, []int64, error) {
+func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, serveRecords, denialRecords []serves.ServeEventRecord, outcomeRecords []serves.OutcomeEventRecord) ([]sdktypes.Msg, []int64, []int64, []int64, error) {
 	if epochID < 0 {
-		return nil, nil, nil, fmt.Errorf("invalid epoch %d", epochID)
+		return nil, nil, nil, nil, fmt.Errorf("invalid epoch %d", epochID)
 	}
 
-	msgs := make([]sdktypes.Msg, 0, 2)
+	msgs := make([]sdktypes.Msg, 0, 3)
 	serveIDs := make([]int64, 0, len(serveRecords))
 	denialIDs := make([]int64, 0, len(denialRecords))
+	outcomeIDs := make([]int64, 0, len(outcomeRecords))
 
 	if len(serveRecords) > 0 {
 		entries := make([]chain.ServeEntryInput, 0, len(serveRecords))
 		for _, record := range serveRecords {
 			entry, buildErr := serveEntryFromRecord(record)
 			if buildErr != nil {
-				return nil, nil, nil, fmt.Errorf("build serve entry id=%d: %w", record.ID, buildErr)
+				return nil, nil, nil, nil, fmt.Errorf("build serve entry id=%d: %w", record.ID, buildErr)
 			}
 			entries = append(entries, entry)
 			serveIDs = append(serveIDs, record.ID)
@@ -414,7 +611,7 @@ func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, se
 
 		serveMsg, buildErr := cc.BuildServeBatchMsg(orgID, uint64(epochID), entries)
 		if buildErr != nil {
-			return nil, nil, nil, fmt.Errorf("build serve batch epoch=%d size=%d: %w", epochID, len(entries), buildErr)
+			return nil, nil, nil, nil, fmt.Errorf("build serve batch epoch=%d size=%d: %w", epochID, len(entries), buildErr)
 		}
 		msgs = append(msgs, serveMsg)
 	}
@@ -424,7 +621,7 @@ func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, se
 		for _, record := range denialRecords {
 			entry, buildErr := denialEntryFromRecord(record)
 			if buildErr != nil {
-				return nil, nil, nil, fmt.Errorf("build denial entry id=%d: %w", record.ID, buildErr)
+				return nil, nil, nil, nil, fmt.Errorf("build denial entry id=%d: %w", record.ID, buildErr)
 			}
 			entries = append(entries, entry)
 			denialIDs = append(denialIDs, record.ID)
@@ -432,12 +629,35 @@ func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, se
 
 		denialMsg, buildErr := cc.BuildDenialBatchMsg(orgID, uint64(epochID), entries)
 		if buildErr != nil {
-			return nil, nil, nil, fmt.Errorf("build denial batch epoch=%d size=%d: %w", epochID, len(entries), buildErr)
+			return nil, nil, nil, nil, fmt.Errorf("build denial batch epoch=%d size=%d: %w", epochID, len(entries), buildErr)
 		}
 		msgs = append(msgs, denialMsg)
 	}
 
-	return msgs, serveIDs, denialIDs, nil
+	if len(outcomeRecords) > 0 {
+		entries := make([]chain.OutcomeEventInput, 0, len(outcomeRecords))
+		for _, record := range outcomeRecords {
+			entries = append(entries, chain.OutcomeEventInput{
+				EpochID:           uint64(record.EpochID),
+				MemoryContentHash: record.MemoryContentHash,
+				SignerPubkey:      record.SignerPubkey,
+				Nonce:             record.Nonce,
+				Signature:         record.Signature,
+				EpisodeRef:        record.EpisodeRef,
+				Worked:            record.Worked,
+				EvidenceRef:       record.EvidenceRef,
+				Fingerprint:       record.Fingerprint,
+			})
+			outcomeIDs = append(outcomeIDs, record.ID)
+		}
+		outcomeMsg, buildErr := cc.BuildEventBatchMsg(orgID, entries)
+		if buildErr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("build outcome event batch epoch=%d size=%d: %w", epochID, len(entries), buildErr)
+		}
+		msgs = append(msgs, outcomeMsg)
+	}
+
+	return msgs, serveIDs, denialIDs, outcomeIDs, nil
 }
 
 func flushRelayTxBatch(ctx context.Context, cc *chain.GrpcClient, db poolType, orgID string, batch relayTxBatch, deps relayPendingDeps) error {
@@ -454,6 +674,9 @@ func flushRelayTxBatch(ctx context.Context, cc *chain.GrpcClient, db poolType, o
 	}
 	if markErr := deps.markDenialsSubmitted(ctx, db, batch.denialIDs, txHash); markErr != nil {
 		return fmt.Errorf("mark denial batch submitted tx=%s: %w", txHash, markErr)
+	}
+	if markErr := deps.markOutcomes(ctx, db, batch.outcomeIDs, "submitted", txHash); markErr != nil {
+		return fmt.Errorf("mark outcome batch submitted tx=%s: %w", txHash, markErr)
 	}
 
 	if deps.logRelayTxSubmission != nil {
@@ -473,6 +696,14 @@ func groupRecordsByEpoch(records []serves.ServeEventRecord) map[int]([]serves.Se
 	return byEpoch
 }
 
+func groupOutcomeRecordsByEpoch(records []serves.OutcomeEventRecord) map[int]([]serves.OutcomeEventRecord) {
+	byEpoch := make(map[int][]serves.OutcomeEventRecord)
+	for _, record := range records {
+		byEpoch[record.EpochID] = append(byEpoch[record.EpochID], record)
+	}
+	return byEpoch
+}
+
 // sortedUnionEpochs returns the ascending union of epoch keys across the two
 // maps. Ascending order guarantees a denial is never relayed before the serve
 // receipt it references (serveEpoch <= denialEpoch).
@@ -482,6 +713,25 @@ func sortedUnionEpochs(a, b map[int][]serves.ServeEventRecord) []int {
 		seen[e] = struct{}{}
 	}
 	for e := range b {
+		seen[e] = struct{}{}
+	}
+	epochs := make([]int, 0, len(seen))
+	for e := range seen {
+		epochs = append(epochs, e)
+	}
+	sort.Ints(epochs)
+	return epochs
+}
+
+func sortedUnionEpochs3(a, b map[int][]serves.ServeEventRecord, c map[int][]serves.OutcomeEventRecord) []int {
+	seen := make(map[int]struct{}, len(a)+len(b)+len(c))
+	for e := range a {
+		seen[e] = struct{}{}
+	}
+	for e := range b {
+		seen[e] = struct{}{}
+	}
+	for e := range c {
 		seen[e] = struct{}{}
 	}
 	epochs := make([]int, 0, len(seen))
@@ -508,9 +758,6 @@ func serveEntryFromRecord(record serves.ServeEventRecord) (chain.ServeEntryInput
 	nonce, err := hex.DecodeString(record.Nonce)
 	if err != nil || len(nonce) == 0 {
 		return chain.ServeEntryInput{}, fmt.Errorf("invalid nonce %q", record.Nonce)
-	}
-	if len(record.MatchedKeywords) == 0 {
-		return chain.ServeEntryInput{}, fmt.Errorf("matched_keywords cannot be empty")
 	}
 
 	return chain.ServeEntryInput{

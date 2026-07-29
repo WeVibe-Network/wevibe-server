@@ -3,9 +3,12 @@ package chain
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
+	"log/slog"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
+	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
 
 type ServeEntry struct {
@@ -44,20 +47,11 @@ func (w *ChainWatcher) processServeBatchBookkeeping(ctx context.Context, txHash 
 			continue
 		}
 		seen[memoryCID] = true
-
-		if err := retrieval.ApplyServeBoostLocal(ctx, w.db, memoryCID, orgID); err != nil {
-			w.logger.Error("failed to apply serve boost", "err", err, "memory_cid", memoryCID)
-		}
 	}
 
 	for memoryCID := range seen {
-		weights, err := retrieval.GetKeywordWeights(ctx, w.db, orgID, memoryCID)
-		if err != nil {
-			w.logger.Error("failed to get keyword weights", "err", err, "memory_cid", memoryCID)
-			continue
-		}
-		if err := w.qdrantClient.UpdateKeywordWeights(ctx, orgID, memoryCID, weights); err != nil {
-			w.logger.Error("failed to update qdrant weights", "err", err, "memory_cid", memoryCID)
+		if err := w.recomputeStandingForMemory(ctx, orgID, memoryCID); err != nil {
+			w.logger.Error("failed to recompute serve standing", "err", err, "memory_cid", memoryCID)
 		}
 	}
 
@@ -86,22 +80,85 @@ func (w *ChainWatcher) processDenialBatchBookkeeping(ctx context.Context, txHash
 			continue
 		}
 		seen[memoryCID] = true
-
-		if err := retrieval.ApplyDenialDecayLocal(ctx, w.db, memoryCID, orgID); err != nil {
-			w.logger.Error("failed to apply denial decay", "err", err, "memory_cid", memoryCID)
-		}
 	}
 
 	for memoryCID := range seen {
-		weights, err := retrieval.GetKeywordWeights(ctx, w.db, orgID, memoryCID)
-		if err != nil {
-			w.logger.Error("failed to get keyword weights", "err", err, "memory_cid", memoryCID)
-			continue
-		}
-		if err := w.qdrantClient.UpdateKeywordWeights(ctx, orgID, memoryCID, weights); err != nil {
-			w.logger.Error("failed to update qdrant weights", "err", err, "memory_cid", memoryCID)
+		if err := w.recomputeStandingForMemory(ctx, orgID, memoryCID); err != nil {
+			w.logger.Error("failed to recompute denial standing", "err", err, "memory_cid", memoryCID)
 		}
 	}
 
 	return nil
+}
+
+func (w *ChainWatcher) processEventBatchBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, epoch uint64, events []*servetypes.EventEntry) error {
+	start := time.Now()
+	if len(events) == 0 {
+		return nil
+	}
+
+	ids := make([]int64, 0, len(events))
+	seen := make(map[string]bool)
+	fps := make([]string, 0, len(events))
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		memoryCID := hex.EncodeToString(event.MemoryContentHash)
+		canonical, err := servetypes.CanonicalEventBody(event.EventType, orgID, event.MemoryContentHash, epoch, event.SignerPubkey, event.Nonce, event)
+		if err != nil {
+			return fmt.Errorf("canonical event body: %w", err)
+		}
+		fingerprint := hex.EncodeToString(servetypes.ComputeEventFingerprint(canonical))
+		fps = append(fps, first8(fingerprint))
+		var id int64
+		if err := w.db.QueryRow(ctx, `
+			SELECT id FROM outcome_events
+			WHERE org_id=$1 AND fingerprint=$2 AND status='pending'
+		`, orgID, fingerprint).Scan(&id); err != nil {
+			w.logger.Error("failed to locate outcome event", "err", err, "fingerprint_fp", first8(fingerprint), "memory_cid", memoryCID)
+			continue
+		}
+		ids = append(ids, id)
+		seen[memoryCID] = true
+	}
+
+	if len(ids) > 0 {
+		_, err := w.db.Exec(ctx, `
+			UPDATE outcome_events
+			SET status='submitted', tx_hash=$1, submitted_at=NOW()
+			WHERE id = ANY($2)
+		`, txHash, ids)
+		if err != nil {
+			return fmt.Errorf("mark outcome events submitted: %w", err)
+		}
+	}
+
+	for memoryCID := range seen {
+		if err := w.recomputeStandingForMemory(ctx, orgID, memoryCID); err != nil {
+			w.logger.Error("failed to recompute outcome standing", "err", err, "memory_cid", memoryCID)
+		}
+	}
+
+	wlog.Op(ctx, "watcher.event_batch", slog.LevelInfo,
+		slog.String("status", "ok"),
+		slog.String("org", orgID),
+		slog.Uint64("epoch", epoch),
+		slog.Int("event_count", len(events)),
+		slog.Int("marked_count", len(ids)),
+		slog.Any("fingerprint_fps", fps),
+		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
+	return nil
+}
+
+func (w *ChainWatcher) recomputeStandingForMemory(ctx context.Context, orgID, memoryCID string) error {
+	if w.standingPolicy == nil {
+		wlog.Op(ctx, "chain.standing_rebuild", slog.LevelError,
+			slog.String("status", "err"),
+			slog.String("org", orgID),
+			slog.String("memory_fp", first8(memoryCID)),
+			slog.String("err", "standing policy not configured"))
+		return fmt.Errorf("standing policy not configured")
+	}
+	return RecomputeMemoryStanding(ctx, w.db, w.qdrantClient, w.standingPolicy, orgID, memoryCID)
 }

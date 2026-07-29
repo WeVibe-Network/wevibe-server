@@ -314,22 +314,15 @@ func VerifyKeywords(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		var weightSum float64
 		invalidKeyword := ""
 		for _, kw := range storedExtraction.Classified {
 			if !keywordFormatRegex.MatchString(kw.Keyword) {
 				invalidKeyword = kw.Keyword
 				break
 			}
-			weightSum += kw.Weight
 		}
 		if invalidKeyword != "" {
 			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "invalid_keyword_format", Error: fmt.Sprintf("invalid keyword format: %s", invalidKeyword)})
-			continue
-		}
-
-		if abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
-			results = append(results, result{Hash: entry.SubmissionHash, Passed: false, Code: "keyword_weight_sum", Error: fmt.Sprintf("keyword weights sum to %.4f, must be 1.0 (±%.2f)", weightSum, protocol.KeywordWeightTolerance)})
 			continue
 		}
 
@@ -515,18 +508,11 @@ func UpdateKeywords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var weightSum float64
 	for _, kw := range req.Classified {
 		if !keywordFormatRegex.MatchString(kw.Keyword) {
 			http.Error(w, fmt.Sprintf(`{"error":"invalid keyword format: %s"}`, kw.Keyword), http.StatusBadRequest)
 			return
 		}
-		weightSum += kw.Weight
-	}
-
-	if abs(weightSum-1.0) > protocol.KeywordWeightTolerance {
-		http.Error(w, fmt.Sprintf(`{"error":"keyword weights sum to %.4f, must be 1.0 (±%.2f)"}`, weightSum, protocol.KeywordWeightTolerance), http.StatusBadRequest)
-		return
 	}
 
 	extractionData, err := json.Marshal(map[string]interface{}{
@@ -876,11 +862,4 @@ func ListMySubmissions(w http.ResponseWriter, r *http.Request) {
 		"submissions": submissions,
 		"total":       len(submissions),
 	})
-}
-
-func abs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }

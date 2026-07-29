@@ -131,7 +131,7 @@ func (w *ChainWatcher) redriveApproveMemory(ctx context.Context, orgID string, c
 					}
 					keywords = make([]string, len(submit.Keywords))
 					for i, kw := range submit.Keywords {
-						keywords[i] = kw.Keyword
+						keywords[i] = kw
 					}
 					contributorID = submit.ContributorId
 					contributorWallet = submit.ContributorWallet

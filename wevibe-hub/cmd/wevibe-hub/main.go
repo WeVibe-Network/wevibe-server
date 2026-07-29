@@ -23,6 +23,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/notifications"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/social"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/standing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/umbral"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
 )
@@ -55,6 +56,14 @@ func main() {
 	log.Printf("retrieval vector knobs configured: sigma=%.4f recall_depth=%d",
 		cfg.RetrievalVectorNoiseSigma, cfg.RetrievalRecallDepth)
 
+	policyPath := strings.TrimSpace(os.Getenv("WEVIBE_EDGE_POLICY_PATH"))
+	if policyPath == "" {
+		policyPath = "policy/edge-policy-v1.json"
+	}
+	standingPolicy, err := standing.LoadPolicy(policyPath)
+	if err != nil {
+		log.Fatalf("FATAL: edge policy load failed path=%s: %v", policyPath, err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -92,6 +101,39 @@ func main() {
 	}
 	defer chainClient.Close()
 	log.Printf("chain client initialized for chain %s, submitter %s", cfg.ChainID, chainClient.SubmitterAddress())
+	anchorCtx, anchorCancel := context.WithTimeout(ctx, 10*time.Second)
+	anchoredVersion, anchoredHash, anchorFound, anchorErr := chainClient.LatestPolicyAnchor(anchorCtx)
+	anchorCancel()
+	anchorVerdict, anchorFatal := chain.PolicyAnchorVerdict(standingPolicy.Version, standingPolicy.HashHex, anchoredVersion, anchoredHash, anchorFound, anchorErr)
+	switch anchorVerdict {
+	case chain.PolicyAnchorUnreachable:
+		wlog.Op(ctx, "hub.policy_anchor", slog.LevelError,
+			slog.String("status", anchorVerdict),
+			slog.String("policy_version", standingPolicy.Version),
+			slog.String("policy_hash", standingPolicy.HashHex),
+			slog.String("err", anchorErr.Error()))
+	case chain.PolicyAnchorAbsent:
+		wlog.Op(ctx, "hub.policy_anchor", slog.LevelError,
+			slog.String("status", anchorVerdict),
+			slog.String("policy_version", standingPolicy.Version),
+			slog.String("policy_hash", standingPolicy.HashHex),
+			slog.String("err", "no on-chain policy anchor found"))
+	case chain.PolicyAnchorMismatch:
+		wlog.Op(ctx, "hub.policy_anchor", slog.LevelError,
+			slog.String("status", anchorVerdict),
+			slog.String("local_policy_version", standingPolicy.Version),
+			slog.String("local_policy_hash", standingPolicy.HashHex),
+			slog.String("anchored_policy_version", anchoredVersion),
+			slog.String("anchored_policy_hash", anchoredHash))
+	case chain.PolicyAnchorVerified:
+		wlog.Op(ctx, "hub.policy_anchor", slog.LevelInfo,
+			slog.String("status", anchorVerdict),
+			slog.String("policy_version", standingPolicy.Version),
+			slog.String("policy_hash", standingPolicy.HashHex))
+	}
+	if anchorFatal {
+		log.Fatalf("FATAL: edge policy anchor mismatch: local version=%s hash=%s anchored version=%s hash=%s", standingPolicy.Version, standingPolicy.HashHex, anchoredVersion, anchoredHash)
+	}
 
 	handlers.SetChainClient(chainClient)
 	handlers.SetRelayHoldConfig(cfg.RelayHoldHours, cfg.RelayHoldExemptOrgs)
@@ -121,8 +163,8 @@ func main() {
 		if err := chain.SyncEpochData(ctx, chainClient, qdrantClient, pool); err != nil {
 			log.Printf("WARNING: startup SyncEpochData failed: %v — hub will retry on the next epoch tick", err)
 		}
-		if err := chain.SyncKeywordWeightsFromChain(ctx, chainClient, qdrantClient, pool); err != nil {
-			log.Printf("WARNING: SyncKeywordWeightsFromChain failed: %v — hub will operate with potentially stale keyword weights; the next serve/denial TX will update individual memories", err)
+		if err := chain.SyncStandingFromEvents(ctx, chainClient, qdrantClient, pool, &standingPolicy); err != nil {
+			log.Printf("WARNING: startup SyncStandingFromEvents failed: %v — hub will retry standing projection from subsequent event processing", err)
 		}
 	} else {
 		log.Printf("WARNING: skipping startup chain syncs — qdrant client unavailable")
@@ -176,6 +218,7 @@ func main() {
 	txDecoder := chain.BuildTxDecoder(chainClient.GetCodec())
 	watcher := chain.NewChainWatcher(chainClient, pool, slog.Default(), txDecoder, notifHub, qdrantClient, umbralService)
 	watcher.SetDispatcher(notificationDispatcher)
+	watcher.SetStandingPolicy(&standingPolicy)
 	handlers.SetChainWatcher(watcher)
 	go func() {
 		if err := watcher.Start(ctx); err != nil {
@@ -285,6 +328,7 @@ func main() {
 			r.Post("/moderation/batch-submit", handlers.PrepareBatchForChain)
 
 			r.Post("/serves", handlers.RecordServeEvent)
+			r.Post("/events", handlers.RecordEvent)
 			r.Post("/decision-notes", handlers.RecordDecisionNote)
 			r.Put("/recall-rate-limit", handlers.SetRecallRateLimit)
 			r.Get("/recall-rate-limit", handlers.GetRecallRateLimit)

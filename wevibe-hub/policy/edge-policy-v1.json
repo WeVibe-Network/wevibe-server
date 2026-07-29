@@ -1,0 +1,17 @@
+{
+  "policy_version": "edge-policy-v1",
+  "constants": {
+    "initial_standing_bps": 10000,
+    "serve_d_bps": 220,
+    "denial_d_bps": 900,
+    "idle_d_bps": 600,
+    "grace_epochs": 20,
+    "trust_min_serves": 1,
+    "trust_max_rate": 0.30,
+    "idle_protect": 0.05,
+    "idle_untrusted": 1.0,
+    "serve_floor": 0.4,
+    "denial_floor": 0.3,
+    "standing_threshold_bps": 1500
+  }
+}
