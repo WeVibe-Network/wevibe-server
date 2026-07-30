@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +23,7 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/memories"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/serves"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
@@ -97,8 +99,16 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 
 	req.OrgID = orgID
 
-	record, err := serves.RecordServe(r.Context(), pool, req, signed.Pubkey)
+	record, err := serves.RecordServe(r.Context(), pool, chainClient, req, signed.Pubkey)
 	if err != nil {
+		if errors.Is(err, memories.ErrMemoryNotApproved) {
+			WriteError(w, http.StatusUnprocessableEntity, "memory_not_approved", "memory is not approved for this org")
+			return
+		}
+		if errors.Is(err, memories.ErrMemoryCheckUnavailable) {
+			WriteError(w, http.StatusServiceUnavailable, "memory_check_unavailable", "memory approval check unavailable")
+			return
+		}
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "duplicate") {
 			http.Error(w, fmt.Sprintf(`{"error":"%s"}`, errMsg), http.StatusConflict)
@@ -223,6 +233,18 @@ func RecordEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ed25519.Verify(ed25519.PublicKey(signerPubkey), canonical, signature) {
 		http.Error(w, `{"error":"event signature verification failed"}`, http.StatusUnauthorized)
+		return
+	}
+	if err := memories.EnsureApproved(ctx, pool, chainClient, orgID, req.MemoryContentHash); err != nil {
+		if errors.Is(err, memories.ErrMemoryNotApproved) {
+			WriteError(w, http.StatusUnprocessableEntity, "memory_not_approved", "memory is not approved for this org")
+			return
+		}
+		if errors.Is(err, memories.ErrMemoryCheckUnavailable) {
+			WriteError(w, http.StatusServiceUnavailable, "memory_check_unavailable", "memory approval check unavailable")
+			return
+		}
+		WriteError(w, http.StatusServiceUnavailable, "memory_check_unavailable", "memory approval check unavailable")
 		return
 	}
 

@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/memories"
 )
 
 const (
@@ -135,7 +137,7 @@ func normalizeMatchedKeywords(raw []string) ([]string, error) {
 	return normalized, nil
 }
 
-func RecordServe(ctx context.Context, pool *pgxpool.Pool, req RecordServeRequest, reporterPubkey string) (*ServeEventRecord, error) {
+func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.GrpcClient, req RecordServeRequest, reporterPubkey string) (*ServeEventRecord, error) {
 	if req.MemoryContentHash == "" {
 		return nil, fmt.Errorf("memory_content_hash is required")
 	}
@@ -182,6 +184,9 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, req RecordServeRequest
 	}
 	if req.EpochID < 0 {
 		return nil, fmt.Errorf("epoch_id must be non-negative")
+	}
+	if err := memories.EnsureApproved(ctx, pool, chainClient, req.OrgID, req.MemoryContentHash); err != nil {
+		return nil, err
 	}
 
 	matchedKeywords, err := normalizeMatchedKeywords(req.MatchedKeywords)

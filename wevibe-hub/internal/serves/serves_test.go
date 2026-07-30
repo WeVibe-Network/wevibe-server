@@ -64,6 +64,7 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 	contentHash := strings.Repeat("a", 64)
 	serveKeyPubkey := strings.Repeat("b", 64)
 	serveSig := strings.Repeat("c", 128)
+	seedCommittedSubmission(t, pool, orgID, contentHash)
 
 	req := RecordServeRequest{
 		OrgID:             orgID,
@@ -84,7 +85,7 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 	seedMember(t, pool, orgID, req.ContributorID, "member")
 	seedMember(t, pool, orgID, reporterPubkey, "member")
 
-	record, err := RecordServe(ctx, pool, req, reporterPubkey)
+	record, err := RecordServe(ctx, pool, nil, req, reporterPubkey)
 	if err != nil {
 		t.Fatalf("RecordServe failed: %v", err)
 	}
@@ -155,8 +156,9 @@ func TestRecordServe_AcceptsEmptyMatchedKeywords(t *testing.T) {
 			req := baseReq
 			req.MemoryContentHash = fmt.Sprintf("%064x", time.Now().UnixNano())
 			req.MatchedKeywords = c.in
+			seedCommittedSubmission(t, pool, orgID, req.MemoryContentHash)
 
-			record, err := RecordServe(ctx, pool, req, reporterPubkey)
+			record, err := RecordServe(ctx, pool, nil, req, reporterPubkey)
 			if err != nil {
 				t.Fatalf("RecordServe failed: %v", err)
 			}
@@ -266,6 +268,17 @@ func seedMember(t *testing.T, pool *pgxpool.Pool, orgID, pubkey, role string) {
 	`, orgID, pubkey, strings.Repeat("1", 64), role)
 	if err != nil {
 		t.Fatalf("seed member: %v", err)
+	}
+}
+
+func seedCommittedSubmission(t *testing.T, pool *pgxpool.Pool, orgID, memoryHash string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO pending_submissions (submission_hash, org_id, epoch_id, contributor_pubkey, ciphertext_hex, plaintext_hash, salt, ciphertext_hash, wrapped_dek_hash, wrapped_dek_mod, contributor_sig, status)
+		VALUES ($1, $2, 1, $3, 'aa', $4, '01', $5, $6, 'mod', $7, 'committed')
+	`, memoryHash, orgID, strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 128))
+	if err != nil {
+		t.Fatalf("seed committed submission: %v", err)
 	}
 }
 
