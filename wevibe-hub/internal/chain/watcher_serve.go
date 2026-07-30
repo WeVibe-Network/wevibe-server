@@ -97,9 +97,15 @@ func (w *ChainWatcher) processEventBatchBookkeeping(ctx context.Context, txHash 
 		return nil
 	}
 
-	ids := make([]int64, 0, len(events))
+	accepted, err := chainAcceptedOutcomeFingerprints(ctx, w.chainClient, orgID, epoch)
+	if err != nil {
+		return err
+	}
+
 	seen := make(map[string]bool)
 	fps := make([]string, 0, len(events))
+	acceptedCount := 0
+	skippedCount := 0
 	for _, event := range events {
 		if event == nil {
 			continue
@@ -111,27 +117,34 @@ func (w *ChainWatcher) processEventBatchBookkeeping(ctx context.Context, txHash 
 		}
 		fingerprint := hex.EncodeToString(servetypes.ComputeEventFingerprint(canonical))
 		fps = append(fps, first8(fingerprint))
-		var id int64
-		if err := w.db.QueryRow(ctx, `
-			SELECT id FROM outcome_events
-			WHERE org_id=$1 AND fingerprint=$2 AND status='pending'
-		`, orgID, fingerprint).Scan(&id); err != nil {
-			w.logger.Error("failed to locate outcome event", "err", err, "fingerprint_fp", first8(fingerprint), "memory_cid", memoryCID)
+		if !accepted[fingerprint] {
+			skippedCount++
+			wlog.Op(ctx, "watcher.event_batch", slog.LevelWarn,
+				slog.String("status", "rejected_at_commit"),
+				slog.String("org", orgID),
+				slog.Uint64("epoch", epoch),
+				slog.String("fingerprint_fp", first8(fingerprint)),
+				slog.String("memory_fp", first8(memoryCID)))
 			continue
 		}
-		ids = append(ids, id)
-		seen[memoryCID] = true
-	}
-
-	if len(ids) > 0 {
-		_, err := w.db.Exec(ctx, `
+		acceptedCount++
+		cmd, err := w.db.Exec(ctx, `
 			UPDATE outcome_events
-			SET status='submitted', tx_hash=$1, submitted_at=NOW()
-			WHERE id = ANY($2)
-		`, txHash, ids)
+			SET status='submitted', tx_hash=$1, submitted_at=COALESCE(submitted_at, NOW())
+			WHERE org_id=$2 AND fingerprint=$3
+		`, txHash, orgID, fingerprint)
 		if err != nil {
-			return fmt.Errorf("mark outcome events submitted: %w", err)
+			return fmt.Errorf("mark outcome event submitted: %w", err)
 		}
+		if cmd.RowsAffected() == 0 {
+			wlog.Op(ctx, "watcher.event_batch", slog.LevelInfo,
+				slog.String("status", "no_hub_row"),
+				slog.String("org", orgID),
+				slog.Uint64("epoch", epoch),
+				slog.String("fingerprint_fp", first8(fingerprint)),
+				slog.String("memory_fp", first8(memoryCID)))
+		}
+		seen[memoryCID] = true
 	}
 
 	for memoryCID := range seen {
@@ -145,7 +158,9 @@ func (w *ChainWatcher) processEventBatchBookkeeping(ctx context.Context, txHash 
 		slog.String("org", orgID),
 		slog.Uint64("epoch", epoch),
 		slog.Int("event_count", len(events)),
-		slog.Int("marked_count", len(ids)),
+		slog.Int("marked_count", acceptedCount),
+		slog.Int("accepted_count", acceptedCount),
+		slog.Int("skipped_count", skippedCount),
 		slog.Any("fingerprint_fps", fps),
 		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
 	return nil
@@ -160,5 +175,5 @@ func (w *ChainWatcher) recomputeStandingForMemory(ctx context.Context, orgID, me
 			slog.String("err", "standing policy not configured"))
 		return fmt.Errorf("standing policy not configured")
 	}
-	return RecomputeMemoryStanding(ctx, w.db, w.qdrantClient, w.standingPolicy, orgID, memoryCID)
+	return RecomputeMemoryStanding(ctx, w.chainClient, w.db, w.qdrantClient, w.standingPolicy, orgID, memoryCID)
 }

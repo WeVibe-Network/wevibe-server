@@ -16,10 +16,12 @@ import (
 )
 
 type standingReplayEvent struct {
-	OrgID     string
-	MemoryCID string
-	Epoch     uint64
-	Kind      standing.Kind
+	OrgID       string
+	MemoryCID   string
+	Epoch       uint64
+	Kind        standing.Kind
+	Fingerprint string
+	ChainGated  bool
 }
 
 func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrantClient *retrieval.QdrantClient, pool *pgxpool.Pool, pol *standing.Policy) error {
@@ -41,7 +43,7 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 		slog.String("status", "start"),
 		slog.String("policy_version", pol.Version))
 
-	events, err := loadStandingReplayEvents(ctx, pool, "", "")
+	events, err := loadStandingReplayEvents(ctx, chainClient, pool, "", "")
 	if err != nil {
 		wlog.Op(ctx, "chain.standing_rebuild", slog.LevelError,
 			slog.String("status", "err"),
@@ -51,6 +53,15 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 	}
 
 	grouped := groupStandingEvents(events)
+	standingKeys, err := loadExistingStandingKeys(ctx, pool)
+	if err != nil {
+		return err
+	}
+	for _, key := range standingKeys {
+		if _, ok := grouped[key]; !ok {
+			grouped[key] = nil
+		}
+	}
 	updated := 0
 	for key := range grouped {
 		if err := recomputeMemoryStandingFromGrouped(ctx, pool, qdrantClient, pol, key.orgID, key.memoryCID, grouped[key]); err != nil {
@@ -74,7 +85,7 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 	return nil
 }
 
-func RecomputeMemoryStanding(ctx context.Context, pool *pgxpool.Pool, qdrantClient *retrieval.QdrantClient, pol *standing.Policy, orgID, memoryCID string) error {
+func RecomputeMemoryStanding(ctx context.Context, chainClient *GrpcClient, pool *pgxpool.Pool, qdrantClient *retrieval.QdrantClient, pol *standing.Policy, orgID, memoryCID string) error {
 	if pool == nil {
 		return fmt.Errorf("database pool unavailable")
 	}
@@ -89,7 +100,7 @@ func RecomputeMemoryStanding(ctx context.Context, pool *pgxpool.Pool, qdrantClie
 	}
 
 	start := time.Now()
-	events, err := loadStandingReplayEvents(ctx, pool, orgID, memoryCID)
+	events, err := loadStandingReplayEvents(ctx, chainClient, pool, orgID, memoryCID)
 	if err != nil {
 		return err
 	}
@@ -126,21 +137,25 @@ func groupStandingEvents(events []standingReplayEvent) map[standingKey][]standin
 	return grouped
 }
 
-func loadStandingReplayEvents(ctx context.Context, pool *pgxpool.Pool, orgID, memoryCID string) ([]standingReplayEvent, error) {
+func loadStandingReplayEvents(ctx context.Context, chainClient *GrpcClient, pool *pgxpool.Pool, orgID, memoryCID string) ([]standingReplayEvent, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT org_id, memory_content_hash, epoch_id, kind
-		FROM (
-			SELECT org_id, memory_content_hash, epoch_id,
-			       CASE WHEN event_type = 'serve' THEN 'serve' ELSE 'block' END AS kind,
-			       created_at
-			FROM serve_events
-			WHERE status = 'submitted'
-			UNION ALL
-			SELECT org_id, memory_content_hash, epoch_id,
-			       CASE WHEN worked THEN 'outcome_worked' ELSE 'outcome_failed' END AS kind,
-			       created_at
-			FROM outcome_events
-			WHERE status = 'submitted'
+			SELECT org_id, memory_content_hash, epoch_id, kind, fingerprint, chain_gated
+			FROM (
+				SELECT org_id, memory_content_hash, epoch_id,
+				       CASE WHEN event_type = 'serve' THEN 'serve' ELSE 'block' END AS kind,
+				       '' AS fingerprint,
+				       FALSE AS chain_gated,
+				       created_at
+				FROM serve_events
+				WHERE status = 'submitted'
+				UNION ALL
+				SELECT org_id, memory_content_hash, epoch_id,
+				       CASE WHEN worked THEN 'outcome_worked' ELSE 'outcome_failed' END AS kind,
+				       fingerprint,
+				       TRUE AS chain_gated,
+				       created_at
+				FROM outcome_events
+				WHERE status = 'submitted'
 		) events
 		WHERE ($1 = '' OR org_id = $1) AND ($2 = '' OR memory_content_hash = $2)
 		ORDER BY org_id, memory_content_hash, epoch_id, created_at
@@ -155,7 +170,7 @@ func loadStandingReplayEvents(ctx context.Context, pool *pgxpool.Pool, orgID, me
 		var event standingReplayEvent
 		var kind string
 		var epoch int64
-		if err := rows.Scan(&event.OrgID, &event.MemoryCID, &epoch, &kind); err != nil {
+		if err := rows.Scan(&event.OrgID, &event.MemoryCID, &epoch, &kind, &event.Fingerprint, &event.ChainGated); err != nil {
 			return nil, fmt.Errorf("scan standing replay event: %w", err)
 		}
 		if epoch < 0 {
@@ -179,7 +194,98 @@ func loadStandingReplayEvents(ctx context.Context, pool *pgxpool.Pool, orgID, me
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate standing replay events: %w", err)
 	}
-	return events, nil
+	filtered, err := filterOutcomeReplayEventsFromChain(ctx, chainClient, events)
+	if err != nil {
+		return nil, err
+	}
+	return filtered, nil
+}
+
+func filterOutcomeReplayEventsFromChain(ctx context.Context, chainClient *GrpcClient, events []standingReplayEvent) ([]standingReplayEvent, error) {
+	acceptedByOrgEpoch := make(map[string]map[uint64]map[string]bool)
+	for _, event := range events {
+		if !event.ChainGated {
+			continue
+		}
+		if acceptedByOrgEpoch[event.OrgID] == nil {
+			acceptedByOrgEpoch[event.OrgID] = make(map[uint64]map[string]bool)
+		}
+		acceptedByOrgEpoch[event.OrgID][event.Epoch] = nil
+	}
+	for org, byEpoch := range acceptedByOrgEpoch {
+		for epoch := range byEpoch {
+			accepted, err := chainAcceptedOutcomeFingerprints(ctx, chainClient, org, epoch)
+			if err != nil {
+				return nil, err
+			}
+			byEpoch[epoch] = accepted
+		}
+	}
+	logDroppedOutcomeReplayEvents(ctx, events, acceptedByOrgEpoch)
+	return filterOutcomeReplayEvents(events, acceptedByOrgEpoch), nil
+}
+
+func filterOutcomeReplayEvents(events []standingReplayEvent, acceptedByOrgEpoch map[string]map[uint64]map[string]bool) []standingReplayEvent {
+	filtered := make([]standingReplayEvent, 0, len(events))
+	for _, event := range events {
+		if !event.ChainGated {
+			filtered = append(filtered, event)
+			continue
+		}
+		accepted := acceptedByOrgEpoch[event.OrgID][event.Epoch]
+		if accepted[event.Fingerprint] {
+			filtered = append(filtered, event)
+			continue
+		}
+	}
+	return filtered
+}
+
+func logDroppedOutcomeReplayEvents(ctx context.Context, events []standingReplayEvent, acceptedByOrgEpoch map[string]map[uint64]map[string]bool) {
+	droppedByOrgEpoch := make(map[string]map[uint64][]string)
+	for _, event := range events {
+		if !event.ChainGated {
+			continue
+		}
+		accepted := acceptedByOrgEpoch[event.OrgID][event.Epoch]
+		if accepted[event.Fingerprint] {
+			continue
+		}
+		if droppedByOrgEpoch[event.OrgID] == nil {
+			droppedByOrgEpoch[event.OrgID] = make(map[uint64][]string)
+		}
+		droppedByOrgEpoch[event.OrgID][event.Epoch] = append(droppedByOrgEpoch[event.OrgID][event.Epoch], first8(event.Fingerprint))
+	}
+	for org, byEpoch := range droppedByOrgEpoch {
+		for epoch, dropped := range byEpoch {
+			wlog.Op(ctx, "chain.standing_replay", slog.LevelWarn,
+				slog.String("org", org),
+				slog.Uint64("epoch", epoch),
+				slog.Int("dropped", len(dropped)),
+				slog.Any("fingerprint_fps", dropped))
+		}
+	}
+}
+
+func loadExistingStandingKeys(ctx context.Context, pool *pgxpool.Pool) ([]standingKey, error) {
+	rows, err := pool.Query(ctx, `SELECT memory_cid, org_id FROM memory_standing`)
+	if err != nil {
+		return nil, fmt.Errorf("load existing standing keys: %w", err)
+	}
+	defer rows.Close()
+
+	keys := make([]standingKey, 0)
+	for rows.Next() {
+		var key standingKey
+		if err := rows.Scan(&key.memoryCID, &key.orgID); err != nil {
+			return nil, fmt.Errorf("scan existing standing key: %w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate existing standing keys: %w", err)
+	}
+	return keys, nil
 }
 
 func recomputeMemoryStandingFromGrouped(ctx context.Context, pool *pgxpool.Pool, qdrantClient *retrieval.QdrantClient, pol *standing.Policy, orgID, memoryCID string, replay []standingReplayEvent) error {
