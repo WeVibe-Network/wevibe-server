@@ -23,9 +23,16 @@ type Result struct {
 	StandingBps int32
 	ServeCount  uint64
 	DenialCount uint64
+	VoidServes  uint64
 	DenialRate  float64
 	Trusted     bool
 	Archived    bool
+}
+
+type epochTally struct {
+	serves   uint64
+	denials  uint64
+	activity bool
 }
 
 // Compute derives standing from ordered memory events, creation/current epochs,
@@ -41,26 +48,15 @@ func Compute(events []Event, createdEpoch, currentEpoch uint64, policy Policy) R
 
 	var serves uint64
 	var denials uint64
-	eventIndex := 0
+	tallies, voidServes := resolvePendingServes(events, createdEpoch, currentEpoch, c.ServePendingWindowEpochs)
 	if currentEpoch < createdEpoch {
-		return finalizeResult(standing, serves, denials, c)
+		return finalizeResult(standing, serves, denials, voidServes, c)
 	}
 
 	for epoch := createdEpoch; epoch <= currentEpoch; epoch++ {
-		epochServes := uint64(0)
-		epochDenials := uint64(0)
-		for eventIndex < len(events) && events[eventIndex].Epoch < epoch {
-			eventIndex++
-		}
-		for eventIndex < len(events) && events[eventIndex].Epoch == epoch {
-			switch events[eventIndex].Kind {
-			case Serve, OutcomeWorked:
-				epochServes++
-			case Block, OutcomeFailed:
-				epochDenials++
-			}
-			eventIndex++
-		}
+		tally := tallies[epoch]
+		epochServes := tally.serves
+		epochDenials := tally.denials
 
 		serves += epochServes
 		denials += epochDenials
@@ -78,7 +74,7 @@ func Compute(events []Event, createdEpoch, currentEpoch uint64, policy Policy) R
 			denialWeight := c.DenialFloor + (1-c.DenialFloor)*denialRate
 			standing -= float64(c.DenialDBps) * float64(epochDenials) * denialWeight
 		}
-		if epochServes == 0 && epochDenials == 0 {
+		if !tally.activity {
 			idleRate := c.IdleUntrusted
 			if trusted(serves, denials, c) {
 				idleRate = c.IdleProtect
@@ -88,15 +84,81 @@ func Compute(events []Event, createdEpoch, currentEpoch uint64, policy Policy) R
 		standing = clampStanding(math.Round(standing))
 	}
 
-	return finalizeResult(standing, serves, denials, c)
+	return finalizeResult(standing, serves, denials, voidServes, c)
 }
 
-func finalizeResult(standing float64, serves, denials uint64, c Constants) Result {
+func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window uint64) (map[uint64]epochTally, uint64) {
+	tallies := make(map[uint64]epochTally)
+	pending := make([]uint64, 0)
+	pendingHead := 0
+	var voidServes uint64
+
+	markActivity := func(epoch uint64) {
+		tally := tallies[epoch]
+		tally.activity = true
+		tallies[epoch] = tally
+	}
+	addServe := func(epoch uint64) {
+		tally := tallies[epoch]
+		tally.serves++
+		tally.activity = true
+		tallies[epoch] = tally
+	}
+	addDenial := func(epoch uint64) {
+		tally := tallies[epoch]
+		tally.denials++
+		tally.activity = true
+		tallies[epoch] = tally
+	}
+
+	for _, event := range events {
+		if event.Epoch < createdEpoch {
+			continue
+		}
+		if event.Epoch > currentEpoch {
+			break
+		}
+
+		switch event.Kind {
+		case Serve:
+			pending = append(pending, event.Epoch)
+			markActivity(event.Epoch)
+		case OutcomeWorked, OutcomeFailed:
+			for pendingHead < len(pending) && event.Epoch-pending[pendingHead] > window {
+				pendingHead++
+				voidServes++
+			}
+			if pendingHead < len(pending) {
+				serveEpoch := pending[pendingHead]
+				pendingHead++
+				if event.Kind == OutcomeWorked {
+					addServe(serveEpoch)
+				} else {
+					addDenial(serveEpoch)
+				}
+				continue
+			}
+			if event.Kind == OutcomeWorked {
+				addServe(event.Epoch)
+			} else {
+				addDenial(event.Epoch)
+			}
+		case Block:
+			addDenial(event.Epoch)
+		}
+	}
+
+	voidServes += uint64(len(pending) - pendingHead)
+	return tallies, voidServes
+}
+
+func finalizeResult(standing float64, serves, denials, voidServes uint64, c Constants) Result {
 	standingBps := int32(clampStanding(math.Round(standing)))
 	return Result{
 		StandingBps: standingBps,
 		ServeCount:  serves,
 		DenialCount: denials,
+		VoidServes:  voidServes,
 		DenialRate:  denialRate(serves, denials),
 		Trusted:     trusted(serves, denials, c),
 		Archived:    standingBps <= c.StandingThresholdBps,

@@ -35,17 +35,46 @@ func TestLoadPolicyRealFile(t *testing.T) {
 	if policy.Constants.InitialStandingBps != 10000 || policy.Constants.StandingThresholdBps != 1500 {
 		t.Fatalf("loaded constants mismatch: %+v", policy.Constants)
 	}
+	if policy.Constants.ServePendingWindowEpochs != 1440 {
+		t.Fatalf("ServePendingWindowEpochs = %d, want 1440", policy.Constants.ServePendingWindowEpochs)
+	}
 }
 
 func TestLoadPolicyRejectsInvalidPolicy(t *testing.T) {
-	path := writeTempPolicy(t, `{"policy_version":"edge-policy-v1","constants":{"initial_standing_bps":10001}}`)
-
-	_, err := LoadPolicy(path)
-	if err == nil {
-		t.Fatal("LoadPolicy() error = nil, want validation error")
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "initial standing out of range",
+			body:    `{"policy_version":"edge-policy-v1","constants":{"initial_standing_bps":10001,"serve_pending_window_epochs":1440}}`,
+			wantErr: "initial_standing_bps",
+		},
+		{
+			name:    "serve pending window missing",
+			body:    `{"policy_version":"edge-policy-v1","constants":{"initial_standing_bps":10000}}`,
+			wantErr: "serve_pending_window_epochs",
+		},
+		{
+			name:    "serve pending window zero",
+			body:    `{"policy_version":"edge-policy-v1","constants":{"initial_standing_bps":10000,"serve_pending_window_epochs":0}}`,
+			wantErr: "serve_pending_window_epochs",
+		},
 	}
-	if !strings.Contains(err.Error(), "initial_standing_bps") {
-		t.Fatalf("LoadPolicy() error = %q, want initial_standing_bps validation", err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempPolicy(t, tt.body)
+
+			_, err := LoadPolicy(path)
+			if err == nil {
+				t.Fatal("LoadPolicy() error = nil, want validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("LoadPolicy() error = %q, want %s validation", err, tt.wantErr)
+			}
+		})
 	}
 }
 

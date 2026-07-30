@@ -67,11 +67,13 @@ type CandidateScore struct {
 }
 
 type ProbabilisticRanker struct {
-	Temperature       float64
-	NewMemBoostMult   float64
-	NewMemBoostWindow uint64
-	GraceEpochs       uint64
-	RNG               *rand.Rand
+	Temperature               float64
+	NewMemBoostMult           float64
+	NewMemBoostWindow         uint64
+	GraceEpochs               uint64
+	UniformExposureFraction   float64
+	CounterfactualStandingBps int32
+	RNG                       *rand.Rand
 }
 
 var defaultRanker *ProbabilisticRanker
@@ -94,15 +96,39 @@ func getRanker() *ProbabilisticRanker {
 	}
 }
 
-func (r *ProbabilisticRanker) probabilisticRank(scored []scoredResult, limit int) []scoredResult {
+func (r *ProbabilisticRanker) probabilisticRank(scored []scoredResult, limit int) ([]scoredResult, bool) {
 	if len(scored) == 0 || limit <= 0 {
-		return nil
+		return nil, false
 	}
 	if limit > len(scored) {
 		limit = len(scored)
 	}
-	if limit <= 1 || len(scored) <= 1 {
-		return scored[:limit]
+	if len(scored) <= 1 {
+		return scored[:limit], false
+	}
+
+	rng := r.RNG
+	if rng == nil {
+		rng = rand.New(rand.NewSource(1))
+	}
+
+	probe := r.UniformExposureFraction > 0 && rng.Float64() < r.UniformExposureFraction
+	if probe {
+		availIdx := make([]int, len(scored))
+		for i := range availIdx {
+			availIdx[i] = i
+		}
+
+		out := make([]scoredResult, 0, limit)
+		for draw := 0; draw < limit && len(availIdx) > 0; draw++ {
+			chosen := rng.Intn(len(availIdx))
+			out = append(out, scored[availIdx[chosen]])
+			availIdx = append(availIdx[:chosen], availIdx[chosen+1:]...)
+		}
+		return out, true
+	}
+	if limit <= 1 {
+		return scored[:limit], false
 	}
 
 	top := scored[0]
@@ -131,11 +157,6 @@ func (r *ProbabilisticRanker) probabilisticRank(scored []scoredResult, limit int
 	k := limit - 1
 	if k > len(rest) {
 		k = len(rest)
-	}
-
-	rng := r.RNG
-	if rng == nil {
-		rng = rand.New(rand.NewSource(1))
 	}
 
 	sampled := make([]int, 0, k)
@@ -183,7 +204,7 @@ func (r *ProbabilisticRanker) probabilisticRank(scored []scoredResult, limit int
 		}
 	}
 
-	return out
+	return out, false
 }
 
 const (
@@ -694,6 +715,33 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		Floor:                relevanceFloor,
 		StandingThresholdBps: defaultStandingThresholdBps,
 	})
+	if ranker.CounterfactualStandingBps > 0 {
+		counterfactualCands := make([]RankCandidate, len(cands))
+		copy(counterfactualCands, cands)
+		for i := range counterfactualCands {
+			counterfactualCands[i].StandingBps = ranker.CounterfactualStandingBps
+		}
+
+		counterfactualOut := ScoreAndRank(counterfactualCands, RankQuery{Keywords: queryKeywords}, RankOpts{
+			Gate:                 false,
+			KeywordBoostFactor:   keywordBoostFactor,
+			Delta:                keywordBoostDelta,
+			NewMemBoost:          ranker.NewMemBoostMult > 0 && ranker.NewMemBoostWindow > 0,
+			Grace:                float64(ranker.GraceEpochs),
+			BoostWindow:          float64(ranker.NewMemBoostWindow),
+			NewMemMult:           ranker.NewMemBoostMult,
+			Floor:                relevanceFloor,
+			StandingThresholdBps: defaultStandingThresholdBps,
+		})
+		setDiff, overlapCount, rankDeltaSum := rankingDivergence(out.Rows, counterfactualOut.Rows)
+		wlog.Op(ctx, "hub.recall_counterfactual_ranking", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.Int("live_admitted", len(out.Rows)),
+			slog.Int("counterfactual_admitted", len(counterfactualOut.Rows)),
+			slog.Int("admitted_set_difference", setDiff),
+			slog.Int("overlap", overlapCount),
+			slog.Int("rank_delta_sum", rankDeltaSum))
+	}
 
 	wlog.Op(ctx, "hub.recall_floor_gate", slog.LevelInfo,
 		slog.String("phase", "outcome"),
@@ -757,9 +805,17 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	if cap == 0 || cap > uint64(len(scoredResults)) {
 		cap = uint64(len(scoredResults))
 	}
-	// D-9.4 power-law sampler. Source: wevibe-sim/ranking-fix.js:73-111.
-	rankedResults := ranker.probabilisticRank(scoredResults, int(cap))
-	rankedPositions := make(map[string]int, len(rankedResults))
+		// D-9.4 power-law sampler. Source: wevibe-sim/ranking-fix.js:73-111.
+		rankedResults, openLoopProbe := ranker.probabilisticRank(scoredResults, int(cap))
+		if ranker.UniformExposureFraction > 0 || openLoopProbe {
+			wlog.Op(ctx, "hub.recall_open_loop_probe", slog.LevelInfo,
+				slog.String("phase", "outcome"),
+				slog.Float64("fraction", ranker.UniformExposureFraction),
+				slog.Bool("probed", openLoopProbe),
+				slog.Int("candidates", len(scoredResults)),
+				slog.Int("returned", len(rankedResults)))
+		}
+		rankedPositions := make(map[string]int, len(rankedResults))
 	for idx, sr := range rankedResults {
 		rankedPositions[sr.result.CID] = idx
 	}
@@ -843,6 +899,41 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 
 	return memoryResults, contested, candidateScores, nil
+}
+
+func rankingDivergence(liveRows []RankedRow, counterfactualRows []RankedRow) (int, int, int) {
+	livePositions := make(map[string]int, len(liveRows))
+	for i, row := range liveRows {
+		livePositions[row.ID] = i
+	}
+	counterfactualPositions := make(map[string]int, len(counterfactualRows))
+	for i, row := range counterfactualRows {
+		counterfactualPositions[row.ID] = i
+	}
+
+	setDiff := 0
+	overlapCount := 0
+	rankDeltaSum := 0
+	for id, livePosition := range livePositions {
+		counterfactualPosition, ok := counterfactualPositions[id]
+		if !ok {
+			setDiff++
+			continue
+		}
+		overlapCount++
+		if livePosition > counterfactualPosition {
+			rankDeltaSum += livePosition - counterfactualPosition
+		} else {
+			rankDeltaSum += counterfactualPosition - livePosition
+		}
+	}
+	for id := range counterfactualPositions {
+		if _, ok := livePositions[id]; !ok {
+			setDiff++
+		}
+	}
+
+	return setDiff, overlapCount, rankDeltaSum
 }
 
 func extractExpectedVectorDim(body string) (int, bool) {

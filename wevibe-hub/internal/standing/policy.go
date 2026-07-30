@@ -10,18 +10,19 @@ import (
 
 // Constants are the revisable edge-policy values used by the standing engine.
 type Constants struct {
-	InitialStandingBps   int32   `json:"initial_standing_bps"`
-	ServeDBps            int32   `json:"serve_d_bps"`
-	DenialDBps           int32   `json:"denial_d_bps"`
-	IdleDBps             int32   `json:"idle_d_bps"`
-	GraceEpochs          uint64  `json:"grace_epochs"`
-	TrustMinServes       uint64  `json:"trust_min_serves"`
-	TrustMaxRate         float64 `json:"trust_max_rate"`
-	IdleProtect          float64 `json:"idle_protect"`
-	IdleUntrusted        float64 `json:"idle_untrusted"`
-	ServeFloor           float64 `json:"serve_floor"`
-	DenialFloor          float64 `json:"denial_floor"`
-	StandingThresholdBps int32   `json:"standing_threshold_bps"`
+	InitialStandingBps       int32   `json:"initial_standing_bps"`
+	ServeDBps                int32   `json:"serve_d_bps"`
+	DenialDBps               int32   `json:"denial_d_bps"`
+	IdleDBps                 int32   `json:"idle_d_bps"`
+	GraceEpochs              uint64  `json:"grace_epochs"`
+	TrustMinServes           uint64  `json:"trust_min_serves"`
+	TrustMaxRate             float64 `json:"trust_max_rate"`
+	IdleProtect              float64 `json:"idle_protect"`
+	IdleUntrusted            float64 `json:"idle_untrusted"`
+	ServeFloor               float64 `json:"serve_floor"`
+	DenialFloor              float64 `json:"denial_floor"`
+	StandingThresholdBps     int32   `json:"standing_threshold_bps"`
+	ServePendingWindowEpochs uint64  `json:"serve_pending_window_epochs"`
 }
 
 // Policy is a parsed edge policy plus the SHA-256 hash of its raw file bytes.
@@ -74,6 +75,9 @@ func validatePolicyFile(file policyFile) error {
 	}
 	if c.StandingThresholdBps < 0 || c.StandingThresholdBps > 10000 {
 		return fmt.Errorf("standing policy: standing_threshold_bps must be in [0,10000]")
+	}
+	if c.ServePendingWindowEpochs == 0 {
+		return fmt.Errorf("standing policy: serve_pending_window_epochs must be positive")
 	}
 	if c.TrustMaxRate < 0 || c.TrustMaxRate > 1 {
 		return fmt.Errorf("standing policy: trust_max_rate must be in [0,1]")

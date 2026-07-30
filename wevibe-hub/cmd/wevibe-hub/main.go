@@ -44,11 +44,12 @@ func main() {
 	wlog.Init()
 	cfg := config.Load()
 	retrievalRanker := &retrieval.ProbabilisticRanker{
-		Temperature:       cfg.RetrievalTemperature,
-		NewMemBoostMult:   cfg.RetrievalNewMemBoostMult,
-		NewMemBoostWindow: cfg.RetrievalNewMemBoostWindow,
-		GraceEpochs:       20,
-		RNG:               rand.New(rand.NewSource(time.Now().UnixNano())),
+		Temperature:             cfg.RetrievalTemperature,
+		NewMemBoostMult:         cfg.RetrievalNewMemBoostMult,
+		NewMemBoostWindow:       cfg.RetrievalNewMemBoostWindow,
+		UniformExposureFraction: cfg.RetrievalOpenLoopFraction,
+		GraceEpochs:             20,
+		RNG:                     rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	retrieval.SetRetrievalRanker(retrievalRanker)
 	log.Printf("retrieval ranker configured: T=%.2f boost=%.2f window=%d",
@@ -66,6 +67,13 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if cfg.RetrievalCounterfactualLogging {
+		retrievalRanker.CounterfactualStandingBps = standingPolicy.Constants.InitialStandingBps
+	}
+	wlog.Op(ctx, "hub.retrieval_exposure_config", slog.LevelInfo,
+		slog.Float64("uniform_exposure_fraction", retrievalRanker.UniformExposureFraction),
+		slog.Bool("counterfactual_logging", cfg.RetrievalCounterfactualLogging),
+		slog.Int("counterfactual_standing_bps", int(retrievalRanker.CounterfactualStandingBps)))
 
 	responseSigner, err := hubsign.NewFromEnv()
 	if err != nil {

@@ -54,8 +54,11 @@ func TestProbabilisticRank_DeterministicWithFixedSeed(t *testing.T) {
 	r1 := rankerWithSeed(42, 0.7)
 	r2 := rankerWithSeed(42, 0.7)
 
-	gotA := r1.probabilisticRank(cloneScoredResults(scored), 5)
-	gotB := r2.probabilisticRank(cloneScoredResults(scored), 5)
+	gotA, probeA := r1.probabilisticRank(cloneScoredResults(scored), 5)
+	gotB, probeB := r2.probabilisticRank(cloneScoredResults(scored), 5)
+	if probeA || probeB {
+		t.Fatalf("uniform exposure probe unexpectedly enabled: A=%v B=%v", probeA, probeB)
+	}
 
 	t.Logf("deterministic run A: %v", extractCIDs(gotA))
 	t.Logf("deterministic run B: %v", extractCIDs(gotB))
@@ -87,7 +90,10 @@ func TestProbabilisticRank_Position1IsStrictArgmax(t *testing.T) {
 	t.Logf("argmax CID=%s score=%.8f", argmaxCID, argmaxScore)
 	for seed := int64(1); seed <= 100; seed++ {
 		ranker := rankerWithSeed(seed, 0.7)
-		ranked := ranker.probabilisticRank(cloneScoredResults(sortedInput), 5)
+		ranked, probed := ranker.probabilisticRank(cloneScoredResults(sortedInput), 5)
+		if probed {
+			t.Fatalf("seed=%d uniform exposure probe unexpectedly enabled", seed)
+		}
 		if len(ranked) == 0 {
 			t.Fatalf("seed=%d returned no results", seed)
 		}
@@ -105,7 +111,7 @@ func TestProbabilisticRank_LowTemperatureConcentratesTop(t *testing.T) {
 	matchCount := 0
 	for seed := int64(1); seed <= 100; seed++ {
 		ranker := rankerWithSeed(seed, 0.01)
-		ranked := ranker.probabilisticRank(cloneScoredResults(scored), 5)
+		ranked, _ := ranker.probabilisticRank(cloneScoredResults(scored), 5)
 		if len(ranked) >= 3 && ranked[1].result.CID == expectedSecond && ranked[2].result.CID == expectedThird {
 			matchCount++
 		}
@@ -126,7 +132,7 @@ func TestProbabilisticRank_HighTemperatureFlattensDistribution(t *testing.T) {
 
 	for seed := int64(1); seed <= 100; seed++ {
 		ranker := rankerWithSeed(seed, 2.0)
-		ranked := ranker.probabilisticRank(cloneScoredResults(scored), 5)
+		ranked, _ := ranker.probabilisticRank(cloneScoredResults(scored), 5)
 		for i := 1; i < len(ranked); i++ {
 			frequency[ranked[i].result.CID]++
 		}
@@ -158,7 +164,10 @@ func TestProbabilisticRank_AllScoresZero_NoSampling(t *testing.T) {
 	scored := makeScoredResults([]float64{0, 0, 0, 0, 0})
 	ranker := rankerWithSeed(9, 0.7)
 
-	ranked := ranker.probabilisticRank(cloneScoredResults(scored), 5)
+	ranked, probed := ranker.probabilisticRank(cloneScoredResults(scored), 5)
+	if probed {
+		t.Fatalf("uniform exposure probe unexpectedly enabled")
+	}
 	t.Logf("all-zero ranked CIDs: %v", extractCIDs(ranked))
 	if len(ranked) != 1 {
 		t.Fatalf("expected only strict position-1 result when all sampling weights are zero; got %d", len(ranked))
@@ -172,7 +181,10 @@ func TestProbabilisticRank_LimitGreaterThanCandidates(t *testing.T) {
 	scored := makeScoredResults([]float64{1.0, 0.8, 0.6})
 	ranker := rankerWithSeed(15, 0.7)
 
-	ranked := ranker.probabilisticRank(cloneScoredResults(scored), 10)
+	ranked, probed := ranker.probabilisticRank(cloneScoredResults(scored), 10)
+	if probed {
+		t.Fatalf("uniform exposure probe unexpectedly enabled")
+	}
 	t.Logf("limit>len ranked CIDs: %v", extractCIDs(ranked))
 	if len(ranked) != len(scored) {
 		t.Fatalf("expected %d results, got %d", len(scored), len(ranked))
@@ -184,7 +196,10 @@ func TestProbabilisticRank_TwoCandidates_ServePerEqualsOne(t *testing.T) {
 	scored := makeScoredResults([]float64{0.9, 0.1})
 	ranker := rankerWithSeed(55, 0.7)
 
-	ranked := ranker.probabilisticRank(cloneScoredResults(scored), 1)
+	ranked, probed := ranker.probabilisticRank(cloneScoredResults(scored), 1)
+	if probed {
+		t.Fatalf("uniform exposure probe unexpectedly enabled")
+	}
 	t.Logf("two-candidate limit=1 ranked CIDs: %v", extractCIDs(ranked))
 	if len(ranked) != 1 {
 		t.Fatalf("expected exactly one result, got %d", len(ranked))
@@ -192,6 +207,91 @@ func TestProbabilisticRank_TwoCandidates_ServePerEqualsOne(t *testing.T) {
 	if ranked[0].result.CID != scored[0].result.CID {
 		t.Fatalf("unexpected top result: got=%s want=%s", ranked[0].result.CID, scored[0].result.CID)
 	}
+}
+
+func TestProbabilisticRank_UniformExposureOffMatchesExistingSampler(t *testing.T) {
+	scored := makeScoredResults([]float64{1.0, 0.9, 0.8, 0.7, 0.6, 0.5})
+
+	baseline := rankerWithSeed(123, 0.7)
+	off := rankerWithSeed(123, 0.7)
+	off.UniformExposureFraction = 0
+
+	want, wantProbed := baseline.probabilisticRank(cloneScoredResults(scored), 4)
+	got, gotProbed := off.probabilisticRank(cloneScoredResults(scored), 4)
+	if wantProbed || gotProbed {
+		t.Fatalf("uniform exposure probe unexpectedly enabled: baseline=%v off=%v", wantProbed, gotProbed)
+	}
+	requireSameCIDOrder(t, got, want)
+}
+
+func TestProbabilisticRank_UniformExposureSamplesTopUniformly(t *testing.T) {
+	scored := makeScoredResults([]float64{1.0, 0.01, 0.01, 0.01, 0.01})
+	argmaxCID := scored[0].result.CID
+	topCounts := make(map[string]int, len(scored))
+	argmaxTopCount := 0
+
+	for seed := int64(1); seed <= 500; seed++ {
+		ranker := rankerWithSeed(seed, 0.7)
+		ranker.UniformExposureFraction = 1.0
+		ranked, probed := ranker.probabilisticRank(cloneScoredResults(scored), 3)
+		if !probed {
+			t.Fatalf("seed=%d expected uniform exposure probe", seed)
+		}
+		if len(ranked) == 0 {
+			t.Fatalf("seed=%d returned no results", seed)
+		}
+		topCounts[ranked[0].result.CID]++
+		if ranked[0].result.CID == argmaxCID {
+			argmaxTopCount++
+		}
+	}
+
+	if argmaxTopCount == 500 {
+		t.Fatalf("uniform exposure kept strict argmax at position 0 for every draw")
+	}
+	for _, sr := range scored[1:] {
+		count := topCounts[sr.result.CID]
+		t.Logf("uniform top frequency %s=%d", sr.result.CID, count)
+		if count < 60 || count > 140 {
+			t.Fatalf("low-scoring candidate %s top frequency outside rough uniform band: got=%d", sr.result.CID, count)
+		}
+	}
+}
+
+func TestProbabilisticRank_UniformExposureReturnsLimitDistinctCandidates(t *testing.T) {
+	scored := makeScoredResults([]float64{1.0, 0.9, 0.8, 0.7, 0.6})
+	ranker := rankerWithSeed(88, 0.7)
+	ranker.UniformExposureFraction = 1.0
+
+	ranked, probed := ranker.probabilisticRank(cloneScoredResults(scored), 4)
+	if !probed {
+		t.Fatalf("expected uniform exposure probe")
+	}
+	if len(ranked) != 4 {
+		t.Fatalf("expected exactly 4 results, got %d", len(ranked))
+	}
+	seen := make(map[string]struct{}, len(ranked))
+	for _, sr := range ranked {
+		if _, ok := seen[sr.result.CID]; ok {
+			t.Fatalf("duplicate CID returned: %s", sr.result.CID)
+		}
+		seen[sr.result.CID] = struct{}{}
+	}
+}
+
+func TestProbabilisticRank_UniformExposureDeterministicWithFixedSeed(t *testing.T) {
+	scored := makeScoredResults([]float64{1.0, 0.9, 0.8, 0.7, 0.6, 0.5})
+	r1 := rankerWithSeed(321, 0.7)
+	r2 := rankerWithSeed(321, 0.7)
+	r1.UniformExposureFraction = 0.5
+	r2.UniformExposureFraction = 0.5
+
+	gotA, probeA := r1.probabilisticRank(cloneScoredResults(scored), 4)
+	gotB, probeB := r2.probabilisticRank(cloneScoredResults(scored), 4)
+	if probeA != probeB {
+		t.Fatalf("probe decision mismatch: A=%v B=%v", probeA, probeB)
+	}
+	requireSameCIDOrder(t, gotA, gotB)
 }
 
 func extractCIDs(results []scoredResult) []string {

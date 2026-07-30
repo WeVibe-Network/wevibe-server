@@ -63,8 +63,10 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 		}
 	}
 	updated := 0
+	var voidServes uint64
 	for key := range grouped {
-		if err := recomputeMemoryStandingFromGrouped(ctx, pool, qdrantClient, pol, key.orgID, key.memoryCID, grouped[key]); err != nil {
+		memoryVoidServes, err := recomputeMemoryStandingFromGrouped(ctx, pool, qdrantClient, pol, key.orgID, key.memoryCID, grouped[key])
+		if err != nil {
 			wlog.Op(ctx, "chain.standing_rebuild", slog.LevelError,
 				slog.String("status", "err"),
 				slog.String("org", key.orgID),
@@ -73,6 +75,7 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 				slog.Int64("dur_ms", time.Since(start).Milliseconds()))
 			return err
 		}
+		voidServes += memoryVoidServes
 		updated++
 	}
 
@@ -80,6 +83,7 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 		slog.String("status", "ok"),
 		slog.Int("memory_count", updated),
 		slog.Int("event_count", len(events)),
+		slog.Uint64("void_serves", voidServes),
 		slog.String("policy_version", pol.Version),
 		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
 	return nil
@@ -104,7 +108,8 @@ func RecomputeMemoryStanding(ctx context.Context, chainClient *GrpcClient, pool 
 	if err != nil {
 		return err
 	}
-	if err := recomputeMemoryStandingFromGrouped(ctx, pool, qdrantClient, pol, orgID, memoryCID, events); err != nil {
+	voidServes, err := recomputeMemoryStandingFromGrouped(ctx, pool, qdrantClient, pol, orgID, memoryCID, events)
+	if err != nil {
 		wlog.Op(ctx, "chain.standing_rebuild", slog.LevelError,
 			slog.String("status", "err"),
 			slog.String("org", orgID),
@@ -118,6 +123,7 @@ func RecomputeMemoryStanding(ctx context.Context, chainClient *GrpcClient, pool 
 		slog.String("org", orgID),
 		slog.String("memory_fp", first8(memoryCID)),
 		slog.Int("event_count", len(events)),
+		slog.Uint64("void_serves", voidServes),
 		slog.String("policy_version", pol.Version),
 		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
 	return nil
@@ -288,7 +294,7 @@ func loadExistingStandingKeys(ctx context.Context, pool *pgxpool.Pool) ([]standi
 	return keys, nil
 }
 
-func recomputeMemoryStandingFromGrouped(ctx context.Context, pool *pgxpool.Pool, qdrantClient *retrieval.QdrantClient, pol *standing.Policy, orgID, memoryCID string, replay []standingReplayEvent) error {
+func recomputeMemoryStandingFromGrouped(ctx context.Context, pool *pgxpool.Pool, qdrantClient *retrieval.QdrantClient, pol *standing.Policy, orgID, memoryCID string, replay []standingReplayEvent) (uint64, error) {
 	ordered := make([]standing.Event, 0, len(replay))
 	for _, event := range replay {
 		ordered = append(ordered, standing.Event{Epoch: event.Epoch, Kind: event.Kind})
@@ -320,13 +326,13 @@ func recomputeMemoryStandingFromGrouped(ctx context.Context, pool *pgxpool.Pool,
 			computed_at = NOW()
 	`, memoryCID, orgID, result.StandingBps, result.ServeCount, result.DenialCount, result.DenialRate, result.Trusted, result.Archived, pol.Version)
 	if err != nil {
-		return fmt.Errorf("upsert memory standing: %w", err)
+		return 0, fmt.Errorf("upsert memory standing: %w", err)
 	}
 
 	if err := qdrantClient.UpdateStanding(ctx, orgID, memoryCID, result.StandingBps, result.Archived); err != nil {
-		return fmt.Errorf("update qdrant standing: %w", err)
+		return 0, fmt.Errorf("update qdrant standing: %w", err)
 	}
-	return nil
+	return result.VoidServes, nil
 }
 
 func first8(value string) string {
