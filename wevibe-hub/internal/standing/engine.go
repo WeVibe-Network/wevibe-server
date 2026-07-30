@@ -1,6 +1,9 @@
 package standing
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
 // Kind is the recall-pivot evidence kind folded into memory standing.
 type Kind int
@@ -12,10 +15,21 @@ const (
 	OutcomeFailed
 )
 
-// Event is one ordered recall event for a memory.
+// Event is one recall event for a memory.
 type Event struct {
+	// Epoch is the public chain epoch that contains this event.
 	Epoch uint64
-	Kind  Kind
+	// Kind is the standing evidence kind carried by this event.
+	Kind Kind
+	// Ref is the explicit pairing reference. For Serve events it is that serve's
+	// own fingerprint hex; for OutcomeWorked/OutcomeFailed events it is the
+	// serve_ref hex that points at the served evidence; for Block events it is
+	// empty and ignored.
+	Ref string
+	// Seq is this event's own event-fingerprint hex. It is used only as a
+	// deterministic tiebreak after Epoch and KindRank so replay folds the public
+	// event log in a total order of (Epoch ASC, KindRank ASC, Seq ASC).
+	Seq string
 }
 
 // Result is the derived per-memory standing scalar and visibility outcome.
@@ -48,7 +62,7 @@ func Compute(events []Event, createdEpoch, currentEpoch uint64, policy Policy) R
 
 	var serves uint64
 	var denials uint64
-	tallies, voidServes := resolvePendingServes(events, createdEpoch, currentEpoch, c.ServePendingWindowEpochs)
+	tallies, voidServes := resolvePendingServes(events, createdEpoch, currentEpoch, c.ServePendingWindowEpochs, c.WorkedServeQuanta)
 	if currentEpoch < createdEpoch {
 		return finalizeResult(standing, serves, denials, voidServes, c)
 	}
@@ -87,10 +101,19 @@ func Compute(events []Event, createdEpoch, currentEpoch uint64, policy Policy) R
 	return finalizeResult(standing, serves, denials, voidServes, c)
 }
 
-func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window uint64) (map[uint64]epochTally, uint64) {
+func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window, workedServeQuanta uint64) (map[uint64]epochTally, uint64) {
 	tallies := make(map[uint64]epochTally)
-	pending := make([]uint64, 0)
-	pendingHead := 0
+	ordered := append([]Event(nil), events...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Epoch != ordered[j].Epoch {
+			return ordered[i].Epoch < ordered[j].Epoch
+		}
+		if eventKindRank(ordered[i].Kind) != eventKindRank(ordered[j].Kind) {
+			return eventKindRank(ordered[i].Kind) < eventKindRank(ordered[j].Kind)
+		}
+		return ordered[i].Seq < ordered[j].Seq
+	})
+	pending := make([]pendingServe, 0)
 	var voidServes uint64
 
 	markActivity := func(epoch uint64) {
@@ -98,9 +121,9 @@ func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window uin
 		tally.activity = true
 		tallies[epoch] = tally
 	}
-	addServe := func(epoch uint64) {
+	addServe := func(epoch uint64, quanta uint64) {
 		tally := tallies[epoch]
-		tally.serves++
+		tally.serves += quanta
 		tally.activity = true
 		tallies[epoch] = tally
 	}
@@ -111,7 +134,7 @@ func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window uin
 		tallies[epoch] = tally
 	}
 
-	for _, event := range events {
+	for _, event := range ordered {
 		if event.Epoch < createdEpoch {
 			continue
 		}
@@ -121,35 +144,72 @@ func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window uin
 
 		switch event.Kind {
 		case Serve:
-			pending = append(pending, event.Epoch)
+			pending = append(pending, pendingServe{epoch: event.Epoch, ref: event.Ref})
 			markActivity(event.Epoch)
 		case OutcomeWorked, OutcomeFailed:
-			for pendingHead < len(pending) && event.Epoch-pending[pendingHead] > window {
-				pendingHead++
-				voidServes++
-			}
-			if pendingHead < len(pending) {
-				serveEpoch := pending[pendingHead]
-				pendingHead++
+			serveIndex := matchingServeIndex(pending, event, window)
+			if serveIndex >= 0 {
+				serveEpoch := pending[serveIndex].epoch
+				pending[serveIndex].claimed = true
 				if event.Kind == OutcomeWorked {
-					addServe(serveEpoch)
+					addServe(serveEpoch, workedServeQuanta)
 				} else {
 					addDenial(serveEpoch)
 				}
-				continue
-			}
-			if event.Kind == OutcomeWorked {
-				addServe(event.Epoch)
-			} else {
-				addDenial(event.Epoch)
 			}
 		case Block:
 			addDenial(event.Epoch)
 		}
 	}
 
-	voidServes += uint64(len(pending) - pendingHead)
+	for _, serve := range pending {
+		if !serve.claimed {
+			voidServes++
+		}
+	}
 	return tallies, voidServes
+}
+
+// eventKindRank preserves same-epoch causality in the public replay order:
+// a serve-registering event (Serve or Block) is never causally after an outcome
+// that consumes same-epoch evidence, while fingerprint hash order carries no
+// causal information. Seq remains the deterministic tiebreak within the same
+// epoch and same causal class.
+func eventKindRank(kind Kind) int {
+	switch kind {
+	case Serve, Block:
+		return 0
+	case OutcomeWorked, OutcomeFailed:
+		return 1
+	default:
+		return 2
+	}
+}
+
+type pendingServe struct {
+	epoch   uint64
+	ref     string
+	claimed bool
+}
+
+// matchingServeIndex applies explicit serve_ref pairing. An outcome pairs only
+// to an unclaimed earlier Serve with the same Ref and within the pending window;
+// unknown/out-of-window outcomes contribute nothing. Double-spend rejection is
+// first-pairing-wins: events are processed in (Epoch ASC, KindRank ASC, Seq ASC)
+// order, so the first in-window outcome to claim a serve consumes it, and later
+// outcomes with the same Ref are ignored entirely as duplicate/replay evidence.
+func matchingServeIndex(pending []pendingServe, outcome Event, window uint64) int {
+	for i := range pending {
+		serve := pending[i]
+		if serve.claimed || serve.ref == "" || serve.ref != outcome.Ref {
+			continue
+		}
+		if outcome.Epoch < serve.epoch || outcome.Epoch-serve.epoch > window {
+			continue
+		}
+		return i
+	}
+	return -1
 }
 
 func finalizeResult(standing float64, serves, denials, voidServes uint64, c Constants) Result {

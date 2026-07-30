@@ -431,7 +431,7 @@ CREATE TABLE IF NOT EXISTS serve_events (
     serve_key_pubkey    TEXT        NOT NULL,
     serve_sig           TEXT        NOT NULL,
     nonce               TEXT        NOT NULL,
-    serve_fingerprint   TEXT,
+    serve_fingerprint   TEXT        NOT NULL,
     contributor_id      TEXT        NOT NULL,
     model_id            TEXT        NOT NULL DEFAULT '',
     turn_count          INTEGER     NOT NULL DEFAULT 0,
@@ -454,6 +454,7 @@ CREATE INDEX IF NOT EXISTS idx_serve_events_org_status ON serve_events(org_id, s
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_epoch ON serve_events(org_id, epoch_id);
 CREATE INDEX IF NOT EXISTS idx_serve_events_org_status_type ON serve_events(org_id, status, event_type);
 CREATE INDEX IF NOT EXISTS idx_serve_events_pending_created ON serve_events(created_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_serve_events_pairing_ref ON serve_events(org_id, memory_content_hash, serve_fingerprint);
 
 -- Content-free E3 use-leg outcome events reported by MCP (refs only).
 -- fingerprint = sha256(canonical wevibe-event-v1 body); it is the dedup key.
@@ -466,6 +467,7 @@ CREATE TABLE IF NOT EXISTS outcome_events (
     nonce               TEXT        NOT NULL,
     signature           TEXT        NOT NULL,
     episode_ref         TEXT        NOT NULL,
+    serve_ref           TEXT        NOT NULL,
     worked              BOOLEAN     NOT NULL,
     evidence_ref        TEXT        NOT NULL,
     fingerprint         TEXT        NOT NULL UNIQUE,
@@ -479,6 +481,7 @@ CREATE TABLE IF NOT EXISTS outcome_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_outcome_events_org_status ON outcome_events(org_id, status);
+CREATE INDEX IF NOT EXISTS idx_outcome_events_pairing_ref ON outcome_events(org_id, memory_content_hash, serve_ref);
 
 -- DERIVED projection only: standing = f(events, anchored policy_version); wipe-safe.
 -- Rebuildable projection; never authoritative.

@@ -38,6 +38,9 @@ func TestLoadPolicyRealFile(t *testing.T) {
 	if policy.Constants.ServePendingWindowEpochs != 1440 {
 		t.Fatalf("ServePendingWindowEpochs = %d, want 1440", policy.Constants.ServePendingWindowEpochs)
 	}
+	if policy.Constants.WorkedServeQuanta != 2 {
+		t.Fatalf("WorkedServeQuanta = %d, want 2", policy.Constants.WorkedServeQuanta)
+	}
 }
 
 func TestLoadPolicyRejectsInvalidPolicy(t *testing.T) {
@@ -60,6 +63,16 @@ func TestLoadPolicyRejectsInvalidPolicy(t *testing.T) {
 			name:    "serve pending window zero",
 			body:    `{"policy_version":"edge-policy-v1","constants":{"initial_standing_bps":10000,"serve_pending_window_epochs":0}}`,
 			wantErr: "serve_pending_window_epochs",
+		},
+		{
+			name:    "worked serve quanta missing",
+			body:    `{"policy_version":"edge-policy-v1","constants":{"initial_standing_bps":10000,"serve_pending_window_epochs":1440}}`,
+			wantErr: "worked_serve_quanta",
+		},
+		{
+			name:    "worked serve quanta zero",
+			body:    `{"policy_version":"edge-policy-v1","constants":{"initial_standing_bps":10000,"serve_pending_window_epochs":1440,"worked_serve_quanta":0}}`,
+			wantErr: "worked_serve_quanta",
 		},
 	}
 

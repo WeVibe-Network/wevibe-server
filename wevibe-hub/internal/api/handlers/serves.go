@@ -135,10 +135,12 @@ func RecordEvent(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	status := "err"
 	fingerprint8 := ""
+	serveRef8 := ""
 	defer func() {
 		wlog.Op(ctx, "hub.record_event", slog.LevelInfo,
 			slog.String("status", status),
 			slog.String("fingerprint", fingerprint8),
+			slog.String("serve_ref", serveRef8),
 			slog.Int64("dur_ms", time.Since(start).Milliseconds()))
 	}()
 
@@ -194,8 +196,18 @@ func RecordEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	req.OrgID = orgID
 	fingerprint8 = first8(req.Fingerprint)
+	serveRef8 = first8(req.ServeRef)
+	wlog.Op(ctx, "hub.record_event", slog.LevelInfo,
+		slog.String("phase", "entry"),
+		slog.String("org", orgID),
+		slog.String("fingerprint", fingerprint8),
+		slog.String("serve_ref", serveRef8))
 	if req.EventType != serves.EventTypeOutcome {
 		http.Error(w, `{"error":"unsupported event_type"}`, http.StatusBadRequest)
+		return
+	}
+	if err := validateServeRefIntake(req.ServeRef); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -241,6 +253,20 @@ func hasContentFields(body []byte) bool {
 	return false
 }
 
+func validateServeRefIntake(value string) error {
+	if value == "" {
+		return fmt.Errorf("serve_ref is required")
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("serve_ref must be valid hex")
+	}
+	if len(decoded) != 32 {
+		return fmt.Errorf("serve_ref must be exactly 32 bytes")
+	}
+	return nil
+}
+
 func canonicalOutcomeRequestBody(req serves.RecordOutcomeRequest) ([]byte, []byte, []byte, error) {
 	memoryHash, err := decodeExactHex("memory_hash", req.MemoryContentHash, 32)
 	if err != nil {
@@ -266,8 +292,13 @@ func canonicalOutcomeRequestBody(req serves.RecordOutcomeRequest) ([]byte, []byt
 	if err != nil || len(evidenceRef) == 0 {
 		return nil, nil, nil, fmt.Errorf("evidence_ref must be non-empty hex")
 	}
+	serveRef, err := decodeExactHex("serve_ref", req.ServeRef, 32)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
 		EpisodeRef:  episodeRef,
+		ServeRef:    serveRef,
 		Worked:      req.Worked,
 		EvidenceRef: evidenceRef,
 	}}}
@@ -644,6 +675,7 @@ func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, se
 				Nonce:             record.Nonce,
 				Signature:         record.Signature,
 				EpisodeRef:        record.EpisodeRef,
+				ServeRef:          record.ServeRef,
 				Worked:            record.Worked,
 				EvidenceRef:       record.EvidenceRef,
 				Fingerprint:       record.Fingerprint,

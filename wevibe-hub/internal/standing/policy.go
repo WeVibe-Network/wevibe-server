@@ -23,6 +23,7 @@ type Constants struct {
 	DenialFloor              float64 `json:"denial_floor"`
 	StandingThresholdBps     int32   `json:"standing_threshold_bps"`
 	ServePendingWindowEpochs uint64  `json:"serve_pending_window_epochs"`
+	WorkedServeQuanta        uint64  `json:"worked_serve_quanta"`
 }
 
 // Policy is a parsed edge policy plus the SHA-256 hash of its raw file bytes.
@@ -78,6 +79,9 @@ func validatePolicyFile(file policyFile) error {
 	}
 	if c.ServePendingWindowEpochs == 0 {
 		return fmt.Errorf("standing policy: serve_pending_window_epochs must be positive")
+	}
+	if c.WorkedServeQuanta == 0 {
+		return fmt.Errorf("standing policy: worked_serve_quanta must be positive")
 	}
 	if c.TrustMaxRate < 0 || c.TrustMaxRate > 1 {
 		return fmt.Errorf("standing policy: trust_max_rate must be in [0,1]")

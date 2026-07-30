@@ -34,9 +34,11 @@ type OutcomeEventInput struct {
 	Nonce             string
 	Signature         string
 	EpisodeRef        string
-	Worked            bool
-	EvidenceRef       string
-	Fingerprint       string
+	// ServeRef is the hex serve fingerprint for the served-pairing reference.
+	ServeRef    string
+	Worked      bool
+	EvidenceRef string
+	Fingerprint string
 }
 
 type DenialEntryInput struct {
@@ -120,6 +122,10 @@ func buildOutcomeEventEntries(orgID string, entries []OutcomeEventInput) (uint64
 		if err != nil {
 			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
 		}
+		serveRef, err := decodeHexField(e.ServeRef, "serve_ref", 32)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
 
 		event := &servetypes.EventEntry{
 			EventType:         servetypes.EventType_EVENT_TYPE_OUTCOME,
@@ -129,6 +135,7 @@ func buildOutcomeEventEntries(orgID string, entries []OutcomeEventInput) (uint64
 			Signature:         signature,
 			Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
 				EpisodeRef:  episodeRef,
+				ServeRef:    serveRef,
 				Worked:      e.Worked,
 				EvidenceRef: evidenceRef,
 			}},

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,8 +19,16 @@ type standingReplayEvent struct {
 	MemoryCID   string
 	Epoch       uint64
 	Kind        standing.Kind
+	Ref         string
+	Seq         string
 	Fingerprint string
 	ChainGated  bool
+}
+
+type standingReplayStats struct {
+	Serves          int
+	Outcomes        int
+	DroppedOutcomes int
 }
 
 func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrantClient *retrieval.QdrantClient, pool *pgxpool.Pool, pol *standing.Policy) error {
@@ -43,7 +50,7 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 		slog.String("status", "start"),
 		slog.String("policy_version", pol.Version))
 
-	events, err := loadStandingReplayEvents(ctx, chainClient, pool, "", "")
+	events, stats, err := loadStandingReplayEvents(ctx, chainClient, pool, "", "")
 	if err != nil {
 		wlog.Op(ctx, "chain.standing_rebuild", slog.LevelError,
 			slog.String("status", "err"),
@@ -83,6 +90,9 @@ func SyncStandingFromEvents(ctx context.Context, chainClient *GrpcClient, qdrant
 		slog.String("status", "ok"),
 		slog.Int("memory_count", updated),
 		slog.Int("event_count", len(events)),
+		slog.Int("serve_count", stats.Serves),
+		slog.Int("outcome_count", stats.Outcomes),
+		slog.Int("dropped_outcome_count", stats.DroppedOutcomes),
 		slog.Uint64("void_serves", voidServes),
 		slog.String("policy_version", pol.Version),
 		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
@@ -104,7 +114,7 @@ func RecomputeMemoryStanding(ctx context.Context, chainClient *GrpcClient, pool 
 	}
 
 	start := time.Now()
-	events, err := loadStandingReplayEvents(ctx, chainClient, pool, orgID, memoryCID)
+	events, stats, err := loadStandingReplayEvents(ctx, chainClient, pool, orgID, memoryCID)
 	if err != nil {
 		return err
 	}
@@ -123,6 +133,9 @@ func RecomputeMemoryStanding(ctx context.Context, chainClient *GrpcClient, pool 
 		slog.String("org", orgID),
 		slog.String("memory_fp", first8(memoryCID)),
 		slog.Int("event_count", len(events)),
+		slog.Int("serve_count", stats.Serves),
+		slog.Int("outcome_count", stats.Outcomes),
+		slog.Int("dropped_outcome_count", stats.DroppedOutcomes),
 		slog.Uint64("void_serves", voidServes),
 		slog.String("policy_version", pol.Version),
 		slog.Int64("dur_ms", time.Since(start).Milliseconds()))
@@ -143,31 +156,31 @@ func groupStandingEvents(events []standingReplayEvent) map[standingKey][]standin
 	return grouped
 }
 
-func loadStandingReplayEvents(ctx context.Context, chainClient *GrpcClient, pool *pgxpool.Pool, orgID, memoryCID string) ([]standingReplayEvent, error) {
+func loadStandingReplayEvents(ctx context.Context, chainClient *GrpcClient, pool *pgxpool.Pool, orgID, memoryCID string) ([]standingReplayEvent, standingReplayStats, error) {
 	rows, err := pool.Query(ctx, `
-			SELECT org_id, memory_content_hash, epoch_id, kind, fingerprint, chain_gated
-			FROM (
-				SELECT org_id, memory_content_hash, epoch_id,
-				       CASE WHEN event_type = 'serve' THEN 'serve' ELSE 'block' END AS kind,
-				       '' AS fingerprint,
-				       FALSE AS chain_gated,
-				       created_at
-				FROM serve_events
-				WHERE status = 'submitted'
-				UNION ALL
-				SELECT org_id, memory_content_hash, epoch_id,
-				       CASE WHEN worked THEN 'outcome_worked' ELSE 'outcome_failed' END AS kind,
-				       fingerprint,
-				       TRUE AS chain_gated,
-				       created_at
-				FROM outcome_events
-				WHERE status = 'submitted'
-		) events
-		WHERE ($1 = '' OR org_id = $1) AND ($2 = '' OR memory_content_hash = $2)
-		ORDER BY org_id, memory_content_hash, epoch_id, created_at
-	`, orgID, memoryCID)
+				SELECT org_id, memory_content_hash, epoch_id, kind, ref, fingerprint, chain_gated
+				FROM (
+					SELECT org_id, memory_content_hash, epoch_id,
+					       CASE WHEN event_type = 'serve' THEN 'serve' ELSE 'block' END AS kind,
+					       serve_fingerprint AS ref,
+					       serve_fingerprint AS fingerprint,
+					       FALSE AS chain_gated
+					FROM serve_events
+					WHERE status = 'submitted'
+					UNION ALL
+					SELECT org_id, memory_content_hash, epoch_id,
+					       CASE WHEN worked THEN 'outcome_worked' ELSE 'outcome_failed' END AS kind,
+					       serve_ref AS ref,
+					       fingerprint,
+					       TRUE AS chain_gated
+					FROM outcome_events
+					WHERE status = 'submitted'
+			) events
+			WHERE ($1 = '' OR org_id = $1) AND ($2 = '' OR memory_content_hash = $2)
+			ORDER BY org_id, memory_content_hash, epoch_id, fingerprint
+		`, orgID, memoryCID)
 	if err != nil {
-		return nil, fmt.Errorf("load standing replay events: %w", err)
+		return nil, standingReplayStats{}, fmt.Errorf("load standing replay events: %w", err)
 	}
 	defer rows.Close()
 
@@ -176,13 +189,14 @@ func loadStandingReplayEvents(ctx context.Context, chainClient *GrpcClient, pool
 		var event standingReplayEvent
 		var kind string
 		var epoch int64
-		if err := rows.Scan(&event.OrgID, &event.MemoryCID, &epoch, &kind, &event.Fingerprint, &event.ChainGated); err != nil {
-			return nil, fmt.Errorf("scan standing replay event: %w", err)
+		if err := rows.Scan(&event.OrgID, &event.MemoryCID, &epoch, &kind, &event.Ref, &event.Fingerprint, &event.ChainGated); err != nil {
+			return nil, standingReplayStats{}, fmt.Errorf("scan standing replay event: %w", err)
 		}
 		if epoch < 0 {
-			return nil, fmt.Errorf("negative epoch for org=%s memory=%s", event.OrgID, event.MemoryCID)
+			return nil, standingReplayStats{}, fmt.Errorf("negative epoch for org=%s memory=%s", event.OrgID, event.MemoryCID)
 		}
 		event.Epoch = uint64(epoch)
+		event.Seq = event.Fingerprint
 		switch kind {
 		case "serve":
 			event.Kind = standing.Serve
@@ -193,18 +207,33 @@ func loadStandingReplayEvents(ctx context.Context, chainClient *GrpcClient, pool
 		case "outcome_failed":
 			event.Kind = standing.OutcomeFailed
 		default:
-			return nil, fmt.Errorf("unknown standing event kind %q", kind)
+			return nil, standingReplayStats{}, fmt.Errorf("unknown standing event kind %q", kind)
 		}
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate standing replay events: %w", err)
+		return nil, standingReplayStats{}, fmt.Errorf("iterate standing replay events: %w", err)
 	}
+	stats := countStandingReplayEvents(events)
 	filtered, err := filterOutcomeReplayEventsFromChain(ctx, chainClient, events)
 	if err != nil {
-		return nil, err
+		return nil, standingReplayStats{}, err
 	}
-	return filtered, nil
+	stats.DroppedOutcomes = len(events) - len(filtered)
+	return filtered, stats, nil
+}
+
+func countStandingReplayEvents(events []standingReplayEvent) standingReplayStats {
+	var stats standingReplayStats
+	for _, event := range events {
+		switch event.Kind {
+		case standing.Serve:
+			stats.Serves++
+		case standing.OutcomeWorked, standing.OutcomeFailed:
+			stats.Outcomes++
+		}
+	}
+	return stats
 }
 
 func filterOutcomeReplayEventsFromChain(ctx context.Context, chainClient *GrpcClient, events []standingReplayEvent) ([]standingReplayEvent, error) {
@@ -297,15 +326,22 @@ func loadExistingStandingKeys(ctx context.Context, pool *pgxpool.Pool) ([]standi
 func recomputeMemoryStandingFromGrouped(ctx context.Context, pool *pgxpool.Pool, qdrantClient *retrieval.QdrantClient, pol *standing.Policy, orgID, memoryCID string, replay []standingReplayEvent) (uint64, error) {
 	ordered := make([]standing.Event, 0, len(replay))
 	for _, event := range replay {
-		ordered = append(ordered, standing.Event{Epoch: event.Epoch, Kind: event.Kind})
+		ordered = append(ordered, standing.Event{Epoch: event.Epoch, Kind: event.Kind, Ref: event.Ref, Seq: event.Seq})
 	}
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Epoch < ordered[j].Epoch })
 
 	createdEpoch := uint64(0)
 	currentEpoch := uint64(0)
 	if len(ordered) > 0 {
 		createdEpoch = ordered[0].Epoch
-		currentEpoch = ordered[len(ordered)-1].Epoch
+		currentEpoch = ordered[0].Epoch
+		for _, event := range ordered[1:] {
+			if event.Epoch < createdEpoch {
+				createdEpoch = event.Epoch
+			}
+			if event.Epoch > currentEpoch {
+				currentEpoch = event.Epoch
+			}
+		}
 	}
 	// Recall-pivot projection is rebuildable from hub event rows. If the original
 	// commitment epoch is not cheaply present here, the earliest known event epoch

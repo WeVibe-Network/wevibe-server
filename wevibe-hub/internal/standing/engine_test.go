@@ -1,6 +1,17 @@
 package standing
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
+
+const (
+	refA                      = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	refB                      = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	liveServeSeq              = "99e911e79be172528f04249cc60848715b92480993d685fcaad397403b2f1e0b"
+	liveOutcomeBeforeServeSeq = "9417b0cc00000000000000000000000000000000000000000000000000000000"
+	liveOutcomeAfterServeSeq  = "aa17b0cc00000000000000000000000000000000000000000000000000000000"
+)
 
 func testPolicy(t *testing.T) Policy {
 	t.Helper()
@@ -11,11 +22,15 @@ func testPolicy(t *testing.T) Policy {
 	return policy
 }
 
+func ev(epoch uint64, kind Kind, ref, seq string) Event {
+	return Event{Epoch: epoch, Kind: kind, Ref: ref, Seq: seq}
+}
+
 func TestGraceProtectsWhileCountsAccumulate(t *testing.T) {
 	policy := testPolicy(t)
 	result := Compute([]Event{
-		{Epoch: 0, Kind: Serve},
-		{Epoch: 5, Kind: OutcomeFailed},
+		ev(0, Serve, refA, "001"),
+		ev(5, OutcomeFailed, refA, "002"),
 	}, 0, 19, policy)
 
 	if result.StandingBps != 10000 {
@@ -25,7 +40,7 @@ func TestGraceProtectsWhileCountsAccumulate(t *testing.T) {
 		t.Fatalf("counts = (%d,%d), want (0,1) after pending serve resolves to denial", result.ServeCount, result.DenialCount)
 	}
 	if result.Trusted {
-		t.Fatal("Trusted = true, want false after 50% denial rate")
+		t.Fatal("Trusted = true, want false after 100% denial rate")
 	}
 }
 
@@ -43,7 +58,7 @@ func TestUntrustedIdleDrainsToArchive(t *testing.T) {
 
 func TestOneServeThenCleanIdleSurvives(t *testing.T) {
 	policy := testPolicy(t)
-	result := Compute([]Event{{Epoch: 0, Kind: Serve}, {Epoch: 1, Kind: OutcomeWorked}}, 0, 100, policy)
+	result := Compute([]Event{ev(0, Serve, refA, "001"), ev(1, OutcomeWorked, refA, "002")}, 0, 100, policy)
 
 	if !result.Trusted {
 		t.Fatal("Trusted = false, want true after one realized clean serve")
@@ -59,8 +74,8 @@ func TestOneServeThenCleanIdleSurvives(t *testing.T) {
 func TestFailedOutcomesTripTrustGateAndDrainFast(t *testing.T) {
 	policy := testPolicy(t)
 	result := Compute([]Event{
-		{Epoch: 0, Kind: Serve},
-		{Epoch: 20, Kind: OutcomeFailed},
+		ev(0, Serve, refA, "001"),
+		ev(20, OutcomeFailed, refA, "002"),
 	}, 0, 34, policy)
 
 	if result.DenialRate < policy.Constants.TrustMaxRate {
@@ -74,22 +89,24 @@ func TestFailedOutcomesTripTrustGateAndDrainFast(t *testing.T) {
 	}
 }
 
-func TestWorkedOutcomesBoostLikeServes(t *testing.T) {
+func TestUnknownOutcomeContributesNothing(t *testing.T) {
 	policy := testPolicy(t)
-	worked := Compute([]Event{{Epoch: 20, Kind: OutcomeWorked}}, 0, 20, policy)
+	baseline := Compute(nil, 0, 20, policy)
+	worked := Compute([]Event{ev(20, OutcomeWorked, refA, "001")}, 0, 20, policy)
+	failed := Compute([]Event{ev(20, OutcomeFailed, refA, "001")}, 0, 20, policy)
 
-	if worked.ServeCount != 1 {
-		t.Fatalf("ServeCount = %d, want orphan worked outcome to count as 1 serve-equivalent", worked.ServeCount)
+	if worked != baseline {
+		t.Fatalf("unknown worked outcome result = %+v, want baseline %+v", worked, baseline)
 	}
-	if !worked.Trusted {
-		t.Fatalf("Trusted = false, want orphan worked outcome to preserve serve-equivalent trust; result=%+v", worked)
+	if failed != baseline {
+		t.Fatalf("unknown failed outcome result = %+v, want baseline %+v", failed, baseline)
 	}
 }
 
 func TestNoOutcomeServeIsNeutralAndVoid(t *testing.T) {
 	policy := testPolicy(t)
 	baselineBeforeServeEpoch := Compute(nil, 0, 19, policy)
-	result := Compute([]Event{{Epoch: 20, Kind: Serve}}, 0, 20, policy)
+	result := Compute([]Event{ev(20, Serve, refA, "001")}, 0, 20, policy)
 
 	if result.StandingBps != baselineBeforeServeEpoch.StandingBps {
 		t.Fatalf("StandingBps = %d, want unchanged pre-serve standing %d", result.StandingBps, baselineBeforeServeEpoch.StandingBps)
@@ -97,84 +114,153 @@ func TestNoOutcomeServeIsNeutralAndVoid(t *testing.T) {
 	if result.ServeCount != 0 || result.DenialCount != 0 || result.VoidServes != 1 {
 		t.Fatalf("counts = (%d,%d,%d), want (0,0,1)", result.ServeCount, result.DenialCount, result.VoidServes)
 	}
-
-	expired := Compute([]Event{{Epoch: 20, Kind: Serve}}, 0, 20+policy.Constants.ServePendingWindowEpochs+1, policy)
-	if expired.VoidServes != 1 || expired.ServeCount != 0 || expired.DenialCount != 0 {
-		t.Fatalf("expired counts = (%d,%d,%d), want no-outcome serve past window voided as (0,0,1)", expired.ServeCount, expired.DenialCount, expired.VoidServes)
-	}
 }
 
-func TestServeWorkedOutcomeInWindowRealizesOneServeQuantum(t *testing.T) {
+func TestReferencePairingChoosesRightServeWithSameMemoryAtDifferentEpochs(t *testing.T) {
 	policy := testPolicy(t)
-	result := Compute([]Event{{Epoch: 20, Kind: Serve}, {Epoch: 21, Kind: OutcomeWorked}}, 0, 21, policy)
-	doubleCounted := Compute([]Event{{Epoch: 20, Kind: OutcomeWorked}, {Epoch: 21, Kind: OutcomeWorked}}, 0, 21, policy)
+	result := Compute([]Event{
+		ev(20, Serve, refA, "001"),
+		ev(21, Serve, refB, "002"),
+		ev(22, OutcomeWorked, refB, "003"),
+	}, 0, 100, policy)
 
-	if result.ServeCount != 1 || result.DenialCount != 0 || result.VoidServes != 0 {
-		t.Fatalf("counts = (%d,%d,%d), want (1,0,0)", result.ServeCount, result.DenialCount, result.VoidServes)
-	}
-	if doubleCounted.ServeCount != 2 {
-		t.Fatalf("doubleCounted ServeCount = %d, want 2 for test control", doubleCounted.ServeCount)
-	}
-	if result.StandingBps >= doubleCounted.StandingBps {
-		t.Fatalf("StandingBps = %d, want less than old two-quanta control %d", result.StandingBps, doubleCounted.StandingBps)
+	if result.ServeCount != 2 || result.DenialCount != 0 || result.VoidServes != 1 {
+		t.Fatalf("counts = (%d,%d,%d), want only refB realized as two-quanta serve and refA voided (2,0,1)", result.ServeCount, result.DenialCount, result.VoidServes)
 	}
 }
 
-func TestServeFailedOutcomeInWindowCountsAsDenial(t *testing.T) {
-	policy := testPolicy(t)
-	result := Compute([]Event{{Epoch: 20, Kind: Serve}, {Epoch: 21, Kind: OutcomeFailed}}, 0, 21, policy)
-
-	if result.ServeCount != 0 || result.DenialCount != 1 || result.VoidServes != 0 {
-		t.Fatalf("counts = (%d,%d,%d), want (0,1,0)", result.ServeCount, result.DenialCount, result.VoidServes)
-	}
-	if result.DenialRate != 1 || result.Trusted {
-		t.Fatalf("result = %+v, want failed outcome paired as untrusted denial", result)
-	}
-}
-
-func TestServeWorkedOutcomeOutsideWindowVoidsServeAndCreditsOrphan(t *testing.T) {
+func TestOutcomeOutsideWindowIgnoredAndServeVoids(t *testing.T) {
 	policy := testPolicy(t)
 	window := policy.Constants.ServePendingWindowEpochs
-	result := Compute([]Event{{Epoch: 20, Kind: Serve}, {Epoch: 20 + window + 1, Kind: OutcomeWorked}}, 0, 20+window+1, policy)
+	result := Compute([]Event{
+		ev(20, Serve, refA, "001"),
+		ev(20+window+1, OutcomeWorked, refA, "002"),
+	}, 0, 20+window+1, policy)
 
-	if result.ServeCount != 1 || result.DenialCount != 0 || result.VoidServes != 1 {
-		t.Fatalf("counts = (%d,%d,%d), want outside-window serve void plus orphan worked outcome (1,0,1)", result.ServeCount, result.DenialCount, result.VoidServes)
+	if result.ServeCount != 0 || result.DenialCount != 0 || result.VoidServes != 1 {
+		t.Fatalf("counts = (%d,%d,%d), want outside-window outcome ignored and serve voided (0,0,1)", result.ServeCount, result.DenialCount, result.VoidServes)
 	}
-	if !result.Trusted {
-		t.Fatalf("Trusted = false, want orphan worked outcome to preserve evidence credit; result=%+v", result)
+	if result.Trusted {
+		t.Fatalf("Trusted = true, want no trust from ignored outside-window outcome; result=%+v", result)
 	}
 }
 
-func TestDeterministicInterleavedPendingServeResolution(t *testing.T) {
+func TestSameEpochWorkedOutcomePairsWhenOutcomeSeqSortsBeforeServeSeq(t *testing.T) {
+	policy := testPolicy(t)
+	result := Compute([]Event{
+		ev(24, OutcomeWorked, liveServeSeq, liveOutcomeBeforeServeSeq),
+		ev(24, Serve, liveServeSeq, liveServeSeq),
+	}, 0, 24, policy)
+
+	if result.ServeCount != policy.Constants.WorkedServeQuanta || result.DenialCount != 0 || result.VoidServes != 0 {
+		t.Fatalf("result = %+v, want same-epoch worked outcome to pair for %d serve quanta and no void", result, policy.Constants.WorkedServeQuanta)
+	}
+}
+
+func TestSameEpochWorkedOutcomePairsWhenOutcomeSeqSortsAfterServeSeq(t *testing.T) {
+	policy := testPolicy(t)
+	result := Compute([]Event{
+		ev(24, OutcomeWorked, liveServeSeq, liveOutcomeAfterServeSeq),
+		ev(24, Serve, liveServeSeq, liveServeSeq),
+	}, 0, 24, policy)
+
+	if result.ServeCount != policy.Constants.WorkedServeQuanta || result.DenialCount != 0 || result.VoidServes != 0 {
+		t.Fatalf("result = %+v, want same-epoch worked outcome to pair for %d serve quanta and no void", result, policy.Constants.WorkedServeQuanta)
+	}
+}
+
+func TestSameEpochFailedOutcomePairsAsOneDenial(t *testing.T) {
+	policy := testPolicy(t)
+	result := Compute([]Event{
+		ev(24, OutcomeFailed, liveServeSeq, liveOutcomeBeforeServeSeq),
+		ev(24, Serve, liveServeSeq, liveServeSeq),
+	}, 0, 24, policy)
+
+	if result.ServeCount != 0 || result.DenialCount != 1 || result.VoidServes != 0 {
+		t.Fatalf("result = %+v, want same-epoch failed outcome to pair as exactly one denial and no void", result)
+	}
+}
+
+func TestSameEpochTwoServesPairByDistinctRefs(t *testing.T) {
+	policy := testPolicy(t)
+	result := Compute([]Event{
+		ev(24, OutcomeWorked, refB, "001"),
+		ev(24, Serve, refA, "010"),
+		ev(24, OutcomeWorked, refA, "002"),
+		ev(24, Serve, refB, "020"),
+	}, 0, 24, policy)
+
+	wantServes := 2 * policy.Constants.WorkedServeQuanta
+	if result.ServeCount != wantServes || result.DenialCount != 0 || result.VoidServes != 0 {
+		t.Fatalf("result = %+v, want two distinct same-epoch refs to pair for %d serve quanta and no void", result, wantServes)
+	}
+}
+
+func TestFirstPairingWinsByEpochThenSeq(t *testing.T) {
+	policy := testPolicy(t)
+	result := Compute([]Event{
+		ev(20, Serve, refA, "001"),
+		ev(21, OutcomeFailed, refA, "b"),
+		ev(21, OutcomeWorked, refA, "a"),
+	}, 0, 21, policy)
+
+	if result.ServeCount != 2 || result.DenialCount != 0 || result.VoidServes != 0 {
+		t.Fatalf("result = %+v, want lower Seq worked outcome to consume serve and later failure ignored", result)
+	}
+}
+
+func TestInputOrderIndependence(t *testing.T) {
+	policy := testPolicy(t)
+	ordered := []Event{
+		ev(20, Serve, refA, "001"),
+		ev(21, Serve, refB, "002"),
+		ev(22, OutcomeWorked, refB, "003"),
+		ev(23, Block, "", "004"),
+		ev(24, OutcomeFailed, refA, "005"),
+		ev(24, Serve, liveServeSeq, liveServeSeq),
+		ev(24, OutcomeWorked, liveServeSeq, liveOutcomeBeforeServeSeq),
+	}
+	shuffled := []Event{ordered[6], ordered[3], ordered[1], ordered[5], ordered[4], ordered[0], ordered[2]}
+
+	first := Compute(ordered, 0, 80, policy)
+	second := Compute(shuffled, 0, 80, policy)
+	if first != second {
+		t.Fatalf("Compute order-dependent: ordered=%+v shuffled=%+v", first, second)
+	}
+}
+
+func TestWorkedPairCreditsTwoServesFailedPairOneDenialAndBlockUnchanged(t *testing.T) {
+	policy := testPolicy(t)
+	worked := Compute([]Event{ev(20, Serve, refA, "001"), ev(21, OutcomeWorked, refA, "002")}, 0, 21, policy)
+	failed := Compute([]Event{ev(20, Serve, refA, "001"), ev(21, OutcomeFailed, refA, "002")}, 0, 21, policy)
+	block := Compute([]Event{ev(20, Block, "", "001")}, 0, 20, policy)
+
+	if worked.ServeCount != 2 || worked.DenialCount != 0 || worked.VoidServes != 0 {
+		t.Fatalf("worked result = %+v, want two serve quanta, no denial, no void", worked)
+	}
+	if failed.ServeCount != 0 || failed.DenialCount != 1 || failed.VoidServes != 0 {
+		t.Fatalf("failed result = %+v, want one denial, no serve credit, no void", failed)
+	}
+	if block.ServeCount != 0 || block.DenialCount != 1 || block.VoidServes != 0 {
+		t.Fatalf("block result = %+v, want unchanged direct one-denial block", block)
+	}
+}
+
+func TestComputeDoesNotMutateInputSlice(t *testing.T) {
 	policy := testPolicy(t)
 	events := []Event{
-		{Epoch: 20, Kind: Serve},
-		{Epoch: 21, Kind: Serve},
-		{Epoch: 22, Kind: OutcomeWorked},
-		{Epoch: 23, Kind: Serve},
-		{Epoch: 24, Kind: OutcomeFailed},
-		{Epoch: 25, Kind: OutcomeWorked},
+		ev(22, OutcomeWorked, refA, "003"),
+		ev(20, Serve, refA, "001"),
+		ev(21, Block, "", "002"),
 	}
+	original := append([]Event(nil), events...)
 
-	first := Compute(events, 0, 80, policy)
-	second := Compute(events, 0, 80, policy)
-	if first != second {
-		t.Fatalf("Compute not deterministic for interleaved pending serves: first=%+v second=%+v", first, second)
-	}
-	if first.ServeCount != 2 || first.DenialCount != 1 || first.VoidServes != 0 {
-		t.Fatalf("result = %+v, want FIFO-resolved counts (serves=2 denials=1 void=0)", first)
-	}
-}
+	_ = Compute(events, 0, 30, policy)
 
-func TestTwoServesOneWorkedOutcomeRealizesOldestAndVoidsOther(t *testing.T) {
-	policy := testPolicy(t)
-	result := Compute([]Event{{Epoch: 20, Kind: Serve}, {Epoch: 21, Kind: Serve}, {Epoch: 22, Kind: OutcomeWorked}}, 0, 100, policy)
-
-	if result.ServeCount != 1 || result.DenialCount != 0 || result.VoidServes != 1 {
-		t.Fatalf("counts = (%d,%d,%d), want oldest realized and second void (1,0,1)", result.ServeCount, result.DenialCount, result.VoidServes)
-	}
-	if result.StandingBps != 7630 {
-		t.Fatalf("StandingBps = %d, want oldest realized and second serve neutral at 7630", result.StandingBps)
+	for i := range events {
+		if events[i] != original[i] {
+			t.Fatalf("events[%d] mutated: got %+v want %+v", i, events[i], original[i])
+		}
 	}
 }
 
@@ -182,10 +268,12 @@ func TestClampBounds(t *testing.T) {
 	policy := testPolicy(t)
 	var manyServes []Event
 	for i := 0; i < 100; i++ {
-		manyServes = append(manyServes, Event{Epoch: 20, Kind: Serve})
+		ref := fmt.Sprintf("%064x", i+1)
+		manyServes = append(manyServes, ev(20, Serve, ref, fmt.Sprintf("s%03d", i)))
 	}
 	for i := 0; i < 100; i++ {
-		manyServes = append(manyServes, Event{Epoch: 20, Kind: OutcomeWorked})
+		ref := fmt.Sprintf("%064x", i+1)
+		manyServes = append(manyServes, ev(20, OutcomeWorked, ref, fmt.Sprintf("o%03d", i)))
 	}
 	if got := Compute(manyServes, 0, 20, policy).StandingBps; got != 10000 {
 		t.Fatalf("many serve StandingBps = %d, want upper clamp 10000", got)
@@ -193,7 +281,7 @@ func TestClampBounds(t *testing.T) {
 
 	var manyFailures []Event
 	for i := 0; i < 100; i++ {
-		manyFailures = append(manyFailures, Event{Epoch: 20, Kind: OutcomeFailed})
+		manyFailures = append(manyFailures, ev(20, Block, "", fmt.Sprintf("b%03d", i)))
 	}
 	if got := Compute(manyFailures, 0, 20, policy).StandingBps; got != 0 {
 		t.Fatalf("many failure StandingBps = %d, want lower clamp 0", got)
@@ -203,10 +291,10 @@ func TestClampBounds(t *testing.T) {
 func TestDeterministicSameInputs(t *testing.T) {
 	policy := testPolicy(t)
 	events := []Event{
-		{Epoch: 0, Kind: Serve},
-		{Epoch: 20, Kind: Block},
-		{Epoch: 21, Kind: OutcomeWorked},
-		{Epoch: 22, Kind: OutcomeFailed},
+		ev(0, Serve, refA, "001"),
+		ev(20, Block, "", "002"),
+		ev(21, OutcomeWorked, refA, "003"),
+		ev(22, OutcomeFailed, refB, "004"),
 	}
 
 	first := Compute(events, 0, 60, policy)

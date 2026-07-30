@@ -13,6 +13,7 @@
     "serve_floor": 0.4,
     "denial_floor": 0.3,
     "standing_threshold_bps": 1500,
-    "serve_pending_window_epochs": 1440
+    "serve_pending_window_epochs": 1440,
+    "worked_serve_quanta": 2
   }
 }

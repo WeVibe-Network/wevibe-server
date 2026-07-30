@@ -1,7 +1,10 @@
 package chain
 
 import (
+	"strings"
 	"testing"
+
+	servetypes "github.com/wevibe-network/wevibe-chain/x/serve/types"
 )
 
 func bytes32(b byte) []byte {
@@ -100,6 +103,7 @@ func TestBuildDenialBatchMsg_MapsEntries(t *testing.T) {
 
 func TestBuildEventBatchMsg_MapsOutcome(t *testing.T) {
 	client := &GrpcClient{}
+	serveRef := hexOf(bytes32(0x54))
 	msg, err := client.BuildEventBatchMsg("org-1", []OutcomeEventInput{{
 		EpochID:           12,
 		MemoryContentHash: hexOf(bytes32(0x51)),
@@ -107,6 +111,7 @@ func TestBuildEventBatchMsg_MapsOutcome(t *testing.T) {
 		Nonce:             "01",
 		Signature:         hexOf(bytes64(0x53)),
 		EpisodeRef:        "aa",
+		ServeRef:          serveRef,
 		Worked:            true,
 		EvidenceRef:       "bb",
 	}})
@@ -121,6 +126,46 @@ func TestBuildEventBatchMsg_MapsOutcome(t *testing.T) {
 	}
 	if msg.Events[0].GetOutcome() == nil || !msg.Events[0].GetOutcome().Worked {
 		t.Fatalf("missing outcome body")
+	}
+	if got := hexOf(msg.Events[0].GetOutcome().ServeRef); got != serveRef {
+		t.Fatalf("unexpected serve ref: got %s want %s", got, serveRef)
+	}
+}
+
+func TestBuildEventBatchMsg_FingerprintSelfCheckFailsWithServeRefDrift(t *testing.T) {
+	client := &GrpcClient{}
+	input := validOutcomeEventInputForSubmitTest()
+	input.Fingerprint = fingerprintForOutcomeInput(t, "org-1", input)
+	input.ServeRef = hexOf(bytes32(0x55))
+
+	_, err := client.BuildEventBatchMsg("org-1", []OutcomeEventInput{input})
+	if err == nil || !strings.Contains(err.Error(), "fingerprint mismatch") {
+		t.Fatalf("BuildEventBatchMsg error = %v, want fingerprint mismatch", err)
+	}
+}
+
+func TestBuildEventBatchMsg_RejectsInvalidServeRef(t *testing.T) {
+	client := &GrpcClient{}
+	tests := []struct {
+		name     string
+		serveRef string
+	}{
+		{name: "missing", serveRef: ""},
+		{name: "31 bytes", serveRef: hexOf(bytes32(0x54))[:62]},
+		{name: "33 bytes", serveRef: hexOf(append(bytes32(0x54), 0x54))},
+		{name: "non hex", serveRef: strings.Repeat("zz", 32)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := validOutcomeEventInputForSubmitTest()
+			input.ServeRef = tt.serveRef
+
+			_, err := client.BuildEventBatchMsg("org-1", []OutcomeEventInput{input})
+			if err == nil {
+				t.Fatalf("expected invalid serve_ref error")
+			}
+		})
 	}
 }
 
@@ -149,6 +194,59 @@ func hexOf(b []byte) string {
 		out[i*2+1] = chars[v&0x0f]
 	}
 	return string(out)
+}
+
+func validOutcomeEventInputForSubmitTest() OutcomeEventInput {
+	return OutcomeEventInput{
+		EpochID:           12,
+		MemoryContentHash: hexOf(bytes32(0x51)),
+		SignerPubkey:      hexOf(bytes32(0x52)),
+		Nonce:             "01",
+		Signature:         hexOf(bytes64(0x53)),
+		EpisodeRef:        "aa",
+		ServeRef:          hexOf(bytes32(0x54)),
+		Worked:            true,
+		EvidenceRef:       "bb",
+	}
+}
+
+func fingerprintForOutcomeInput(t *testing.T, orgID string, input OutcomeEventInput) string {
+	t.Helper()
+	memoryHash, err := decodeHexField(input.MemoryContentHash, "memory_content_hash", 32)
+	if err != nil {
+		t.Fatalf("decode memory_content_hash: %v", err)
+	}
+	signerPubkey, err := decodeHexField(input.SignerPubkey, "signer_pubkey", 32)
+	if err != nil {
+		t.Fatalf("decode signer_pubkey: %v", err)
+	}
+	nonce, err := decodeHexField(input.Nonce, "nonce", 0)
+	if err != nil {
+		t.Fatalf("decode nonce: %v", err)
+	}
+	episodeRef, err := decodeHexField(input.EpisodeRef, "episode_ref", 0)
+	if err != nil {
+		t.Fatalf("decode episode_ref: %v", err)
+	}
+	serveRef, err := decodeHexField(input.ServeRef, "serve_ref", 32)
+	if err != nil {
+		t.Fatalf("decode serve_ref: %v", err)
+	}
+	evidenceRef, err := decodeHexField(input.EvidenceRef, "evidence_ref", 0)
+	if err != nil {
+		t.Fatalf("decode evidence_ref: %v", err)
+	}
+	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
+		EpisodeRef:  episodeRef,
+		ServeRef:    serveRef,
+		Worked:      input.Worked,
+		EvidenceRef: evidenceRef,
+	}}}
+	body, err := servetypes.CanonicalEventBody(servetypes.EventType_EVENT_TYPE_OUTCOME, orgID, memoryHash, input.EpochID, signerPubkey, nonce, entry)
+	if err != nil {
+		t.Fatalf("CanonicalEventBody: %v", err)
+	}
+	return hexOf(servetypes.ComputeEventFingerprint(body))
 }
 
 func bytes64(b byte) []byte {
