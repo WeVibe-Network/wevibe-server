@@ -295,6 +295,7 @@ type MemoryResult struct {
 	EpochID          int                 `json:"epoch_id"`
 	LifecycleState   string              `json:"lifecycle_state,omitempty"`
 	MemoryType       string              `json:"memory_type"`
+	ProducerModelId  string              `json:"producer_model_id,omitempty"`
 	UmbralCiphertext string              `json:"umbral_ciphertext,omitempty"`
 	Cfrag            string              `json:"cfrag,omitempty"`
 	Capsule          string              `json:"capsule,omitempty"`

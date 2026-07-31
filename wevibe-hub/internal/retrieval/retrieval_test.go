@@ -312,6 +312,32 @@ func TestQueryPointsMissingCollectionReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestQueryPoints_CarriesProducerModelIDFromPayload(t *testing.T) {
+	result := queryPointsFromPayloadForTest(t, map[string]any{"producer_model_id": "producer-alpha"})
+
+	if result.ProducerModelId != "producer-alpha" {
+		t.Fatalf("ProducerModelId mismatch: got %q want %q", result.ProducerModelId, "producer-alpha")
+	}
+}
+
+func TestQueryPoints_AbsentProducerModelIDLeavesResultEmpty(t *testing.T) {
+	result := queryPointsFromPayloadForTest(t, nil)
+
+	if result.ProducerModelId != "" {
+		t.Fatalf("ProducerModelId should be empty when absent: got %q", result.ProducerModelId)
+	}
+	assertProducerModelIDOmittedFromJSON(t, result)
+}
+
+func TestQueryPoints_EmptyProducerModelIDIsOmitted(t *testing.T) {
+	result := queryPointsFromPayloadForTest(t, map[string]any{"producer_model_id": ""})
+
+	if result.ProducerModelId != "" {
+		t.Fatalf("ProducerModelId should be empty when payload value is empty: got %q", result.ProducerModelId)
+	}
+	assertProducerModelIDOmittedFromJSON(t, result)
+}
+
 func TestUpsertPoint_IncludesProvenancePayloadWhenPresent(t *testing.T) {
 	var capturedPayload map[string]any
 
@@ -400,6 +426,74 @@ func extractUpsertPointPayload(t *testing.T, captured map[string]any) map[string
 		t.Fatalf("upsert payload missing point payload map: %#v", point)
 	}
 	return payload
+}
+
+func queryPointsFromPayloadForTest(t *testing.T, payloadOverride map[string]any) protocol.MemoryResult {
+	t.Helper()
+
+	orgID := "producer-read-org"
+	wantPath := fmt.Sprintf("/collections/%s/points/search", OrgCollectionName(orgID))
+	payload := map[string]any{
+		"cid":               "cid-producer-read",
+		"epoch_id":          float64(1),
+		"lifecycle_state":   "approved",
+		"memory_type":       "memory",
+		"content_flags":     []any{},
+		"keywords":          []any{"alpha"},
+		"standing_bps":      float64(defaultStandingBps),
+		"standing_archived": false,
+	}
+	for key, value := range payloadOverride {
+		payload[key] = value
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != wantPath {
+			t.Errorf("request path mismatch: got %q want %q", r.URL.Path, wantPath)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result": []any{
+				map[string]any{
+					"id":      "point-id",
+					"score":   0.95,
+					"payload": payload,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := &QdrantClient{restURL: server.URL, apiKey: "test-api-key-for-unit-tests-only"}
+	client.SetPendingDenialDB(emptyPendingDenialDB{})
+
+	results, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, make([]float32, EMBED_DIM), nil, "", 1, false, 0, 0)
+	if err != nil {
+		t.Fatalf("QueryPoints failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d: %#v", len(results), results)
+	}
+	return results[0]
+}
+
+func assertProducerModelIDOmittedFromJSON(t *testing.T, result protocol.MemoryResult) {
+	t.Helper()
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("unmarshal result JSON: %v", err)
+	}
+	if _, ok := decoded["producer_model_id"]; ok {
+		t.Fatalf("producer_model_id should be omitted from JSON when empty: %s", string(encoded))
+	}
 }
 
 func assertEmbeddingModelFilterCondition(t *testing.T, requestBody map[string]any, expectedModelID string, expected bool) {

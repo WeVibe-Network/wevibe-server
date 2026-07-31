@@ -625,6 +625,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		epochID            int32
 		lifecycleState     string
 		memoryType         string
+		producerModelID    string
 		contentFlags       []string
 		keywords           []string
 		standingBps        int32
@@ -675,6 +676,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 		lifecycleState = strings.ToUpper(strings.TrimSpace(lifecycleState))
 		memoryType, _ := payload["memory_type"].(string)
 		memoryType = strings.TrimSpace(memoryType)
+		producerModelID, _ := payload["producer_model_id"].(string)
 
 		cands = append(cands, RankCandidate{
 			ID:             cid,
@@ -691,6 +693,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			epochID:            epochID,
 			lifecycleState:     lifecycleState,
 			memoryType:         memoryType,
+			producerModelID:    producerModelID,
 			contentFlags:       contentFlags,
 			keywords:           keywords,
 			standingBps:        standingBps,
@@ -780,6 +783,7 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 				EpochID:         int(richData.epochID),
 				LifecycleState:  richData.lifecycleState,
 				MemoryType:      richData.memoryType,
+				ProducerModelId: richData.producerModelID,
 				ContentFlags:    richData.contentFlags,
 				Keywords:        resultKeywords,
 				MatchedKeywords: matchedKeywords,
@@ -805,17 +809,17 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	if cap == 0 || cap > uint64(len(scoredResults)) {
 		cap = uint64(len(scoredResults))
 	}
-		// D-9.4 power-law sampler. Source: wevibe-sim/ranking-fix.js:73-111.
-		rankedResults, openLoopProbe := ranker.probabilisticRank(scoredResults, int(cap))
-		if ranker.UniformExposureFraction > 0 || openLoopProbe {
-			wlog.Op(ctx, "hub.recall_open_loop_probe", slog.LevelInfo,
-				slog.String("phase", "outcome"),
-				slog.Float64("fraction", ranker.UniformExposureFraction),
-				slog.Bool("probed", openLoopProbe),
-				slog.Int("candidates", len(scoredResults)),
-				slog.Int("returned", len(rankedResults)))
-		}
-		rankedPositions := make(map[string]int, len(rankedResults))
+	// D-9.4 power-law sampler. Source: wevibe-sim/ranking-fix.js:73-111.
+	rankedResults, openLoopProbe := ranker.probabilisticRank(scoredResults, int(cap))
+	if ranker.UniformExposureFraction > 0 || openLoopProbe {
+		wlog.Op(ctx, "hub.recall_open_loop_probe", slog.LevelInfo,
+			slog.String("phase", "outcome"),
+			slog.Float64("fraction", ranker.UniformExposureFraction),
+			slog.Bool("probed", openLoopProbe),
+			slog.Int("candidates", len(scoredResults)),
+			slog.Int("returned", len(rankedResults)))
+	}
+	rankedPositions := make(map[string]int, len(rankedResults))
 	for idx, sr := range rankedResults {
 		rankedPositions[sr.result.CID] = idx
 	}
