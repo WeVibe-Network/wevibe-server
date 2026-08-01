@@ -23,7 +23,7 @@
     "@noble/hashes": "^1.8.0",
     "better-sqlite3": "^11.0.0",
     "cosmjs-types": "0.11.0",
-    "next": "15.5.19",
+    "next": "15.5.22",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-error-boundary": "6.1.2",
@@ -31,17 +31,17 @@
     "wevibe-sdk-wasm": "file:./vendor/wevibe-sdk-wasm"
   },
   "devDependencies": {
-    "@playwright/test": "1.60.0",
+    "@playwright/test": "1.62.0",
     "@types/better-sqlite3": "^7.6.0",
-    "@types/node": "^20.19.42",
+    "@types/node": "^20.19.43",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
-    "autoprefixer": "^10.5.0",
+    "autoprefixer": "^10.5.4",
     "eslint": "^8.57.0",
-    "eslint-config-next": "15.5.19",
+    "eslint-config-next": "15.5.22",
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.0",
-    "tsx": "4.22.4",
+    "tsx": "4.23.1",
     "typescript": "^5.4.0"
   },
   "overrides": {
