@@ -34,7 +34,9 @@ func testPool(t *testing.T) *pgxpool.Pool {
 
 // seedOrg inserts a minimal orgs row satisfying serve_events.org_id FK without
 // pulling in the full CreateOrg dependency tree. Cleanup is registered via
-// t.Cleanup; CASCADE on serve_events.org_id propagates row deletion.
+// t.Cleanup and deletes child rows in FK-safe order first: pending_submissions
+// and members reference orgs WITHOUT ON DELETE CASCADE, so a bare org delete
+// fails silently and poisons later runs against a shared dogfood database.
 func seedOrg(t *testing.T, pool *pgxpool.Pool, orgID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -46,14 +48,26 @@ func seedOrg(t *testing.T, pool *pgxpool.Pool, orgID string) {
 		t.Fatalf("seed org: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
+		for _, stmt := range []string{
+			"DELETE FROM serve_events WHERE org_id = $1",
+			"DELETE FROM outcome_events WHERE org_id = $1",
+			"DELETE FROM pending_submissions WHERE org_id = $1",
+			"DELETE FROM members WHERE org_id = $1",
+		} {
+			if _, err := pool.Exec(ctx, stmt, orgID); err != nil {
+				t.Logf("cleanup %q failed: %v", stmt, err)
+			}
+		}
+		if _, err := pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID); err != nil {
+			t.Logf("cleanup delete org failed: %v", err)
+		}
 	})
 }
 
 // TestRecordServe_PersistsMatchedKeywords drives the POST /v1/serves
 // persistence contract end-to-end: the matched_keywords array supplied by
 // the client must round-trip through serve_events and reappear on the read
-// path (GetServeEventByIdentity). Normalisation (lowercase / trim / dedupe)
+// path (GetPendingServes). Normalisation (lowercase / trim / dedupe)
 // runs before persistence per the validator contract.
 func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 	pool := testPool(t)
@@ -61,7 +75,7 @@ func TestRecordServe_PersistsMatchedKeywords(t *testing.T) {
 	orgID := fmt.Sprintf("test-org-co033a-%d", time.Now().UnixNano())
 	seedOrg(t, pool, orgID)
 
-	contentHash := strings.Repeat("a", 64)
+	contentHash := fmt.Sprintf("%064x", time.Now().UnixNano())
 	serveKeyPubkey := strings.Repeat("b", 64)
 	serveSig := strings.Repeat("c", 128)
 	seedCommittedSubmission(t, pool, orgID, contentHash)
@@ -184,9 +198,10 @@ func TestRecordOutcome_DedupsAndPendingRelay(t *testing.T) {
 		Nonce:             "01",
 		Signature:         strings.Repeat("c", 128),
 		EpisodeRef:        "episode:test",
+		ServeRef:          strings.Repeat("5", 64),
 		Worked:            true,
 		EvidenceRef:       "evidence:test",
-		Fingerprint:       strings.Repeat("d", 64),
+		Fingerprint:       fmt.Sprintf("%064x", time.Now().UnixNano()),
 		SessionID:         "session-test",
 	}
 	reporterPubkey := strings.Repeat("e", 64)
@@ -296,17 +311,18 @@ func TestPendingRelayHoldEligibility(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO serve_events (
 			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
-			contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+			serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
 		) VALUES
-			($1, 0, $2, $3, $4, 'n-serve-fresh', $5, ARRAY['alpha'], $6, 'incorrect', 'serve', 'pending', NOW()),
-			($1, 0, $7, $8, $9, 'n-serve-old',   $5, ARRAY['beta'],  $6, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
-			($1, 0, $10, $11, $12, 'n-deny-fresh', $5, ARRAY['gamma'], $6, 'incorrect', 'denial', 'pending', NOW()),
-			($1, 0, $13, $14, $15, 'n-deny-old',   $5, ARRAY['delta'], $6, 'incorrect', 'denial', 'pending', NOW() - interval '25 hours')
+			($1, 0, $2, $3, $4, 'n-serve-fresh', $16, $5, ARRAY['alpha'], $6, 'incorrect', 'serve', 'pending', NOW()),
+			($1, 0, $7, $8, $9, 'n-serve-old',   $17, $5, ARRAY['beta'],  $6, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
+			($1, 0, $10, $11, $12, 'n-deny-fresh', $18, $5, ARRAY['gamma'], $6, 'incorrect', 'denial', 'pending', NOW()),
+			($1, 0, $13, $14, $15, 'n-deny-old',   $19, $5, ARRAY['delta'], $6, 'incorrect', 'denial', 'pending', NOW() - interval '25 hours')
 	`, orgID,
 		fmt.Sprintf("%064x", 101), fmt.Sprintf("%064x", 201), strings.Repeat("a", 128), contributor, reporter,
 		fmt.Sprintf("%064x", 102), fmt.Sprintf("%064x", 202), strings.Repeat("b", 128),
 		fmt.Sprintf("%064x", 103), fmt.Sprintf("%064x", 203), strings.Repeat("c", 128),
 		fmt.Sprintf("%064x", 104), fmt.Sprintf("%064x", 204), strings.Repeat("d", 128),
+		fmt.Sprintf("%064x", 301), fmt.Sprintf("%064x", 302), fmt.Sprintf("%064x", 303), fmt.Sprintf("%064x", 304),
 	)
 	if err != nil {
 		t.Fatalf("seed serve_events: %v", err)
@@ -360,9 +376,9 @@ func TestHasPendingEventsRespectsHoldWindow(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO serve_events (
 			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
-			contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
-		) VALUES ($1, 0, $2, $3, $4, 'n-hold', $5, ARRAY['hold'], $6, 'incorrect', 'serve', 'pending', NOW())
-	`, orgID, memoryHash, fmt.Sprintf("%064x", 302), strings.Repeat("e", 128), contributor, reporter)
+			serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+		) VALUES ($1, 0, $2, $3, $4, 'n-hold', $7, $5, ARRAY['hold'], $6, 'incorrect', 'serve', 'pending', NOW())
+	`, orgID, memoryHash, fmt.Sprintf("%064x", 302), strings.Repeat("e", 128), contributor, reporter, fmt.Sprintf("%064x", 305))
 	if err != nil {
 		t.Fatalf("insert pending row: %v", err)
 	}
@@ -423,11 +439,11 @@ func TestListOrgsWithEligiblePendingRespectsHoldAndExemptions(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO serve_events (
 			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
-			contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+			serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
 		) VALUES
-			($1, 0, $4, $5, $6, 'a-fresh', $7, ARRAY['a'], $8, 'incorrect', 'serve', 'pending', NOW()),
-			($2, 0, $9, $10, $11, 'b-old',  $7, ARRAY['b'], $8, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
-			($3, 0, $12, $13, $14, 'c-fresh', $7, ARRAY['c'], $8, 'incorrect', 'serve', 'pending', NOW())
+			($1, 0, $4, $5, $6, 'a-fresh', $15, $7, ARRAY['a'], $8, 'incorrect', 'serve', 'pending', NOW()),
+			($2, 0, $9, $10, $11, 'b-old',  $16, $7, ARRAY['b'], $8, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
+			($3, 0, $12, $13, $14, 'c-fresh', $17, $7, ARRAY['c'], $8, 'incorrect', 'serve', 'pending', NOW())
 	`,
 		orgA,
 		orgB,
@@ -435,6 +451,7 @@ func TestListOrgsWithEligiblePendingRespectsHoldAndExemptions(t *testing.T) {
 		fmt.Sprintf("%064x", 401), fmt.Sprintf("%064x", 402), strings.Repeat("f", 128), strings.Repeat("6", 64), strings.Repeat("7", 64),
 		fmt.Sprintf("%064x", 403), fmt.Sprintf("%064x", 404), strings.Repeat("8", 128),
 		fmt.Sprintf("%064x", 405), fmt.Sprintf("%064x", 406), strings.Repeat("9", 128),
+		fmt.Sprintf("%064x", 501), fmt.Sprintf("%064x", 502), fmt.Sprintf("%064x", 503),
 	)
 	if err != nil {
 		t.Fatalf("seed pending rows: %v", err)

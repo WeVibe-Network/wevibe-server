@@ -111,13 +111,15 @@ type OutcomeEventRecord struct {
 // normalizeMatchedKeywords canonicalises the optional matched-keyword set
 // supplied by the serve reporter. Behaviour:
 //   - empty / missing input → []string{} accepted.
-//   - each entry is lowercased and trimmed; entries that collapse to "" error.
+//   - each entry is lowercased and trimmed; entries that collapse to "" are
+//     dropped (keywords are optional descriptive metadata, so a whitespace-only
+//     entry must not reject the serve).
 //   - duplicates (post-normalization) are dropped, preserving first-seen order.
 //
-// Returns the canonical slice on success. Never returns nil + nil err.
-func normalizeMatchedKeywords(raw []string) ([]string, error) {
+// Returns the canonical slice, never nil.
+func normalizeMatchedKeywords(raw []string) []string {
 	if len(raw) == 0 {
-		return []string{}, nil
+		return []string{}
 	}
 
 	normalized := make([]string, 0, len(raw))
@@ -125,7 +127,7 @@ func normalizeMatchedKeywords(raw []string) ([]string, error) {
 	for _, keyword := range raw {
 		cleaned := strings.ToLower(strings.TrimSpace(keyword))
 		if cleaned == "" {
-			return nil, fmt.Errorf("matched_keywords entries must be non-empty strings")
+			continue
 		}
 		if _, exists := seen[cleaned]; exists {
 			continue
@@ -134,7 +136,7 @@ func normalizeMatchedKeywords(raw []string) ([]string, error) {
 		normalized = append(normalized, cleaned)
 	}
 
-	return normalized, nil
+	return normalized
 }
 
 func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.GrpcClient, req RecordServeRequest, reporterPubkey string) (*ServeEventRecord, error) {
@@ -189,10 +191,7 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.Grp
 		return nil, err
 	}
 
-	matchedKeywords, err := normalizeMatchedKeywords(req.MatchedKeywords)
-	if err != nil {
-		return nil, err
-	}
+	matchedKeywords := normalizeMatchedKeywords(req.MatchedKeywords)
 	serveFingerprint := hex.EncodeToString(servetypes.ComputeServeFingerprint(memoryHash, serveKeyPubkey, uint64(req.EpochID)))
 
 	var id int64

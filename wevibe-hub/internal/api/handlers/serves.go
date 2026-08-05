@@ -117,7 +117,7 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(errMsg, "memory_content_hash") || strings.Contains(errMsg, "serve_key_pubkey") ||
 			strings.Contains(errMsg, "serve_sig") || strings.Contains(errMsg, "nonce") ||
 			strings.Contains(errMsg, "contributor_id") ||
-			strings.Contains(errMsg, "epoch_id") || strings.Contains(errMsg, "matched_keywords") {
+			strings.Contains(errMsg, "epoch_id") {
 			http.Error(w, fmt.Sprintf(`{"error":"validation: %s"}`, errMsg), http.StatusBadRequest)
 			return
 		}
