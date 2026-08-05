@@ -69,6 +69,9 @@ services:
       MONIKER: wevibe-validator
       WEVIBED_HOME: /root/.wevibed
       WEVIBE_EPOCH_DURATION_SECONDS: "${WEVIBE_EPOCH_DURATION_SECONDS:-}"
+      # Genesis-seeded edge-policy anchor: init-chain.sh hashes THESE bytes at
+      # init — the same workspace file Dockerfile.hub COPYs into the hub image.
+      WEVIBE_EDGE_POLICY_FILE: /wevibe-policy/edge-policy-v1.json
     entrypoint: ["/usr/local/bin/init-chain.sh", "start"]
     ports:
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:26656:26656"
@@ -77,6 +80,9 @@ services:
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:9090:9090"
     volumes:
       - wevibe_chain_data:/root/.wevibed
+      # Read-only mount of the hub's edge policy so the chain init seeds the
+      # on-chain anchor from the exact bytes the hub loads at startup.
+      - ./wevibe-hub/policy/edge-policy-v1.json:/wevibe-policy/edge-policy-v1.json:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:26657/status || exit 1"]
       interval: 5s
