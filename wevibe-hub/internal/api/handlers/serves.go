@@ -318,10 +318,19 @@ func canonicalOutcomeRequestBody(req serves.RecordOutcomeRequest) ([]byte, []byt
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	resolution, err := chain.OutcomeResolutionFromString(req.Resolution)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	source, err := chain.OutcomeSourceFromString(req.Source)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
 		EpisodeRef:  episodeRef,
 		ServeRef:    serveRef,
-		Worked:      req.Worked,
+		Resolution:  resolution,
+		Source:      source,
 		EvidenceRef: evidenceRef,
 	}}}
 	body, err := servetypes.CanonicalEventBody(servetypes.EventType_EVENT_TYPE_OUTCOME, req.OrgID, memoryHash, uint64(req.EpochID), signerPubkey, nonce, entry)
@@ -698,7 +707,8 @@ func buildRelayEpochMessages(cc *chain.GrpcClient, orgID string, epochID int, se
 				Signature:         record.Signature,
 				EpisodeRef:        record.EpisodeRef,
 				ServeRef:          record.ServeRef,
-				Worked:            record.Worked,
+				Resolution:        record.Resolution,
+				Source:            record.Source,
 				EvidenceRef:       record.EvidenceRef,
 				Fingerprint:       record.Fingerprint,
 			})

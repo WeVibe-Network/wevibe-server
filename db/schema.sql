@@ -468,7 +468,10 @@ CREATE TABLE IF NOT EXISTS outcome_events (
     signature           TEXT        NOT NULL,
     episode_ref         TEXT        NOT NULL,
     serve_ref           TEXT        NOT NULL,
-    worked              BOOLEAN     NOT NULL,
+    resolution          TEXT        NOT NULL
+                                    CHECK (resolution IN ('worked', 'didnt_work', 'unobserved')),
+    source              TEXT        NOT NULL
+                                    CHECK (source IN ('harvested', 'user')),
     evidence_ref        TEXT        NOT NULL,
     fingerprint         TEXT        NOT NULL UNIQUE,
     session_id          TEXT,

@@ -303,3 +303,44 @@ func TestDeterministicSameInputs(t *testing.T) {
 		t.Fatalf("Compute not deterministic: first=%+v second=%+v", first, second)
 	}
 }
+
+func TestUnobservedOutcomeDoesNotClaimServe(t *testing.T) {
+	policy := testPolicy(t)
+	baselineBeforeServeEpoch := Compute(nil, 0, 19, policy)
+	result := Compute([]Event{ev(20, Serve, refA, "001"), ev(20, OutcomeUnobserved, refA, "002")}, 0, 20, policy)
+	if result.StandingBps != baselineBeforeServeEpoch.StandingBps {
+		t.Fatalf("StandingBps = %d, want unchanged pre-serve standing %d (unobserved contributes nothing)", result.StandingBps, baselineBeforeServeEpoch.StandingBps)
+	}
+	if result.ServeCount != 0 || result.DenialCount != 0 || result.VoidServes != 1 {
+		t.Fatalf("counts = (%d,%d,%d), want (0,0,1) — serve voids unclaimed", result.ServeCount, result.DenialCount, result.VoidServes)
+	}
+	if result.UnobservedOutcomes != 1 {
+		t.Fatalf("UnobservedOutcomes = %d, want 1", result.UnobservedOutcomes)
+	}
+}
+
+func TestUnobservedThenWorkedStillPairs(t *testing.T) {
+	policy := testPolicy(t)
+	result := Compute([]Event{ev(20, Serve, refA, "001"), ev(20, OutcomeUnobserved, refA, "002"), ev(21, OutcomeWorked, refA, "003")}, 0, 21, policy)
+	if result.ServeCount != policy.Constants.WorkedServeQuanta || result.DenialCount != 0 || result.VoidServes != 0 {
+		t.Fatalf("result = %+v, want worked to pair after unobserved (non-claiming)", result)
+	}
+	if result.UnobservedOutcomes != 1 {
+		t.Fatalf("UnobservedOutcomes = %d, want 1", result.UnobservedOutcomes)
+	}
+}
+
+func TestUnobservedUnknownServeContributesNothing(t *testing.T) {
+	policy := testPolicy(t)
+	baseline := Compute(nil, 0, 20, policy)
+	result := Compute([]Event{ev(20, OutcomeUnobserved, refA, "001")}, 0, 20, policy)
+	if result != baseline {
+		// UnobservedOutcomes differs by design; compare the standing-bearing fields.
+		if result.StandingBps != baseline.StandingBps || result.ServeCount != baseline.ServeCount || result.DenialCount != baseline.DenialCount || result.VoidServes != baseline.VoidServes {
+			t.Fatalf("result = %+v, want standing-bearing fields equal to baseline %+v", result, baseline)
+		}
+	}
+	if result.UnobservedOutcomes != 1 {
+		t.Fatalf("UnobservedOutcomes = %d, want 1", result.UnobservedOutcomes)
+	}
+}

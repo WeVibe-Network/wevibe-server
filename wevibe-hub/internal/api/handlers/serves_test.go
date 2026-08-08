@@ -317,13 +317,13 @@ func TestRelayPendingEventsByOrgWithDeps_FoldsOutcomeEvents(t *testing.T) {
 func TestCanonicalOutcomeEventBody_ChainGoldenVector(t *testing.T) {
 	serveRef := bytes.Repeat([]byte{0x13}, 32)
 	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
-		EpisodeRef: []byte{0x10, 0x11}, Worked: true, EvidenceRef: []byte{0x12}, ServeRef: serveRef,
+		EpisodeRef: []byte{0x10, 0x11}, Resolution: servetypes.OutcomeResolution_OUTCOME_RESOLUTION_WORKED, Source: servetypes.OutcomeSource_OUTCOME_SOURCE_HARVESTED, EvidenceRef: []byte{0x12}, ServeRef: serveRef,
 	}}}
 	body, err := servetypes.CanonicalEventBody(servetypes.EventType_EVENT_TYPE_OUTCOME, "org-a", bytes.Repeat([]byte{0x01}, 32), 7, bytes.Repeat([]byte{0x02}, 32), []byte{0x03, 0x04}, entry)
 	if err != nil {
 		t.Fatalf("CanonicalEventBody returned error: %v", err)
 	}
-	expected := "wevibe-event-v1\noutcome\norg-a\n" + strings.Repeat("01", 32) + "\n7\n" + strings.Repeat("02", 32) + "\n1011\nworked=true\n12\n" + strings.Repeat("13", 32) + "\n0304"
+	expected := "wevibe-event-v1\noutcome\norg-a\n" + strings.Repeat("01", 32) + "\n7\n" + strings.Repeat("02", 32) + "\n1011\n12\n" + strings.Repeat("13", 32) + "\nresolution=worked\nsource=harvested\n0304"
 	if string(body) != expected {
 		t.Fatalf("canonical body mismatch:\ngot  %q\nwant %q", string(body), expected)
 	}
@@ -371,7 +371,8 @@ func TestCanonicalOutcomeRequestBody_ByteMatchesChainConstructionWithServeRef(t 
 
 	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
 		EpisodeRef:  []byte{0x10, 0x11},
-		Worked:      true,
+		Resolution:  servetypes.OutcomeResolution_OUTCOME_RESOLUTION_WORKED,
+		Source:      servetypes.OutcomeSource_OUTCOME_SOURCE_HARVESTED,
 		EvidenceRef: []byte{0x12},
 		ServeRef:    bytes.Repeat([]byte{0x13}, 32),
 	}}}
@@ -396,7 +397,8 @@ func validOutcomeRequestForCanonicalTest(t *testing.T) serves.RecordOutcomeReque
 		Signature:         strings.Repeat("04", 64),
 		EpisodeRef:        "1011",
 		ServeRef:          strings.Repeat("13", 32),
-		Worked:            true,
+		Resolution:        "worked",
+		Source:            "harvested",
 		EvidenceRef:       "12",
 		Fingerprint:       strings.Repeat("05", 32),
 	}
@@ -432,7 +434,8 @@ func makeDenialRecord(id int64, epoch int, seed byte) serves.ServeEventRecord {
 func makeOutcomeRecord(id int64, epoch int, seed byte) serves.OutcomeEventRecord {
 	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
 		EpisodeRef:  []byte{seed + 4},
-		Worked:      true,
+		Resolution:  servetypes.OutcomeResolution_OUTCOME_RESOLUTION_WORKED,
+		Source:      servetypes.OutcomeSource_OUTCOME_SOURCE_HARVESTED,
 		EvidenceRef: []byte{seed + 5},
 		ServeRef:    bytes.Repeat([]byte{seed + 6}, 32),
 	}}}
@@ -449,7 +452,8 @@ func makeOutcomeRecord(id int64, epoch int, seed byte) serves.OutcomeEventRecord
 		Signature:         hex64(seed + 3),
 		EpisodeRef:        fmt.Sprintf("%02x", seed+4),
 		ServeRef:          hex32(seed + 6),
-		Worked:            true,
+		Resolution:        "worked",
+		Source:            "harvested",
 		EvidenceRef:       fmt.Sprintf("%02x", seed+5),
 		Fingerprint:       "",
 		ReporterPubkey:    fmt.Sprintf("reporter-%d", id),

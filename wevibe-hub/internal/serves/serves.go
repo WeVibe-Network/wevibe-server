@@ -47,7 +47,8 @@ type RecordOutcomeRequest struct {
 	Signature         string `json:"signature"`
 	EpisodeRef        string `json:"episode_ref"`
 	ServeRef          string `json:"serve_ref"`
-	Worked            bool   `json:"worked"`
+	Resolution        string `json:"resolution"`
+	Source            string `json:"source"`
 	EvidenceRef       string `json:"evidence_ref"`
 	Fingerprint       string `json:"fingerprint"`
 	SessionID         string `json:"session_id,omitempty"`
@@ -97,7 +98,8 @@ type OutcomeEventRecord struct {
 	Signature         string     `json:"signature"`
 	EpisodeRef        string     `json:"episode_ref"`
 	ServeRef          string     `json:"serve_ref"`
-	Worked            bool       `json:"worked"`
+	Resolution        string     `json:"resolution"`
+	Source            string     `json:"source"`
 	EvidenceRef       string     `json:"evidence_ref"`
 	Fingerprint       string     `json:"fingerprint"`
 	SessionID         string     `json:"session_id,omitempty"`
@@ -397,6 +399,16 @@ func validateOutcomeRequest(req RecordOutcomeRequest, reporterPubkey string) err
 	if err := validateHexField("serve_ref", req.ServeRef, 32); err != nil {
 		return err
 	}
+	switch req.Resolution {
+	case "worked", "didnt_work", "unobserved":
+	default:
+		return fmt.Errorf("resolution must be one of worked, didnt_work, unobserved")
+	}
+	switch req.Source {
+	case "harvested", "user":
+	default:
+		return fmt.Errorf("source must be one of harvested, user")
+	}
 	if err := validateRequiredString("evidence_ref", req.EvidenceRef); err != nil {
 		return err
 	}
@@ -415,10 +427,10 @@ func RecordOutcome(ctx context.Context, pool *pgxpool.Pool, req RecordOutcomeReq
 	}
 
 	tag, err := pool.Exec(ctx, `
-			INSERT INTO outcome_events (org_id, epoch_id, memory_content_hash, signer_pubkey, nonce, signature, episode_ref, serve_ref, worked, evidence_ref, fingerprint, session_id, reporter_pubkey, status)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULLIF($12, ''), $13, 'pending')
+			INSERT INTO outcome_events (org_id, epoch_id, memory_content_hash, signer_pubkey, nonce, signature, episode_ref, serve_ref, resolution, source, evidence_ref, fingerprint, session_id, reporter_pubkey, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), $14, 'pending')
 			ON CONFLICT (fingerprint) DO NOTHING
-		`, req.OrgID, req.EpochID, req.MemoryContentHash, req.SignerPubkey, req.Nonce, req.Signature, req.EpisodeRef, req.ServeRef, req.Worked, req.EvidenceRef, req.Fingerprint, req.SessionID, reporterPubkey)
+		`, req.OrgID, req.EpochID, req.MemoryContentHash, req.SignerPubkey, req.Nonce, req.Signature, req.EpisodeRef, req.ServeRef, req.Resolution, req.Source, req.EvidenceRef, req.Fingerprint, req.SessionID, reporterPubkey)
 	if err != nil {
 		return false, fmt.Errorf("insert outcome event: %w", err)
 	}
@@ -427,7 +439,7 @@ func RecordOutcome(ctx context.Context, pool *pgxpool.Pool, req RecordOutcomeReq
 
 func PendingOutcomeEvents(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int) ([]OutcomeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
-			SELECT id, org_id, epoch_id, memory_content_hash, signer_pubkey, nonce, signature, episode_ref, serve_ref, worked, evidence_ref, fingerprint, COALESCE(session_id, ''), reporter_pubkey, status, tx_hash, created_at, submitted_at
+			SELECT id, org_id, epoch_id, memory_content_hash, signer_pubkey, nonce, signature, episode_ref, serve_ref, resolution, source, evidence_ref, fingerprint, COALESCE(session_id, ''), reporter_pubkey, status, tx_hash, created_at, submitted_at
 		FROM outcome_events
 		WHERE org_id = $1 AND status = 'pending'
 		ORDER BY created_at ASC
@@ -448,7 +460,7 @@ func scanOutcomeEvents(rows pgx.Rows) ([]OutcomeEventRecord, error) {
 		err := rows.Scan(
 			&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
 			&r.SignerPubkey, &r.Nonce, &r.Signature, &r.EpisodeRef, &r.ServeRef,
-			&r.Worked, &r.EvidenceRef, &r.Fingerprint, &r.SessionID,
+			&r.Resolution, &r.Source, &r.EvidenceRef, &r.Fingerprint, &r.SessionID,
 			&r.ReporterPubkey, &r.Status, &r.TxHash, &r.CreatedAt, &r.SubmittedAt,
 		)
 		if err != nil {

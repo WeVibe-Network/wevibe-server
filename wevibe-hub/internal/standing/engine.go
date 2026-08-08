@@ -13,6 +13,11 @@ const (
 	Block
 	OutcomeWorked
 	OutcomeFailed
+	// OutcomeUnobserved records an episode that closed with no resolution
+	// signal. It is non-claiming: the serve stays pending until a
+	// worked/didnt_work outcome pairs or the pending window voids it
+	// (WO-ATTRIB 2026-08-07 — silence is not a vote).
+	OutcomeUnobserved
 )
 
 // Event is one recall event for a memory.
@@ -38,9 +43,12 @@ type Result struct {
 	ServeCount  uint64
 	DenialCount uint64
 	VoidServes  uint64
-	DenialRate  float64
-	Trusted     bool
-	Archived    bool
+	// UnobservedOutcomes counts non-claiming unobserved-use observations.
+	// Coverage evidence only; contributes nothing to standing.
+	UnobservedOutcomes uint64
+	DenialRate         float64
+	Trusted            bool
+	Archived           bool
 }
 
 type epochTally struct {
@@ -62,9 +70,9 @@ func Compute(events []Event, createdEpoch, currentEpoch uint64, policy Policy) R
 
 	var serves uint64
 	var denials uint64
-	tallies, voidServes := resolvePendingServes(events, createdEpoch, currentEpoch, c.ServePendingWindowEpochs, c.WorkedServeQuanta)
+	tallies, voidServes, unobserved := resolvePendingServes(events, createdEpoch, currentEpoch, c.ServePendingWindowEpochs, c.WorkedServeQuanta)
 	if currentEpoch < createdEpoch {
-		return finalizeResult(standing, serves, denials, voidServes, c)
+		return finalizeResult(standing, serves, denials, voidServes, unobserved, c)
 	}
 
 	for epoch := createdEpoch; epoch <= currentEpoch; epoch++ {
@@ -98,10 +106,10 @@ func Compute(events []Event, createdEpoch, currentEpoch uint64, policy Policy) R
 		standing = clampStanding(math.Round(standing))
 	}
 
-	return finalizeResult(standing, serves, denials, voidServes, c)
+	return finalizeResult(standing, serves, denials, voidServes, unobserved, c)
 }
 
-func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window, workedServeQuanta uint64) (map[uint64]epochTally, uint64) {
+func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window, workedServeQuanta uint64) (map[uint64]epochTally, uint64, uint64) {
 	tallies := make(map[uint64]epochTally)
 	ordered := append([]Event(nil), events...)
 	sort.Slice(ordered, func(i, j int) bool {
@@ -115,6 +123,7 @@ func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window, wo
 	})
 	pending := make([]pendingServe, 0)
 	var voidServes uint64
+	var unobserved uint64
 
 	markActivity := func(epoch uint64) {
 		tally := tallies[epoch]
@@ -157,6 +166,11 @@ func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window, wo
 					addDenial(serveEpoch)
 				}
 			}
+		case OutcomeUnobserved:
+			// Non-claiming by design: no pairing, no tally, no activity mark.
+			// The observation exists so coverage can be measured and policy can
+			// distinguish "never seen" from "seen but unresolved".
+			unobserved++
 		case Block:
 			addDenial(event.Epoch)
 		}
@@ -167,7 +181,7 @@ func resolvePendingServes(events []Event, createdEpoch, currentEpoch, window, wo
 			voidServes++
 		}
 	}
-	return tallies, voidServes
+	return tallies, voidServes, unobserved
 }
 
 // eventKindRank preserves same-epoch causality in the public replay order:
@@ -179,7 +193,7 @@ func eventKindRank(kind Kind) int {
 	switch kind {
 	case Serve, Block:
 		return 0
-	case OutcomeWorked, OutcomeFailed:
+	case OutcomeWorked, OutcomeFailed, OutcomeUnobserved:
 		return 1
 	default:
 		return 2
@@ -212,16 +226,17 @@ func matchingServeIndex(pending []pendingServe, outcome Event, window uint64) in
 	return -1
 }
 
-func finalizeResult(standing float64, serves, denials, voidServes uint64, c Constants) Result {
+func finalizeResult(standing float64, serves, denials, voidServes, unobserved uint64, c Constants) Result {
 	standingBps := int32(clampStanding(math.Round(standing)))
 	return Result{
-		StandingBps: standingBps,
-		ServeCount:  serves,
-		DenialCount: denials,
-		VoidServes:  voidServes,
-		DenialRate:  denialRate(serves, denials),
-		Trusted:     trusted(serves, denials, c),
-		Archived:    standingBps <= c.StandingThresholdBps,
+		StandingBps:        standingBps,
+		ServeCount:         serves,
+		DenialCount:        denials,
+		VoidServes:         voidServes,
+		UnobservedOutcomes: unobserved,
+		DenialRate:         denialRate(serves, denials),
+		Trusted:            trusted(serves, denials, c),
+		Archived:           standingBps <= c.StandingThresholdBps,
 	}
 }
 

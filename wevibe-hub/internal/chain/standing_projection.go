@@ -169,7 +169,7 @@ func loadStandingReplayEvents(ctx context.Context, chainClient *GrpcClient, pool
 					WHERE status = 'submitted'
 					UNION ALL
 					SELECT org_id, memory_content_hash, epoch_id,
-					       CASE WHEN worked THEN 'outcome_worked' ELSE 'outcome_failed' END AS kind,
+					       CASE resolution WHEN 'worked' THEN 'outcome_worked' WHEN 'didnt_work' THEN 'outcome_failed' ELSE 'outcome_unobserved' END AS kind,
 					       serve_ref AS ref,
 					       fingerprint,
 					       TRUE AS chain_gated
@@ -202,6 +202,8 @@ func loadStandingReplayEvents(ctx context.Context, chainClient *GrpcClient, pool
 			event.Kind = standing.Serve
 		case "block":
 			event.Kind = standing.Block
+		case "outcome_unobserved":
+			event.Kind = standing.OutcomeUnobserved
 		case "outcome_worked":
 			event.Kind = standing.OutcomeWorked
 		case "outcome_failed":

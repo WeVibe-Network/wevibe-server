@@ -112,7 +112,8 @@ func TestBuildEventBatchMsg_MapsOutcome(t *testing.T) {
 		Signature:         hexOf(bytes64(0x53)),
 		EpisodeRef:        "aa",
 		ServeRef:          serveRef,
-		Worked:            true,
+		Resolution:        "worked",
+		Source:            "harvested",
 		EvidenceRef:       "bb",
 	}})
 	if err != nil {
@@ -124,7 +125,7 @@ func TestBuildEventBatchMsg_MapsOutcome(t *testing.T) {
 	if len(msg.Events) != 1 {
 		t.Fatalf("unexpected event count: %d", len(msg.Events))
 	}
-	if msg.Events[0].GetOutcome() == nil || !msg.Events[0].GetOutcome().Worked {
+	if msg.Events[0].GetOutcome() == nil || msg.Events[0].GetOutcome().Resolution != servetypes.OutcomeResolution_OUTCOME_RESOLUTION_WORKED {
 		t.Fatalf("missing outcome body")
 	}
 	if got := hexOf(msg.Events[0].GetOutcome().ServeRef); got != serveRef {
@@ -178,7 +179,8 @@ func TestBuildEventBatchMsg_RejectsInvalidHex(t *testing.T) {
 		Nonce:             "01",
 		Signature:         hexOf(bytes64(0x53)),
 		EpisodeRef:        "aa",
-		Worked:            true,
+		Resolution:        "worked",
+		Source:            "harvested",
 		EvidenceRef:       "bb",
 	}})
 	if err == nil {
@@ -205,7 +207,8 @@ func validOutcomeEventInputForSubmitTest() OutcomeEventInput {
 		Signature:         hexOf(bytes64(0x53)),
 		EpisodeRef:        "aa",
 		ServeRef:          hexOf(bytes32(0x54)),
-		Worked:            true,
+		Resolution:        "worked",
+		Source:            "harvested",
 		EvidenceRef:       "bb",
 	}
 }
@@ -236,10 +239,19 @@ func fingerprintForOutcomeInput(t *testing.T, orgID string, input OutcomeEventIn
 	if err != nil {
 		t.Fatalf("decode evidence_ref: %v", err)
 	}
+	resolution, err := OutcomeResolutionFromString(input.Resolution)
+	if err != nil {
+		t.Fatalf("resolution: %v", err)
+	}
+	source, err := OutcomeSourceFromString(input.Source)
+	if err != nil {
+		t.Fatalf("source: %v", err)
+	}
 	entry := &servetypes.EventEntry{Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
 		EpisodeRef:  episodeRef,
 		ServeRef:    serveRef,
-		Worked:      input.Worked,
+		Resolution:  resolution,
+		Source:      source,
 		EvidenceRef: evidenceRef,
 	}}}
 	body, err := servetypes.CanonicalEventBody(servetypes.EventType_EVENT_TYPE_OUTCOME, orgID, memoryHash, input.EpochID, signerPubkey, nonce, entry)

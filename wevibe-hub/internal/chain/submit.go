@@ -35,10 +35,39 @@ type OutcomeEventInput struct {
 	Signature         string
 	EpisodeRef        string
 	// ServeRef is the hex serve fingerprint for the served-pairing reference.
-	ServeRef    string
-	Worked      bool
+	ServeRef string
+	// Resolution is the E3 tri-state token: worked, didnt_work, or unobserved.
+	Resolution string
+	// Source is the E3 provenance token: harvested or user.
+	Source      string
 	EvidenceRef string
 	Fingerprint string
+}
+
+// OutcomeResolutionFromString maps the wire token to the chain enum.
+func OutcomeResolutionFromString(token string) (servetypes.OutcomeResolution, error) {
+	switch token {
+	case "worked":
+		return servetypes.OutcomeResolution_OUTCOME_RESOLUTION_WORKED, nil
+	case "didnt_work":
+		return servetypes.OutcomeResolution_OUTCOME_RESOLUTION_DIDNT_WORK, nil
+	case "unobserved":
+		return servetypes.OutcomeResolution_OUTCOME_RESOLUTION_UNOBSERVED, nil
+	default:
+		return servetypes.OutcomeResolution_OUTCOME_RESOLUTION_UNSPECIFIED, fmt.Errorf("resolution must be one of worked, didnt_work, unobserved")
+	}
+}
+
+// OutcomeSourceFromString maps the wire token to the chain enum.
+func OutcomeSourceFromString(token string) (servetypes.OutcomeSource, error) {
+	switch token {
+	case "harvested":
+		return servetypes.OutcomeSource_OUTCOME_SOURCE_HARVESTED, nil
+	case "user":
+		return servetypes.OutcomeSource_OUTCOME_SOURCE_USER, nil
+	default:
+		return servetypes.OutcomeSource_OUTCOME_SOURCE_UNSPECIFIED, fmt.Errorf("source must be one of harvested, user")
+	}
 }
 
 type DenialEntryInput struct {
@@ -127,6 +156,15 @@ func buildOutcomeEventEntries(orgID string, entries []OutcomeEventInput) (uint64
 			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
 		}
 
+		resolution, err := OutcomeResolutionFromString(e.Resolution)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+		source, err := OutcomeSourceFromString(e.Source)
+		if err != nil {
+			return 0, nil, fmt.Errorf("entry %d: %w", i, err)
+		}
+
 		event := &servetypes.EventEntry{
 			EventType:         servetypes.EventType_EVENT_TYPE_OUTCOME,
 			MemoryContentHash: memoryHash,
@@ -136,7 +174,8 @@ func buildOutcomeEventEntries(orgID string, entries []OutcomeEventInput) (uint64
 			Body: &servetypes.EventEntry_Outcome{Outcome: &servetypes.OutcomeEventBody{
 				EpisodeRef:  episodeRef,
 				ServeRef:    serveRef,
-				Worked:      e.Worked,
+				Resolution:  resolution,
+				Source:      source,
 				EvidenceRef: evidenceRef,
 			}},
 		}
