@@ -18,6 +18,9 @@ type ServeEntryInput struct {
 	ServeKeyPubkey    []byte
 	ServeSig          []byte
 	Nonce             []byte
+	// EpisodeRef is the content-free episode reference as lowercase hex text.
+	// It is hex-decoded to bytes for the chain ServeEntry.EpisodeRef field.
+	EpisodeRef        string
 	ContributorID     string
 	ContributorWallet string
 	ModelID           string
@@ -98,11 +101,16 @@ func buildServeEntries(entries []ServeEntryInput) ([]*servetypes.ServeEntry, err
 		if len(e.Nonce) == 0 {
 			return nil, fmt.Errorf("entry %d: nonce cannot be empty", i)
 		}
+		episodeRef, err := decodeHexField(e.EpisodeRef, "episode_ref", 0)
+		if err != nil {
+			return nil, fmt.Errorf("entry %d: %w", i, err)
+		}
 		serves[i] = &servetypes.ServeEntry{
 			MemoryContentHash: e.MemoryContentHash,
 			ServeKeyPubkey:    e.ServeKeyPubkey,
 			ServeSig:          e.ServeSig,
 			Nonce:             e.Nonce,
+			EpisodeRef:        episodeRef,
 			ContributorId:     e.ContributorID,
 			ContributorWallet: e.ContributorWallet,
 			ModelId:           e.ModelID,

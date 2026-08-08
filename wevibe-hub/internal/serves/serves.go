@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type RecordServeRequest struct {
 	ServeKeyPubkey    string `json:"serve_key_pubkey"`
 	ServeSig          string `json:"serve_sig"`
 	Nonce             string `json:"nonce"`
+	EpisodeRef        string `json:"episode_ref"`
 	ContributorID     string `json:"contributor_id"`
 	ModelID           string `json:"model_id"`
 	TurnCount         int    `json:"turn_count"`
@@ -73,6 +75,7 @@ type ServeEventRecord struct {
 	ServeKeyPubkey    string     `json:"serve_key_pubkey"`
 	ServeSig          string     `json:"serve_sig"`
 	Nonce             string     `json:"nonce"`
+	EpisodeRef        string     `json:"episode_ref"`
 	ServeFingerprint  string     `json:"serve_fingerprint"`
 	ContributorID     string     `json:"contributor_id"`
 	ContributorWallet string     `json:"contributor_wallet"`
@@ -183,6 +186,9 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.Grp
 	if len(nonce) == 0 {
 		return nil, fmt.Errorf("nonce must decode to at least 1 byte")
 	}
+	if err := validateEpisodeRef(req.EpisodeRef); err != nil {
+		return nil, err
+	}
 	if req.ContributorID == "" {
 		return nil, fmt.Errorf("contributor_id is required")
 	}
@@ -199,11 +205,12 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.Grp
 	var id int64
 	var createdAt time.Time
 	err = pool.QueryRow(ctx, `
-			INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
+			INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, episode_ref, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, '', $13, 'pending')
 			ON CONFLICT (org_id, event_type, serve_key_pubkey, memory_content_hash, epoch_id) DO UPDATE SET
 				serve_sig = EXCLUDED.serve_sig,
 				nonce = EXCLUDED.nonce,
+				episode_ref = EXCLUDED.episode_ref,
 				serve_fingerprint = EXCLUDED.serve_fingerprint,
 				contributor_id = EXCLUDED.contributor_id,
 			model_id = EXCLUDED.model_id,
@@ -213,7 +220,7 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.Grp
 			reason = EXCLUDED.reason,
 				created_at = EXCLUDED.created_at
 			RETURNING id, created_at
-		`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKeyPubkey, req.ServeSig, req.Nonce, serveFingerprint, req.ContributorID, req.ModelID, req.TurnCount, matchedKeywords, reporterPubkey, EventTypeServe).Scan(&id, &createdAt)
+		`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKeyPubkey, req.ServeSig, req.Nonce, req.EpisodeRef, serveFingerprint, req.ContributorID, req.ModelID, req.TurnCount, matchedKeywords, reporterPubkey, EventTypeServe).Scan(&id, &createdAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			return nil, fmt.Errorf("duplicate serve event: already recorded for this org/epoch/key/memory")
@@ -232,11 +239,11 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.Grp
 
 	var record ServeEventRecord
 	err = pool.QueryRow(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, episode_ref, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events WHERE id = $1
 	`, id).Scan(
 		&record.ID, &record.OrgID, &record.EpochID, &record.MemoryContentHash,
-		&record.ServeKeyPubkey, &record.ServeSig, &record.Nonce, &record.ServeFingerprint, &record.ContributorID, &record.ModelID,
+		&record.ServeKeyPubkey, &record.ServeSig, &record.Nonce, &record.EpisodeRef, &record.ServeFingerprint, &record.ContributorID, &record.ModelID,
 		&record.TurnCount, &record.MatchedKeywords, &record.ReporterPubkey, &record.Reason, &record.EventType, &record.Status, &record.TxHash,
 		&record.CreatedAt, &record.SubmittedAt,
 	)
@@ -368,6 +375,29 @@ func validateRequiredString(name, value string) error {
 	return nil
 }
 
+// episodeRefRe matches lowercase hex only. episode_ref is a content-free hex
+// reference (never plaintext), consistent with outcome_events.episode_ref.
+var episodeRefRe = regexp.MustCompile(`^[0-9a-f]+$`)
+
+// validateEpisodeRef fail-closes at the intake boundary: the field must be
+// non-empty, at most 128 characters, and lowercase hex of even length (odd
+// length would not hex-decode, breaking the serve relay).
+func validateEpisodeRef(value string) error {
+	if value == "" {
+		return fmt.Errorf("episode_ref is required")
+	}
+	if len(value) > 128 {
+		return fmt.Errorf("episode_ref must be at most 128 characters")
+	}
+	if len(value)%2 != 0 {
+		return fmt.Errorf("episode_ref must have even length (hex byte-aligned)")
+	}
+	if !episodeRefRe.MatchString(value) {
+		return fmt.Errorf("episode_ref must be lowercase hex ([0-9a-f]+)")
+	}
+	return nil
+}
+
 func validateOutcomeRequest(req RecordOutcomeRequest, reporterPubkey string) error {
 	if err := validateRequiredString("org_id", req.OrgID); err != nil {
 		return err
@@ -494,7 +524,7 @@ func MarkOutcomeEvents(ctx context.Context, pool *pgxpool.Pool, ids []int64, sta
 
 func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int, holdHours int) ([]ServeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT se.id, se.org_id, se.epoch_id, se.memory_content_hash, se.serve_key_pubkey, se.serve_sig, se.nonce, se.serve_fingerprint, se.contributor_id, se.model_id, se.turn_count, se.matched_keywords, se.reporter_pubkey, se.reason, se.event_type, se.status, se.tx_hash, se.created_at, se.submitted_at, COALESCE(m.wallet_address, '')
+		SELECT se.id, se.org_id, se.epoch_id, se.memory_content_hash, se.serve_key_pubkey, se.serve_sig, se.nonce, se.episode_ref, se.serve_fingerprint, se.contributor_id, se.model_id, se.turn_count, se.matched_keywords, se.reporter_pubkey, se.reason, se.event_type, se.status, se.tx_hash, se.created_at, se.submitted_at, COALESCE(m.wallet_address, '')
 		FROM serve_events se
 		JOIN members m ON m.org_id = se.org_id AND m.pubkey = se.contributor_id
 		WHERE se.org_id = $1 AND se.status = 'pending' AND se.event_type = 'serve'
@@ -512,7 +542,7 @@ func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, lim
 		var r ServeEventRecord
 		err := rows.Scan(
 			&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
-			&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
+			&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.EpisodeRef, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
 			&r.TurnCount, &r.MatchedKeywords, &r.ReporterPubkey, &r.Reason, &r.EventType, &r.Status, &r.TxHash,
 			&r.CreatedAt, &r.SubmittedAt, &r.ContributorWallet,
 		)

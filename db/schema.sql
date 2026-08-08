@@ -431,6 +431,9 @@ CREATE TABLE IF NOT EXISTS serve_events (
     serve_key_pubkey    TEXT        NOT NULL,
     serve_sig           TEXT        NOT NULL,
     nonce               TEXT        NOT NULL,
+    -- Content-free episode reference (hex text), never plaintext. Same
+    -- convention as outcome_events.episode_ref.
+    episode_ref         TEXT        NOT NULL,
     serve_fingerprint   TEXT        NOT NULL,
     contributor_id      TEXT        NOT NULL,
     model_id            TEXT        NOT NULL DEFAULT '',

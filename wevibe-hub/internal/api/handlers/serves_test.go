@@ -414,6 +414,7 @@ func makeServeRecord(id int64, epoch int, seed byte) serves.ServeEventRecord {
 		ServeSig:          hex64(seed + 2),
 		ServeFingerprint:  hex32(seed + 4),
 		Nonce:             fmt.Sprintf("%02x", seed+3),
+		EpisodeRef:        fmt.Sprintf("%02x", seed+5),
 		ContributorID:     fmt.Sprintf("contributor-%d", id),
 		ContributorWallet: "wevibe1contributorwallet",
 		ModelID:           "model-1",

@@ -829,6 +829,7 @@ func serveEntryFromRecord(record serves.ServeEventRecord) (chain.ServeEntryInput
 		ServeKeyPubkey:    serveKeyPubkey,
 		ServeSig:          serveSig,
 		Nonce:             nonce,
+		EpisodeRef:        record.EpisodeRef,
 		ContributorID:     record.ContributorID,
 		ContributorWallet: strings.TrimSpace(record.ContributorWallet),
 		ModelID:           record.ModelID,
