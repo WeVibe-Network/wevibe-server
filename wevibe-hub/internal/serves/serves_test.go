@@ -185,6 +185,59 @@ func TestRecordServe_AcceptsEmptyMatchedKeywords(t *testing.T) {
 	}
 }
 
+// TestRecordServe_PersistsEpisodeRef verifies that the episode_ref supplied
+// on the request round-trips into the serve_events row. episode_ref is a
+// content-free hex reference (NOT NULL in the DDL), so this guards the RecordServe
+// INSERT column/value alignment: a misaligned VALUES list (column count != value
+// count) fails with 42601 before the fix, and the episode_ref column lands
+// populated after it.
+func TestRecordServe_PersistsEpisodeRef(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID := fmt.Sprintf("test-org-episode-ref-%d", time.Now().UnixNano())
+	seedOrg(t, pool, orgID)
+
+	contentHash := fmt.Sprintf("%064x", time.Now().UnixNano())
+	req := RecordServeRequest{
+		OrgID:             orgID,
+		EpochID:           0,
+		MemoryContentHash: contentHash,
+		ServeKeyPubkey:    strings.Repeat("b", 64),
+		ServeSig:          strings.Repeat("c", 128),
+		Nonce:             "0b",
+		EpisodeRef:        "0a0b0c0d",
+		ContributorID:     strings.Repeat("c", 64),
+		ModelID:           "test-model",
+		TurnCount:         2,
+		MatchedKeywords:   []string{"alpha"},
+	}
+	seedCommittedSubmission(t, pool, orgID, contentHash)
+	reporterPubkey := strings.Repeat("d", 64)
+	seedMember(t, pool, orgID, req.ContributorID, "member")
+	seedMember(t, pool, orgID, reporterPubkey, "member")
+
+	record, err := RecordServe(ctx, pool, nil, req, reporterPubkey)
+	if err != nil {
+		t.Fatalf("RecordServe failed: %v", err)
+	}
+	if record.EpisodeRef != req.EpisodeRef {
+		t.Fatalf("episode_ref on returned record: got=%q want=%q", record.EpisodeRef, req.EpisodeRef)
+	}
+
+	// Read back directly from serve_events to confirm the column persisted,
+	// not just the post-INSERT SELECT inside RecordServe.
+	var persistedEpisodeRef string
+	err = pool.QueryRow(ctx, `
+		SELECT episode_ref FROM serve_events WHERE id = $1
+	`, record.ID).Scan(&persistedEpisodeRef)
+	if err != nil {
+		t.Fatalf("read episode_ref from serve_events: %v", err)
+	}
+	if persistedEpisodeRef != req.EpisodeRef {
+		t.Fatalf("episode_ref persisted in serve_events: got=%q want=%q", persistedEpisodeRef, req.EpisodeRef)
+	}
+}
+
 func TestRecordOutcome_DedupsAndPendingRelay(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()

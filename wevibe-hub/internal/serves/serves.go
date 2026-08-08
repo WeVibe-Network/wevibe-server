@@ -206,18 +206,18 @@ func RecordServe(ctx context.Context, pool *pgxpool.Pool, chainClient *chain.Grp
 	var createdAt time.Time
 	err = pool.QueryRow(ctx, `
 			INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, episode_ref, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, '', $13, 'pending')
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, '', $14, 'pending')
 			ON CONFLICT (org_id, event_type, serve_key_pubkey, memory_content_hash, epoch_id) DO UPDATE SET
 				serve_sig = EXCLUDED.serve_sig,
 				nonce = EXCLUDED.nonce,
 				episode_ref = EXCLUDED.episode_ref,
 				serve_fingerprint = EXCLUDED.serve_fingerprint,
 				contributor_id = EXCLUDED.contributor_id,
-			model_id = EXCLUDED.model_id,
-			turn_count = EXCLUDED.turn_count,
-			matched_keywords = EXCLUDED.matched_keywords,
-			reporter_pubkey = EXCLUDED.reporter_pubkey,
-			reason = EXCLUDED.reason,
+				model_id = EXCLUDED.model_id,
+				turn_count = EXCLUDED.turn_count,
+				matched_keywords = EXCLUDED.matched_keywords,
+				reporter_pubkey = EXCLUDED.reporter_pubkey,
+				reason = EXCLUDED.reason,
 				created_at = EXCLUDED.created_at
 			RETURNING id, created_at
 		`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKeyPubkey, req.ServeSig, req.Nonce, req.EpisodeRef, serveFingerprint, req.ContributorID, req.ModelID, req.TurnCount, matchedKeywords, reporterPubkey, EventTypeServe).Scan(&id, &createdAt)
