@@ -140,6 +140,67 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ConfirmServeEvent is a read-only, org-scoped funnel inspection endpoint. It
+// returns every serve_events receipt matching (org_id, episode_ref), optionally
+// narrowed by memory_hash. The confirmed-on-chain state is derived by the
+// caller from status == 'submitted' AND tx_hash IS NOT NULL.
+func ConfirmServeEvent(w http.ResponseWriter, r *http.Request) {
+	if pool == nil {
+		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	orgID := chi.URLParam(r, "orgID")
+	if orgID == "" {
+		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
+		return
+	}
+
+	episodeRef := strings.TrimSpace(r.URL.Query().Get("episode_ref"))
+	if episodeRef == "" {
+		http.Error(w, `{"error":"episode_ref query parameter is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	memoryHash := strings.TrimSpace(r.URL.Query().Get("memory_hash"))
+
+	signed, err := auth.ParseWeVibeSigned(r)
+	if err != nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if err := verifyTimestampSignature(*signed); err != nil {
+		http.Error(w, err.Error(), statusFromAuthError(err))
+		return
+	}
+
+	// Scope the read to the caller's own org. RequireVerifiedMembership already
+	// gates membership for this route; the role check keeps a non-member from
+	// reading another org's receipts when the route is exercised outside that
+	// middleware.
+	role, err := members.GetMemberRole(r.Context(), pool, orgID, signed.Pubkey)
+	if err != nil || role == "" {
+		http.Error(w, `{"error":"forbidden: org member required"}`, http.StatusForbidden)
+		return
+	}
+
+	records, err := serves.GetServeEventsByEpisode(r.Context(), pool, orgID, episodeRef, memoryHash)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if records == nil {
+		records = []serves.ServeEventRecord{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"serves": records,
+	})
+}
+
 func RecordEvent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	start := time.Now()

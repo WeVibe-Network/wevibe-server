@@ -593,6 +593,55 @@ func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, li
 	return records, nil
 }
 
+// GetServeEventsByEpisode returns all serve_events rows for a given org and
+// episode_ref (optionally narrowed by memory_content_hash), ordered by creation
+// time. It is the read-only source for the funnel's confirmed-on-chain check:
+// the caller derives confirmed from Status=='submitted' AND TxHash != nil.
+func GetServeEventsByEpisode(ctx context.Context, pool *pgxpool.Pool, orgID, episodeRef, memoryHash string) ([]ServeEventRecord, error) {
+	query := `
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
+			episode_ref, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords,
+			reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		FROM serve_events
+		WHERE org_id = $1 AND episode_ref = $2`
+	args := []any{orgID, episodeRef}
+	if memoryHash != "" {
+		query += ` AND memory_content_hash = $3`
+		args = append(args, memoryHash)
+	}
+	query += ` ORDER BY created_at ASC`
+
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query serve events by episode: %w", err)
+	}
+	defer rows.Close()
+
+	var records []ServeEventRecord
+	for rows.Next() {
+		var r ServeEventRecord
+		var reason *string
+		err := rows.Scan(
+			&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
+			&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.EpisodeRef, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
+			&r.TurnCount, &r.MatchedKeywords, &r.ReporterPubkey, &reason, &r.EventType, &r.Status, &r.TxHash,
+			&r.CreatedAt, &r.SubmittedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan serve event: %w", err)
+		}
+		if reason != nil {
+			r.Reason = *reason
+		}
+		records = append(records, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return records, nil
+}
+
 // MarkServesSubmitted updates the given serve_events rows to status='submitted'
 // after a successful chain broadcast, scoped to event_type='serve' to prevent
 // accidental cross-type updates from a misuse of the API.

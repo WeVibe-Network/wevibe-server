@@ -337,6 +337,7 @@ func main() {
 			r.Post("/moderation/batch-submit", handlers.PrepareBatchForChain)
 
 			r.Post("/serves", handlers.RecordServeEvent)
+			r.Get("/serves/confirm", handlers.ConfirmServeEvent)
 			r.Post("/events", handlers.RecordEvent)
 			r.Post("/decision-notes", handlers.RecordDecisionNote)
 			r.Put("/recall-rate-limit", handlers.SetRecallRateLimit)
