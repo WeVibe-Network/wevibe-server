@@ -63,18 +63,18 @@ func newServiceForTest(sidecar umbralpb.UmbralSidecarClient) *Service {
 
 func TestServiceReEncryptForMember_EdgeCases(t *testing.T) {
 	type testCase struct {
-		name       string
+		name        string
 		sidecarResp *umbralpb.ReEncryptResponse
-		sidecarErr error
-		wantCfrag  []byte
-		checkErr   func(*testing.T, error)
+		sidecarErr  error
+		wantCfrag   []byte
+		checkErr    func(*testing.T, error)
 	}
 
 	testCases := []testCase{
 		{
-			name:       "success returns cfrag and forwards request",
+			name:        "success returns cfrag and forwards request",
 			sidecarResp: &umbralpb.ReEncryptResponse{Cfrag: []byte{0xca, 0xfe}},
-			wantCfrag:  []byte{0xca, 0xfe},
+			wantCfrag:   []byte{0xca, 0xfe},
 			checkErr: func(t *testing.T, err error) {
 				t.Helper()
 				if err != nil {

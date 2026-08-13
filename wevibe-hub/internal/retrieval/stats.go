@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
-	"github.com/wevibe-network/wevibe-chain/x/reputation/types"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-chain/x/reputation/types"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
 type ChainQuerier interface {

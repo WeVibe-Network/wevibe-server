@@ -46,3 +46,8 @@ WORKER.md
 SESSIONCONTINUANCE.md
 handlers.test
 *.test
+
+# Local run artifacts (build/test logs, pids) — never committed
+runs/
+# Local-only compose overrides
+docker-compose.override.yml

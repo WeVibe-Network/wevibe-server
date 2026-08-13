@@ -21,10 +21,10 @@ const (
 )
 
 type KeywordInfo struct {
-	Keyword    string `json:"keyword"`
+	Keyword    string    `json:"keyword"`
 	CreatedAt  time.Time `json:"created_at"`
-	Deprecated bool   `json:"deprecated"`
-	UsageCount int    `json:"usage_count"`
+	Deprecated bool      `json:"deprecated"`
+	UsageCount int       `json:"usage_count"`
 }
 
 func ListKeywords(w http.ResponseWriter, r *http.Request) {

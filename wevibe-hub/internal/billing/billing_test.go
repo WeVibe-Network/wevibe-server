@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/billing"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/db"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {

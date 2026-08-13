@@ -3,8 +3,8 @@ package envelopes
 import (
 	"context"
 
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 )
 
 type Envelope struct {

@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
-	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 )
 
 func StoreRecoveryShares(w http.ResponseWriter, r *http.Request) {
