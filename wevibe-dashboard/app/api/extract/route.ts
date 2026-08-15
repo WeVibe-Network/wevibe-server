@@ -7,11 +7,12 @@ import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/
 import { getCertifiedReadiness } from '@/lib/provider-readiness';
 import { loadSettings } from '@/lib/settings';
 import { resolveSessionModelSlug } from '@/lib/session-model';
-import { fetchSessionEvents, type SubstrateEvent } from '@/lib/opencode-session-events';
+import { getDbPath, getSessionTitle } from '@/lib/opencode-session-events';
 
 export const dynamic = 'force-dynamic';
 const DEFAULT_EXTRACTION_NUM_CTX = 32768;
 const MCP_ENQUEUE_TIMEOUT_MS = 30_000; // the enqueue POST returns fast (202 {job_id}); no long-held connection
+const BENCH_SESSION_TITLE_PATTERN = /^wevibe-bench-(.+)-(on|off)-(\d+)$/;
 
 interface ExtractRequestBody {
   title?: string;
@@ -126,15 +127,7 @@ export async function POST(request: NextRequest) {
   const activeOrgId = (body.org_id ?? '').trim();
   const sessionId = typeof body.session_id === 'string' ? body.session_id.trim() : '';
 
-  let sessionEvents: SubstrateEvent[] = [];
-  let sessionEventsReadError: string | null = null;
-  if (sessionId.length > 0) {
-    try {
-      sessionEvents = fetchSessionEvents(sessionId);
-    } catch (error) {
-      sessionEventsReadError = error instanceof Error ? error.message : String(error);
-    }
-  }
+  const sessionDbPath = getDbPath();
 
   logOp('dashboard.extract', 'info', {
     trace,
@@ -144,7 +137,7 @@ export async function POST(request: NextRequest) {
     has_stack: Array.isArray(body.stack),
     has_session_id: sessionId.length > 0,
     org: activeOrgId || '-',
-    session_events: sessionEvents.length,
+    session_db_path_len: sessionDbPath.length,
   });
 
   if (sessionId.length === 0) {
@@ -158,46 +151,6 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json(
       { error: 'session_id is required', code: 'session_id_required' },
-      { status: 400 },
-    );
-  }
-
-  if (sessionEventsReadError) {
-    logOp('dashboard.extract', 'error', {
-      trace,
-      phase: 'outcome',
-      status: 'err',
-      org: activeOrgId || '-',
-      session_id: sessionId,
-      err: sessionEventsReadError,
-      reason: 'session_events_read',
-      dur_ms: Date.now() - startedAt,
-    });
-    return NextResponse.json(
-      {
-        error: 'Failed to load OpenCode session events',
-        code: 'session_events_read_failed',
-      },
-      { status: 500 },
-    );
-  }
-
-  if (sessionEvents.length === 0) {
-    logOp('dashboard.extract', 'warn', {
-      trace,
-      phase: 'outcome',
-      status: 'err',
-      org: activeOrgId || '-',
-      session_id: sessionId,
-      session_events: 0,
-      err: 'session_events_empty',
-      dur_ms: Date.now() - startedAt,
-    });
-    return NextResponse.json(
-      {
-        error: 'Session event stream is empty for extraction',
-        code: 'session_events_empty',
-      },
       { status: 400 },
     );
   }
@@ -222,12 +175,28 @@ export async function POST(request: NextRequest) {
   const mcpHttpUrl = getMcpHttpUrl();
   const extractUrl = new URL('/v1/extract', mcpHttpUrl).toString();
 
+  const bodyTitle = typeof body.title === 'string' ? body.title.trim() : '';
+  let sessionTitle = bodyTitle;
+  if (sessionTitle.length === 0) {
+    try {
+      sessionTitle = getSessionTitle(sessionId);
+    } catch (error) {
+      logOp('dashboard.extract', 'warn', {
+        trace,
+        phase: 'session_title_lookup',
+        org: activeOrgId || '-',
+        session_id: sessionId,
+        err: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   const projectContext: {
     title: string;
     directory: string;
     stack?: string[];
   } = {
-    title: body.title ?? 'unknown',
+    title: sessionTitle.length > 0 ? sessionTitle : 'unknown',
     directory: body.directory ?? 'unknown',
   };
 
@@ -264,7 +233,7 @@ export async function POST(request: NextRequest) {
   const useLmStudio = settings.llm_provider === 'lm_studio';
   const useOpenRouter = settings.llm_provider === 'openrouter';
   const mcpExtractRequestBody: {
-    events: SubstrateEvent[];
+    session_db_path: string;
     project_context: {
       title: string;
       directory: string;
@@ -280,7 +249,7 @@ export async function POST(request: NextRequest) {
     org_id?: string;
     session_id: string;
   } = {
-    events: sessionEvents,
+    session_db_path: sessionDbPath,
     project_context: projectContext,
     model: effectiveModel,
     session_id: sessionId,
@@ -288,6 +257,14 @@ export async function POST(request: NextRequest) {
 
   if (activeOrgId.length > 0) {
     mcpExtractRequestBody.org_id = activeOrgId;
+  } else {
+    const benchTitleMatch = BENCH_SESSION_TITLE_PATTERN.exec(sessionTitle);
+    if (benchTitleMatch) {
+      const derivedOrgId = benchTitleMatch[1].trim();
+      if (derivedOrgId.length > 0) {
+        mcpExtractRequestBody.org_id = derivedOrgId;
+      }
+    }
   }
 
   if (profileOverrides?.prompt) {

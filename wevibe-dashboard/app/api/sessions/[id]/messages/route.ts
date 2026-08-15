@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
 import { existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
 import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
+import { getDbPath } from '@/lib/opencode-session-events';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,13 +22,6 @@ interface MessageRow {
 interface PartRow {
   pdata: string;
   mdata: string;
-}
-
-function getDbPath(): string {
-  return (
-    process.env.OPENCODE_DB_PATH ??
-    join(homedir(), '.local', 'share', 'opencode', 'opencode.db')
-  );
 }
 
 function extractTranscript(rows: PartRow[]): {

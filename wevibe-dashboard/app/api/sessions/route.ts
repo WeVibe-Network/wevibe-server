@@ -1,18 +1,10 @@
 import { NextResponse } from 'next/server';
 import Database from 'better-sqlite3';
 import { existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
 import type { SessionSummary } from '@/lib/session-types';
+import { getDbPath } from '@/lib/opencode-session-events';
 
 export const dynamic = 'force-dynamic';
-
-function getDbPath(): string {
-  return (
-    process.env.OPENCODE_DB_PATH ??
-    join(homedir(), '.local', 'share', 'opencode', 'opencode.db')
-  );
-}
 
 export async function GET() {
   const dbPath = getDbPath();
