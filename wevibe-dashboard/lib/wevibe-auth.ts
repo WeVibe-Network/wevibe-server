@@ -12,6 +12,7 @@ import {
   unwrapSeed,
   wrapSeed,
 } from './passkey';
+import { unwrapSeedWithWallet, wrapSeedWithWallet } from './wallet-seed-wrap';
 import { fetchIdentityBlob } from './hub-client';
 
 const DB_NAME = 'wevibe-dashboard';
@@ -34,7 +35,8 @@ let inflightUnlock: Promise<void> | null = null;
 interface StoredIdentityRecord {
   id: typeof KEY_ID;
   pubkeyHex: string;
-  credentialIdB64: string;
+  credentialIdB64?: string;
+  kind?: 'passkey' | 'wallet';
   wrapped: WrappedSeed;
   createdAt: string;
   walletAddress?: string;
@@ -260,11 +262,21 @@ async function loadIdentityRecord(): Promise<StoredIdentityRecord | null> {
         !result
         || result.id !== KEY_ID
         || typeof result.pubkeyHex !== 'string'
-        || typeof result.credentialIdB64 !== 'string'
         || typeof result.createdAt !== 'string'
         || !isWrappedSeed(result.wrapped)
         || (typeof result.walletAddress !== 'undefined' && typeof result.walletAddress !== 'string')
+        || (result.kind !== undefined && result.kind !== 'passkey' && result.kind !== 'wallet')
       ) {
+        resolve(null);
+        return;
+      }
+
+      if (result.kind === 'wallet') {
+        if (typeof result.walletAddress !== 'string') {
+          resolve(null);
+          return;
+        }
+      } else if (typeof result.credentialIdB64 !== 'string') {
         resolve(null);
         return;
       }
@@ -319,8 +331,21 @@ export async function unlockIdentity(): Promise<void> {
       return;
     }
 
-    const credentialId = base64ToBytes(record.credentialIdB64);
-    const seed = await unwrapSeed(credentialId, record.wrapped);
+    let seed: Uint8Array;
+    if (record.kind === 'wallet') {
+      if (typeof record.walletAddress !== 'string') {
+        throw new Error('Wallet identity is missing its wallet address.');
+      }
+
+      seed = await unwrapSeedWithWallet(record.walletAddress, record.wrapped);
+    } else {
+      if (typeof record.credentialIdB64 !== 'string') {
+        throw new Error('Passkey identity is missing its credential id.');
+      }
+
+      const credentialId = base64ToBytes(record.credentialIdB64);
+      seed = await unwrapSeed(credentialId, record.wrapped);
+    }
 
     if (seed.length !== 32) {
       throw new Error(`Invalid Ed25519 seed length in wrapped identity record: ${seed.length}`);
@@ -392,8 +417,8 @@ export async function createPairingToken(): Promise<{ token: string }> {
   }
 }
 
-export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
-  if (!isPasskeySupported()) {
+export async function createGuestIdentity(walletAddress?: string): Promise<{ pubkeyHex: string }> {
+  if (!walletAddress && !isPasskeySupported()) {
     throw new Error('Passkeys are not supported in this browser. A WebAuthn + PRF-capable passkey is required.');
   }
 
@@ -412,41 +437,60 @@ export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
   try {
     const pubkeyHex = await deriveEd25519PubkeyHex(seed);
 
-    const { credentialId, prfSupported } = await createIdentityPasskey({
-      userId: id.edPub,
-      userName: 'wevibe',
-      displayName: 'WeVibe Identity',
-    });
+    let credentialIdB64: string | undefined;
+    let identity: StoredIdentityRecord;
 
-    if (!prfSupported) {
-      throw new Error('Passkey PRF extension is required to protect your WeVibe identity seed.');
+    if (walletAddress) {
+      const wrapped = await wrapSeedWithWallet(walletAddress, seed);
+
+      identity = {
+        id: KEY_ID,
+        pubkeyHex,
+        kind: 'wallet',
+        wrapped,
+        createdAt: new Date().toISOString(),
+        walletAddress,
+      };
+    } else {
+      const { credentialId, prfSupported } = await createIdentityPasskey({
+        userId: id.edPub,
+        userName: 'wevibe',
+        displayName: 'WeVibe Identity',
+      });
+
+      if (!prfSupported) {
+        throw new Error('Passkey PRF extension is required to protect your WeVibe identity seed.');
+      }
+
+      const wrapped = await wrapSeed(credentialId, seed);
+      credentialIdB64 = bytesToBase64(credentialId);
+
+      identity = {
+        id: KEY_ID,
+        pubkeyHex,
+        credentialIdB64,
+        wrapped,
+        createdAt: new Date().toISOString(),
+        ...(existing?.walletAddress ? { walletAddress: existing.walletAddress } : {}),
+      };
     }
-
-    const wrapped = await wrapSeed(credentialId, seed);
-
-    const identity: StoredIdentityRecord = {
-      id: KEY_ID,
-      pubkeyHex,
-      credentialIdB64: bytesToBase64(credentialId),
-      wrapped,
-      createdAt: new Date().toISOString(),
-      ...(existing?.walletAddress ? { walletAddress: existing.walletAddress } : {}),
-    };
 
     await saveIdentityRecord(identity);
     lockIdentity();
     unlockedSeed = seed;
 
-    try {
-      const { uploadIdentityBlob } = await import('./hub-client');
-      await uploadIdentityBlob({
-        credential_id: identity.credentialIdB64,
-        hkdf_salt: wrapped.hkdfSaltB64,
-        iv: wrapped.ivB64,
-        ciphertext: wrapped.ctB64,
-      });
-    } catch (e) {
-      console.warn('WeVibe: identity blob upload to hub failed (identity still created locally):', e);
+    if (credentialIdB64 !== undefined) {
+      try {
+        const { uploadIdentityBlob } = await import('./hub-client');
+        await uploadIdentityBlob({
+          credential_id: credentialIdB64,
+          hkdf_salt: identity.wrapped.hkdfSaltB64,
+          iv: identity.wrapped.ivB64,
+          ciphertext: identity.wrapped.ctB64,
+        });
+      } catch (e) {
+        console.warn('WeVibe: identity blob upload to hub failed (identity still created locally):', e);
+      }
     }
 
     return { pubkeyHex };
@@ -459,47 +503,67 @@ export async function createGuestIdentity(): Promise<{ pubkeyHex: string }> {
   }
 }
 
-async function adoptImportedSeed(seed: Uint8Array): Promise<{ pubkeyHex: string }> {
+async function adoptImportedSeed(seed: Uint8Array, walletAddress?: string): Promise<{ pubkeyHex: string }> {
   try {
     const existing = await loadIdentityRecord();
     const pubkeyHex = await deriveEd25519PubkeyHex(seed);
-    const userId = await ed.getPublicKeyAsync(seed);
 
-    const { credentialId, prfSupported } = await createIdentityPasskey({
-      userId,
-      userName: 'wevibe',
-      displayName: 'WeVibe Identity',
-    });
+    let credentialIdB64: string | undefined;
+    let record: StoredIdentityRecord;
 
-    if (!prfSupported) {
-      throw new Error('Passkey PRF extension is required to protect your WeVibe identity seed.');
+    if (walletAddress) {
+      const wrapped = await wrapSeedWithWallet(walletAddress, seed);
+
+      record = {
+        id: KEY_ID,
+        pubkeyHex,
+        kind: 'wallet',
+        wrapped,
+        createdAt: new Date().toISOString(),
+        walletAddress,
+      };
+    } else {
+      const userId = await ed.getPublicKeyAsync(seed);
+
+      const { credentialId, prfSupported } = await createIdentityPasskey({
+        userId,
+        userName: 'wevibe',
+        displayName: 'WeVibe Identity',
+      });
+
+      if (!prfSupported) {
+        throw new Error('Passkey PRF extension is required to protect your WeVibe identity seed.');
+      }
+
+      const wrapped = await wrapSeed(credentialId, seed);
+      credentialIdB64 = bytesToBase64(credentialId);
+
+      record = {
+        id: KEY_ID,
+        pubkeyHex,
+        credentialIdB64,
+        wrapped,
+        createdAt: new Date().toISOString(),
+        ...(existing?.walletAddress ? { walletAddress: existing.walletAddress } : {}),
+      };
     }
-
-    const wrapped = await wrapSeed(credentialId, seed);
-
-    const record: StoredIdentityRecord = {
-      id: KEY_ID,
-      pubkeyHex,
-      credentialIdB64: bytesToBase64(credentialId),
-      wrapped,
-      createdAt: new Date().toISOString(),
-      ...(existing?.walletAddress ? { walletAddress: existing.walletAddress } : {}),
-    };
 
     await saveIdentityRecord(record);
     lockIdentity();
     unlockedSeed = seed;
 
-    try {
-      const { uploadIdentityBlob } = await import('./hub-client');
-      await uploadIdentityBlob({
-        credential_id: record.credentialIdB64,
-        hkdf_salt: wrapped.hkdfSaltB64,
-        iv: wrapped.ivB64,
-        ciphertext: wrapped.ctB64,
-      });
-    } catch (e) {
-      console.warn('WeVibe: identity blob upload to hub failed (identity still created locally):', e);
+    if (credentialIdB64 !== undefined) {
+      try {
+        const { uploadIdentityBlob } = await import('./hub-client');
+        await uploadIdentityBlob({
+          credential_id: credentialIdB64,
+          hkdf_salt: record.wrapped.hkdfSaltB64,
+          iv: record.wrapped.ivB64,
+          ciphertext: record.wrapped.ctB64,
+        });
+      } catch (e) {
+        console.warn('WeVibe: identity blob upload to hub failed (identity still created locally):', e);
+      }
     }
 
     return { pubkeyHex };
@@ -509,14 +573,14 @@ async function adoptImportedSeed(seed: Uint8Array): Promise<{ pubkeyHex: string 
   }
 }
 
-export async function importIdentityFromPhrase(phrase: string): Promise<{ pubkeyHex: string }> {
+export async function importIdentityFromPhrase(phrase: string, walletAddress?: string): Promise<{ pubkeyHex: string }> {
   const { mnemonicToSeed } = await import('./wevibe-crypto');
   const seed = await mnemonicToSeed(phrase);
 
-  return adoptImportedSeed(seed);
+  return adoptImportedSeed(seed, walletAddress);
 }
 
-export async function adoptIdentityFromLocalMcp(): Promise<{ pubkeyHex: string }> {
+export async function adoptIdentityFromLocalMcp(walletAddress?: string): Promise<{ pubkeyHex: string }> {
   let response: Response;
   try {
     response = await fetch('/api/identity/adopt-local', { method: 'POST' });
@@ -542,10 +606,10 @@ export async function adoptIdentityFromLocalMcp(): Promise<{ pubkeyHex: string }
     throw new Error('Local identity bridge returned an invalid pairing code.');
   }
 
-  return adoptIdentityFromCode(responseBody.code);
+  return adoptIdentityFromCode(responseBody.code, walletAddress);
 }
 
-export async function adoptIdentityFromCode(token: string): Promise<{ pubkeyHex: string }> {
+export async function adoptIdentityFromCode(token: string, walletAddress?: string): Promise<{ pubkeyHex: string }> {
   const secret = base32Rfc4648NoPaddingUppercaseToBytes(token.trim().toUpperCase());
   if (secret.length !== 16) {
     secret.fill(0);
@@ -574,7 +638,7 @@ export async function adoptIdentityFromCode(token: string): Promise<{ pubkeyHex:
       throw new Error(`Invalid Ed25519 seed length in adopted identity record: ${seed.length}`);
     }
 
-    return adoptImportedSeed(seed);
+    return adoptImportedSeed(seed, walletAddress);
   } finally {
     secret.fill(0);
   }

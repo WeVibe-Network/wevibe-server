@@ -3,15 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { getMcpHttpUrl } from '@/lib/config';
-import { getDeploymentMode } from '@/lib/deployment';
 import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 import {
   MCP_OFFLINE_CODE,
   MCP_OFFLINE_ERROR,
   MCP_OFFLINE_REMEDIATION,
-  ORG_LOCAL_ONLY_CODE,
-  ORG_LOCAL_ONLY_ERROR,
-  ORG_LOCAL_ONLY_REMEDIATION,
 } from '@/lib/mcp-errors';
 
 export const dynamic = 'force-dynamic';
@@ -50,13 +46,6 @@ async function readMcpSessionToken(): Promise<string | null> {
 export async function POST(request: NextRequest) {
   const trace = resolveTraceId(request.headers.get(TRACE_HEADER));
   const startedAt = Date.now();
-
-  if (getDeploymentMode() === 'server') {
-    return NextResponse.json(
-      { error: ORG_LOCAL_ONLY_ERROR, code: ORG_LOCAL_ONLY_CODE, remediation: ORG_LOCAL_ONLY_REMEDIATION },
-      { status: 422 },
-    );
-  }
 
   let rawBody: unknown;
   try {
