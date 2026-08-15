@@ -5,7 +5,13 @@ import { toast } from 'sonner';
 import { IdentityOnboarding } from '@/components/onboarding/identity-onboarding';
 import Button from '@/components/ui/button';
 import Card from '@/components/ui/card';
-import { createGuestIdentity } from '@/lib/wevibe-auth';
+import {
+  adoptIdentityFromLocalMcp,
+  adoptIdentityFromWallet,
+  createGuestIdentity,
+  NoWalletIdentityError,
+  WalletUnlockMismatchError,
+} from '@/lib/wevibe-auth';
 import { buildWalletErrorDetail, copyToClipboard } from '@/lib/copy-error';
 import { connectWallet, detectWallets, getChainConfig, type WalletProvider } from '@/lib/wallet-connect';
 
@@ -43,6 +49,20 @@ function showHardWalletError(err: unknown, detected: WalletProvider[]): void {
   });
 }
 
+/**
+ * Distinct toast for the wallet-unlock-mismatch case: a DIFFERENT wallet
+ * signed than the one that created the identity, so the KEK cannot unwrap.
+ * Deliberately offers NO create/mint path — minting here would orphan the
+ * existing identity, which is the mis-framing this pathway fixes.
+ */
+function showWalletUnlockError(): void {
+  toast.error("This wallet doesn't unlock this identity", {
+    description:
+      'Sign in with the wallet that created this identity, or use the passkey option.',
+    duration: 8000,
+  });
+}
+
 export function SplitCardSignin({ onReady }: { onReady: () => void | Promise<void> }) {
   const [busy, setBusy] = useState(false);
 
@@ -59,10 +79,39 @@ export function SplitCardSignin({ onReady }: { onReady: () => void | Promise<voi
       }
 
       const conn = await connectWallet(wallets[0]);
-      await createGuestIdentity(conn.address);
+      const address = conn.address;
+
+      // 1. Cross-device hub blob adopt.
+      try {
+        await adoptIdentityFromWallet(address);
+        await onReady();
+        return;
+      } catch (err) {
+        if (err instanceof WalletUnlockMismatchError) {
+          throw err; // hard stop — wrong wallet signs; never mint
+        }
+        // NoWalletIdentityError (no blob) or transient hub/network error → try local MCP.
+      }
+
+      // 2. Local MCP adopt (the live case).
+      try {
+        await adoptIdentityFromLocalMcp(address);
+        await onReady();
+        return;
+      } catch {
+        // no local identity / MCP offline → fall through to mint.
+      }
+
+      // 3. Mint + upload wallet blob + back-push to local MCP (all inside createGuestIdentity).
+      await createGuestIdentity(address);
       await onReady();
     } catch (err) {
-      showHardWalletError(err, typeof window === 'undefined' ? [] : detectWallets());
+      const detected = typeof window === 'undefined' ? [] : detectWallets();
+      if (err instanceof WalletUnlockMismatchError) {
+        showWalletUnlockError();
+      } else {
+        showHardWalletError(err, detected);
+      }
     } finally {
       setBusy(false);
     }
@@ -99,8 +148,9 @@ export function SplitCardSignin({ onReady }: { onReady: () => void | Promise<voi
             </div>
             <Card className="flex flex-1 flex-col gap-4 p-6">
               <p className="text-sm text-wv-dim">
-                Sign with your wallet to generate a new WeVibe identity. Your identity
-                seed is encrypted with your wallet — no passkey required.
+                Sign with your wallet to access your WeVibe identity. If none
+                exists yet, one is created and encrypted with your wallet — no
+                passkey required.
               </p>
               <Button type="button" onClick={() => void handleWalletSignIn()} disabled={busy}>
                 {busy ? 'Connecting…' : 'Sign in with wallet'}
