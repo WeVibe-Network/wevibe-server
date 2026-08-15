@@ -7,3 +7,7 @@ export const MCP_OFFLINE_REMEDIATION =
   'Fix: fully close ALL your coding-suite instances (every OpenCode window). '
   + 'Once they are completely shut down, reopen them — this spawns a fresh local WeVibe MCP '
   + 'that writes ~/.wevibe/mcp-session-token. Then create the org again.';
+
+export const IDENTITY_MISMATCH_CODE = 'identity_mismatch';
+
+export const IDENTITY_MISMATCH_REMEDIATION = 'adopt your coding-suite identity';

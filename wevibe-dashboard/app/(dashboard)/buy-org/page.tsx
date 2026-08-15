@@ -11,7 +11,7 @@ import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
 import { getConfig, isProductionEnv } from '@/lib/config';
 import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
-import { MCP_OFFLINE_CODE } from '@/lib/mcp-errors';
+import { IDENTITY_MISMATCH_CODE, IDENTITY_MISMATCH_REMEDIATION, MCP_OFFLINE_CODE } from '@/lib/mcp-errors';
 import { useOrgContext } from '@/lib/org-context';
 import { finalizeOrgSetup, OrgBridgeError, requestOrgCryptoSetup } from '@/lib/org-bridge';
 import { SLOT_CAP, slotBarHeightPercent, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
@@ -176,6 +176,7 @@ export default function BuyOrgPage() {
   const [identityError, setIdentityError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [identityMismatch, setIdentityMismatch] = useState<string | null>(null);
 
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotLoading, setSlotLoading] = useState(false);
@@ -314,6 +315,7 @@ export default function BuyOrgPage() {
 
     setSubmitting(true);
     setShowFaucetPrompt(false);
+    setIdentityMismatch(null);
 
     try {
       const walletConn = await connectWallet('keplr');
@@ -420,7 +422,11 @@ export default function BuyOrgPage() {
         txError(toastId, 'Created, but on-chain confirmation is taking longer than expected — refresh shortly.');
       }
     } catch (err) {
-      if (err instanceof OrgBridgeError && err.code === MCP_OFFLINE_CODE) {
+      if (err instanceof OrgBridgeError && err.code === IDENTITY_MISMATCH_CODE) {
+        const remediation = err.remediation ?? IDENTITY_MISMATCH_REMEDIATION;
+        setIdentityMismatch(`${err.message} — ${remediation}`);
+        txError(toastId, err.message, remediation);
+      } else if (err instanceof OrgBridgeError && err.code === MCP_OFFLINE_CODE) {
         txError(toastId, err.message, err.remediation);
       } else {
         const kind = classifyError(err);
@@ -687,6 +693,11 @@ export default function BuyOrgPage() {
 
       {canBuyOrgFlow && (
         <>
+          {identityMismatch && (
+            <div className="mb-4">
+              <ErrorBanner>{identityMismatch}</ErrorBanner>
+            </div>
+          )}
           <Card className="p-6">
             <div className="flex flex-col gap-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
