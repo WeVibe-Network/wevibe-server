@@ -16,5 +16,4 @@ export const DASHBOARD_SETTINGS_DEFAULTS: DashboardSettings = {
   embedding_openrouter_model: '',
   org_id: '',
   mod_pubkey: '',
-  deployment: 'local',
 };

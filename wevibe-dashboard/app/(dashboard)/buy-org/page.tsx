@@ -11,7 +11,7 @@ import { buildRegisterOrgMsg, directBroadcast } from '@/lib/chain-client';
 import { getConfig, isProductionEnv } from '@/lib/config';
 import { classifyError, type ErrorKind } from '@/lib/errors';
 import { discoverOrgs, getHubServingAddress, recordOrg } from '@/lib/hub-client';
-import { MCP_OFFLINE_CODE, ORG_LOCAL_ONLY_CODE } from '@/lib/mcp-errors';
+import { MCP_OFFLINE_CODE } from '@/lib/mcp-errors';
 import { useOrgContext } from '@/lib/org-context';
 import { finalizeOrgSetup, OrgBridgeError, requestOrgCryptoSetup } from '@/lib/org-bridge';
 import { SLOT_CAP, slotBarHeightPercent, slotPriceUvibe, uvibeToVibe } from '@/lib/org-pricing';
@@ -420,7 +420,7 @@ export default function BuyOrgPage() {
         txError(toastId, 'Created, but on-chain confirmation is taking longer than expected — refresh shortly.');
       }
     } catch (err) {
-      if (err instanceof OrgBridgeError && (err.code === MCP_OFFLINE_CODE || err.code === ORG_LOCAL_ONLY_CODE)) {
+      if (err instanceof OrgBridgeError && err.code === MCP_OFFLINE_CODE) {
         txError(toastId, err.message, err.remediation);
       } else {
         const kind = classifyError(err);

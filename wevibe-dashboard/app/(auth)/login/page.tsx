@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { IdentityOnboarding } from '@/components/onboarding/identity-onboarding';
+import { SplitCardSignin } from '@/components/onboarding/split-card-signin';
 import { getIdentity } from '@/lib/wevibe-auth';
 
 export default function LoginPage() {
@@ -75,7 +75,7 @@ export default function LoginPage() {
             {checkingIdentity ? (
               <p className="text-wv-dim">Checking existing identity...</p>
             ) : (
-              <IdentityOnboarding onReady={handleReady} />
+              <SplitCardSignin onReady={handleReady} />
             )}
           </div>
         )}

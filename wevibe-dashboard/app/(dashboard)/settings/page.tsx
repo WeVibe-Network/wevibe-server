@@ -44,7 +44,6 @@ function normalizeDashboardSettings(value: Partial<DashboardSettings>): Dashboar
       value.embedding_openrouter_model ?? DASHBOARD_SETTINGS_DEFAULTS.embedding_openrouter_model,
     org_id: value.org_id ?? DASHBOARD_SETTINGS_DEFAULTS.org_id,
     mod_pubkey: value.mod_pubkey ?? DASHBOARD_SETTINGS_DEFAULTS.mod_pubkey,
-    deployment: value.deployment ?? DASHBOARD_SETTINGS_DEFAULTS.deployment,
   };
 }
 

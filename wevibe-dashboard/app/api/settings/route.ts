@@ -56,7 +56,6 @@ export async function PUT(request: NextRequest) {
       body.embedding_openrouter_model ?? current.embedding_openrouter_model,
     org_id: body.org_id ?? current.org_id,
     mod_pubkey: body.mod_pubkey ?? current.mod_pubkey,
-    deployment: body.deployment ?? current.deployment,
   };
 
   saveSettings(updated);
