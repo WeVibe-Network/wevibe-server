@@ -1,15 +1,7 @@
-FROM rust:1.88-alpine AS umbral-builder
-
-WORKDIR /build
-
-RUN apk add --no-cache build-base protobuf
-
-COPY wevibe-umbral/Cargo.toml wevibe-umbral/Cargo.lock ./
-COPY wevibe-umbral/build.rs ./
-COPY wevibe-umbral/proto ./proto
-COPY wevibe-umbral/src ./src
-
-RUN cargo build --release
+# Umbral PRE crypto ships inside the npm package as WebAssembly
+# (vendor/umbral-wasm), so there is no Rust build stage and no sidecar binary
+# to copy. This removes a full rust:alpine compile from every image build.
+# Do not reintroduce WEVIBE_UMBRAL_SIDECAR_BIN — the MCP no longer reads it.
 
 FROM node:22-alpine AS build
 
@@ -30,13 +22,12 @@ ENV WEVIBE_HTTP_HOST=0.0.0.0
 ENV WEVIBE_HTTP_PORT=4450
 ENV WEVIBE_KEYSTORE_PATH=/root/.wevibe/keys
 ENV WEVIBE_SEED_BACKEND=file
-ENV WEVIBE_UMBRAL_SIDECAR_BIN=/usr/local/bin/wevibe-umbral
 
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prompts ./prompts
-COPY --from=umbral-builder /build/target/release/wevibe-umbral /usr/local/bin/wevibe-umbral
+COPY --from=build /app/vendor ./vendor
 COPY wevibe-sdk/pkg-nodejs /wevibe-sdk/pkg-nodejs
 
 EXPOSE 4450
