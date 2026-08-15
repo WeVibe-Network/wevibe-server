@@ -6,6 +6,7 @@ COPY wevibe-umbral/Cargo.toml wevibe-umbral/Cargo.lock ./
 COPY wevibe-umbral/build.rs ./
 COPY wevibe-umbral/proto ./proto
 COPY wevibe-umbral/src ./src
+COPY wevibe-umbral/crates/core ./crates/core
 
 RUN cargo build --release
 
