@@ -9,8 +9,8 @@ import { formatVibeWithDenom } from '@/lib/format';
 import { txConfirming, txError, txSuccess, txToast } from '@/lib/toast';
 import { getWalletAddress } from '@/lib/wevibe-auth';
 
-const FAUCET_AMOUNT_VIBE = 100;
-const FAUCET_AMOUNT_UVIBE = 100_000_000;
+const FAUCET_AMOUNT_VIBE = 10000;
+const FAUCET_AMOUNT_UVIBE = 10_000_000_000;
 const CONFIRMATION_POLL_INTERVAL_MS = 2_000;
 const CONFIRMATION_POLL_ATTEMPTS = 15;
 
