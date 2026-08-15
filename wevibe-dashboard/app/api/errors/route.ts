@@ -21,7 +21,7 @@ const ERROR_LINE_RE = /\b(ERROR|panic|FATAL|fatal|uncaught|unhandled|Invalid|fai
 const WARN_LINE_RE = /\b(WARN|warning)\b/i;
 
 const RAW_CAPTURE_FILES: ReadonlyArray<{ fileName: string; service: string }> = [
-  { fileName: 'umbral-sidecar.log', service: 'umbral' },
+  { fileName: 'umbral.log', service: 'umbral' },
   { fileName: 'host-mcp-4450.log', service: 'mcp' },
   { fileName: 'wevibe-plugin-errors.log', service: 'plugin' },
   { fileName: 'contributor-dashboard.log', service: 'dashboard' },
