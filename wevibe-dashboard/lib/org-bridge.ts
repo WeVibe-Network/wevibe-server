@@ -1,3 +1,5 @@
+import { bytesToHex, deriveIdentityX25519Keypair, getIdentity, signWithIdentity } from './wevibe-auth';
+
 export interface OrgCryptoSetupPayload {
   leader_pubkey: string;
   leader_x25519_pubkey: string;
@@ -43,20 +45,58 @@ async function parseErrorBody(response: Response): Promise<ErrorBody> {
   return (await response.json().catch(() => ({}))) as ErrorBody;
 }
 
+async function buildRequesterAssertion(): Promise<{
+  requesterPubkey: string;
+  requesterX25519Pubkey: string;
+}> {
+  const identity = await getIdentity();
+  if (!identity) {
+    throw new OrgBridgeError('identity not unlocked', {
+      code: 'identity_not_unlocked',
+      remediation: 'Unlock or adopt your WeVibe dashboard identity before this operation.',
+      status: 401,
+    });
+  }
+
+  const x25519 = await deriveIdentityX25519Keypair();
+  return {
+    requesterPubkey: identity.pubkeyHex,
+    requesterX25519Pubkey: bytesToHex(x25519.pub),
+  };
+}
+
 export async function requestOrgCryptoSetup(args: {
   orgName: string;
   domain: string;
   leaderWallet: string;
 }): Promise<OrgCryptoSetupResult> {
+  const orgName = args.orgName.trim();
+  const domain = args.domain.trim();
+  const leaderWallet = args.leaderWallet.trim();
+
+  const assertion = await buildRequesterAssertion();
+  const canonical = [
+    'wevibe.org_setup.v1',
+    domain,
+    leaderWallet,
+    orgName,
+    assertion.requesterPubkey,
+    assertion.requesterX25519Pubkey,
+  ].join('\n');
+  const signature = await signWithIdentity(new TextEncoder().encode(canonical));
+
   const response = await fetch('/api/org-setup', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      org_name: args.orgName,
-      domain: args.domain,
-      leader_wallet: args.leaderWallet,
+      org_name: orgName,
+      domain,
+      leader_wallet: leaderWallet,
+      requester_pubkey: assertion.requesterPubkey,
+      requester_x25519_pubkey: assertion.requesterX25519Pubkey,
+      signature,
     }),
   });
 
@@ -105,13 +145,27 @@ export async function finalizeOrgSetup(setupId: string, orgId: string): Promise<
 }
 
 export async function requestProvisionRecall(orgId: string): Promise<void> {
+  const trimmedOrgId = orgId.trim();
+
+  const assertion = await buildRequesterAssertion();
+  const canonical = [
+    'wevibe.provision_recall.v1',
+    trimmedOrgId,
+    assertion.requesterPubkey,
+    assertion.requesterX25519Pubkey,
+  ].join('\n');
+  const signature = await signWithIdentity(new TextEncoder().encode(canonical));
+
   const response = await fetch('/api/provision-recall', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      org_id: orgId,
+      org_id: trimmedOrgId,
+      requester_pubkey: assertion.requesterPubkey,
+      requester_x25519_pubkey: assertion.requesterX25519Pubkey,
+      signature,
     }),
   });
 

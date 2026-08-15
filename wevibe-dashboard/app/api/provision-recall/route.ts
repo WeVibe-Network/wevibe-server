@@ -20,6 +20,9 @@ const MCP_SESSION_TOKEN_PATH = path.join(
 
 interface ProvisionRecallRequestBody {
   org_id: string;
+  requester_pubkey: string;
+  requester_x25519_pubkey: string;
+  signature: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -57,13 +60,32 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'org_id is required' }, { status: 400 });
   }
 
-  const { org_id: orgId } = rawBody;
+  const {
+    org_id: orgId,
+    requester_pubkey: requesterPubkey,
+    requester_x25519_pubkey: requesterX25519Pubkey,
+    signature,
+  } = rawBody;
   if (!isNonEmptyString(orgId)) {
     return NextResponse.json({ error: 'org_id is required' }, { status: 400 });
   }
 
+  if (
+    !isNonEmptyString(requesterPubkey)
+    || !isNonEmptyString(requesterX25519Pubkey)
+    || !isNonEmptyString(signature)
+  ) {
+    return NextResponse.json(
+      { error: 'requester_pubkey, requester_x25519_pubkey, and signature are required' },
+      { status: 400 },
+    );
+  }
+
   const body: ProvisionRecallRequestBody = {
     org_id: orgId.trim(),
+    requester_pubkey: requesterPubkey,
+    requester_x25519_pubkey: requesterX25519Pubkey,
+    signature,
   };
 
   logOp('dashboard.provision_recall', 'info', {

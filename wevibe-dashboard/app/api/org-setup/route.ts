@@ -22,6 +22,9 @@ interface OrgSetupRequestBody {
   org_name: string;
   domain: string;
   leader_wallet?: string;
+  requester_pubkey: string;
+  requester_x25519_pubkey: string;
+  signature: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,7 +62,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'org_name and domain are required' }, { status: 400 });
   }
 
-  const { org_name: orgName, domain, leader_wallet: leaderWallet } = rawBody;
+  const {
+    org_name: orgName,
+    domain,
+    leader_wallet: leaderWallet,
+    requester_pubkey: requesterPubkey,
+    requester_x25519_pubkey: requesterX25519Pubkey,
+    signature,
+  } = rawBody;
   if (!isNonEmptyString(orgName) || !isNonEmptyString(domain)) {
     return NextResponse.json({ error: 'org_name and domain are required' }, { status: 400 });
   }
@@ -68,10 +78,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'leader_wallet must be a string' }, { status: 400 });
   }
 
+  if (
+    !isNonEmptyString(requesterPubkey)
+    || !isNonEmptyString(requesterX25519Pubkey)
+    || !isNonEmptyString(signature)
+  ) {
+    return NextResponse.json(
+      { error: 'requester_pubkey, requester_x25519_pubkey, and signature are required' },
+      { status: 400 },
+    );
+  }
+
   const body: OrgSetupRequestBody = {
     org_name: orgName.trim(),
     domain: domain.trim(),
     ...(typeof leaderWallet === 'string' ? { leader_wallet: leaderWallet } : {}),
+    requester_pubkey: requesterPubkey,
+    requester_x25519_pubkey: requesterX25519Pubkey,
+    signature,
   };
 
   logOp('dashboard.org_setup', 'info', {
