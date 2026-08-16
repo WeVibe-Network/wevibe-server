@@ -5,8 +5,8 @@ import { readMcpSessionToken, recordExtractionError, isRecord } from '@/lib/extr
 import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/lib/mcp-errors';
 import { getCertifiedReadiness } from '@/lib/provider-readiness';
-import { loadSettings } from '@/lib/settings';
-import { resolveSessionModelSlug } from '@/lib/session-model';
+import { loadSettings, ORCAROUTER_BASE_URL } from '@/lib/settings';
+import { resolveExtractionProvider, resolveSessionModel } from '@/lib/session-model';
 import { getDbPath, getSessionTitle } from '@/lib/opencode-session-events';
 
 export const dynamic = 'force-dynamic';
@@ -207,10 +207,11 @@ export async function POST(request: NextRequest) {
   const settings = loadSettings();
   const sessionModel = typeof body.model === 'string' ? body.model.trim() : '';
   const overrideModel = settings.extraction_model_override.trim();
+  const resolvedSessionModel = resolveSessionModel(sessionModel);
   const effectiveModel =
     settings.extraction_override_enabled && overrideModel.length > 0
       ? overrideModel
-      : resolveSessionModelSlug(sessionModel);
+      : resolvedSessionModel.slug;
   if (effectiveModel.length === 0) {
     return NextResponse.json(
       {
@@ -221,17 +222,25 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const readiness = await getCertifiedReadiness(settings, effectiveModel);
-  if (!readiness.ready) {
-    return NextResponse.json(
-      { error: readiness.reason ?? 'Extraction model is not available.', code: 'provider_not_configured' },
-      { status: 422 },
-    );
+  const extractionProvider = resolveExtractionProvider(
+    resolvedSessionModel.providerID,
+    settings.llm_provider,
+  );
+  const useOrcarouter = extractionProvider === 'orcarouter';
+  const useOpenRouter = extractionProvider === 'openrouter';
+  const useLmStudio = extractionProvider === 'lm_studio';
+
+  if (!useOrcarouter) {
+    const readiness = await getCertifiedReadiness(settings, effectiveModel);
+    if (!readiness.ready) {
+      return NextResponse.json(
+        { error: readiness.reason ?? 'Extraction model is not available.', code: 'provider_not_configured' },
+        { status: 422 },
+      );
+    }
   }
 
   const profileOverrides = await fetchOrgExtractionProfileOverrides(activeOrgId, trace);
-  const useLmStudio = settings.llm_provider === 'lm_studio';
-  const useOpenRouter = settings.llm_provider === 'openrouter';
   const mcpExtractRequestBody: {
     session_db_path: string;
     project_context: {
@@ -275,7 +284,10 @@ export async function POST(request: NextRequest) {
     mcpExtractRequestBody.num_ctx = profileOverrides.numCtx;
   }
 
-  if (useOpenRouter) {
+  if (useOrcarouter) {
+    mcpExtractRequestBody.provider = 'orcarouter';
+    mcpExtractRequestBody.base_url = ORCAROUTER_BASE_URL;
+  } else if (useOpenRouter) {
     mcpExtractRequestBody.provider = 'openrouter';
     mcpExtractRequestBody.api_key = settings.extraction_api_key;
     mcpExtractRequestBody.base_url = 'https://openrouter.ai/api/v1';
@@ -426,8 +438,8 @@ export async function POST(request: NextRequest) {
       preset_id: profileOverrides?.presetId ?? null,
       model: effectiveModel,
       session_model: sessionModel,
-      provider: useOpenRouter ? 'openrouter' : useLmStudio ? 'lm_studio' : 'ollama',
-      is_local: !useOpenRouter,
+      provider: useOrcarouter ? 'orcarouter' : useOpenRouter ? 'openrouter' : useLmStudio ? 'lm_studio' : 'ollama',
+      is_local: useOrcarouter ? false : !useOpenRouter,
       num_ctx: mcpExtractRequestBody.num_ctx ?? DEFAULT_EXTRACTION_NUM_CTX,
       prompt_fingerprint: computePromptFingerprint(mcpExtractRequestBody.prompt),
     },

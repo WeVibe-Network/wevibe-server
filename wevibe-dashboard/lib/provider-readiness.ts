@@ -3,7 +3,7 @@ import { type DashboardSettings, getProviderReadiness } from './settings';
 export interface CertifiedReadiness {
   ready: boolean;
   reason: string | null;
-  provider: 'ollama' | 'openrouter' | 'lm_studio';
+  provider: 'ollama' | 'openrouter' | 'lm_studio' | 'orcarouter';
   model: string;
   stage: 'config' | 'live';
   checkedAt: number;

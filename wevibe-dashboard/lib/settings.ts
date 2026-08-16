@@ -4,8 +4,10 @@ import { homedir } from 'os';
 
 import { DASHBOARD_SETTINGS_DEFAULTS } from './settings-defaults';
 
+export const ORCAROUTER_BASE_URL = 'https://api.orcarouter.ai/v1';
+
 export interface DashboardSettings {
-  llm_provider: 'ollama' | 'openrouter' | 'lm_studio';
+  llm_provider: 'ollama' | 'openrouter' | 'lm_studio' | 'orcarouter';
   ollama_url: string;
   ollama_model: string;
   extraction_api_key: string;
@@ -31,6 +33,10 @@ const DEFAULTS: DashboardSettings = {
 export function getProviderReadiness(
   s: DashboardSettings,
 ): { ready: boolean; reason: string | null } {
+  if (s.llm_provider === 'orcarouter') {
+    return { ready: true, reason: null };
+  }
+
   if (s.llm_provider === 'openrouter') {
     if (s.extraction_api_key.trim().length === 0) {
       return {

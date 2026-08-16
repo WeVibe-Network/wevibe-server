@@ -4,7 +4,8 @@ import { getMcpHttpUrl } from '@/lib/config';
 import { isRecord, readMcpSessionToken } from '@/lib/extract-shared';
 import { logOp, resolveTraceId, TRACE_HEADER } from '@/lib/logger';
 import { MCP_OFFLINE_CODE, MCP_OFFLINE_ERROR, MCP_OFFLINE_REMEDIATION } from '@/lib/mcp-errors';
-import { loadSettings } from '@/lib/settings';
+import { loadSettings, ORCAROUTER_BASE_URL } from '@/lib/settings';
+import { resolveExtractionProvider, resolveSessionModel } from '@/lib/session-model';
 
 export const dynamic = 'force-dynamic';
 const MCP_RESUME_TIMEOUT_MS = 30_000;
@@ -19,7 +20,7 @@ interface ExtractResumeRequestBody {
 interface McpExtractResumeRequestBody {
   job_id: string;
   model: string;
-  provider: 'ollama' | 'openrouter' | 'lm_studio';
+  provider: 'ollama' | 'openrouter' | 'lm_studio' | 'orcarouter';
   api_key?: string;
   base_url?: string;
   ollama_url?: string;
@@ -97,10 +98,16 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
 
     const settings = loadSettings();
-    const useLmStudio = settings.llm_provider === 'lm_studio';
-    const useOpenRouter = settings.llm_provider === 'openrouter';
-    const provider = useOpenRouter ? 'openrouter' : useLmStudio ? 'lm_studio' : 'ollama';
-    const isLocal = !useOpenRouter;
+    const extractionProvider = resolveExtractionProvider(
+      resolveSessionModel(sessionModel).providerID,
+      settings.llm_provider,
+    );
+    const useOrcarouter = extractionProvider === 'orcarouter';
+    const useOpenRouter = extractionProvider === 'openrouter';
+    const useLmStudio = extractionProvider === 'lm_studio';
+    const provider: 'ollama' | 'openrouter' | 'lm_studio' | 'orcarouter' =
+      useOrcarouter ? 'orcarouter' : useOpenRouter ? 'openrouter' : useLmStudio ? 'lm_studio' : 'ollama';
+    const isLocal = !useOrcarouter && !useOpenRouter;
 
     logOp('dashboard.extract_resume', 'info', {
       trace,
@@ -162,7 +169,9 @@ export async function POST(request: NextRequest): Promise<Response> {
       provider,
     };
 
-    if (useOpenRouter) {
+    if (useOrcarouter) {
+      mcpResumeRequestBody.base_url = ORCAROUTER_BASE_URL;
+    } else if (useOpenRouter) {
       mcpResumeRequestBody.api_key = settings.extraction_api_key;
       mcpResumeRequestBody.base_url = 'https://openrouter.ai/api/v1';
     } else if (useLmStudio) {
