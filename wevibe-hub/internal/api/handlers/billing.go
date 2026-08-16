@@ -80,17 +80,22 @@ func GetOrgFinances(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var chainTreasury uint64
+	var orgAccountAddress string
 	if chainClient != nil {
 		treasuryBalance, chainErr := chainClient.GetOrgTreasuryBalanceFromChain(r.Context(), orgID)
 		if chainErr == nil {
 			chainTreasury = treasuryBalance
 		}
+		if addr, acctErr := chainClient.GetOrgAccountFromChain(r.Context(), orgID); acctErr == nil {
+			orgAccountAddress = addr
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"org_id":         orgID,
-		"hub_credits":    bal,
-		"chain_treasury": chainTreasury,
+		"org_id":              orgID,
+		"hub_credits":         bal,
+		"chain_treasury":      chainTreasury,
+		"org_account_address": orgAccountAddress,
 	})
 }

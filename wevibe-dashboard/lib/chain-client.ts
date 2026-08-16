@@ -1,13 +1,13 @@
 import { SigningStargateClient, defaultRegistryTypes } from '@cosmjs/stargate';
-import { OfflineSigner, Registry, GeneratedType } from '@cosmjs/proto-signing';
+import { OfflineSigner, Registry, GeneratedType, type EncodeObject } from '@cosmjs/proto-signing';
 import { toBase64 } from '@cosmjs/encoding';
 import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
 import { getConfig } from '@/lib/config';
 
-export interface EncodeObject {
-  typeUrl: string;
-  value: Uint8Array;
-}
+// CosmJS's own EncodeObject: wevibe msgs carry pre-encoded bytes as `value`
+// (see rawProtoType below), standard msgs (e.g. bank MsgSend) carry plain
+// objects that the registry encodes.
+export type { EncodeObject };
 
 export const WEVIBE_MSG_TYPE_URLS: string[] = [
   '/wevibe.memory.v1.MsgSubmitCommitment',

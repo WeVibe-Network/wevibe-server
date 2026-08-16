@@ -195,6 +195,7 @@ export interface OrgFinances {
   org_id: string;
   hub_credits: number;
   chain_treasury: number;
+  org_account_address: string;
 }
 
 export async function getOrgCredits(orgId: string): Promise<CreditBalance> {
