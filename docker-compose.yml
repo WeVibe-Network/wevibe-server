@@ -233,7 +233,7 @@ services:
       WEVIBE_ENV: ${WEVIBE_ENV:-development}
       WEVIBE_DEPLOYMENT: ${WEVIBE_DEPLOYMENT:-server}
       NODE_ENV: production
-      WEVIBE_MCP_HTTP_URL: ${WEVIBE_MCP_HTTP_URL:-http://host.docker.internal:4550}
+      WEVIBE_MCP_HTTP_URL: ${WEVIBE_MCP_HTTP_URL:-http://host.docker.internal:4450}
       OPENCODE_DB_PATH: ${OPENCODE_DB_PATH:-}
     ports:
       - "${WEVIBE_BIND_HOST:-127.0.0.1}:3000:3000"

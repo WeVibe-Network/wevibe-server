@@ -9,6 +9,11 @@ export const dynamic = 'force-dynamic';
 
 const MCP_SESSION_TOKEN_PATH = path.join(homedir(), '.wevibe', 'mcp-session-token');
 
+function wevibeDir(): string {
+  const override = process.env.WEVIBE_HOME?.trim();
+  return override && override.length > 0 ? override : path.join(homedir(), '.wevibe');
+}
+
 async function readMcpSessionToken(): Promise<string | null> {
   try {
     const token = (await readFile(MCP_SESSION_TOKEN_PATH, 'utf8')).trim();
@@ -16,6 +21,30 @@ async function readMcpSessionToken(): Promise<string | null> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
+  }
+}
+
+/**
+ * Which identity is the serving MCP holding?
+ *
+ * Read from the non-secret identity sidecar, which exists precisely so identity
+ * can be reported WITHOUT triggering a biometric prompt. Callers compare this to
+ * the browser's own pubkey: equal means org-setup will succeed, different means
+ * it would 409 (or, unguarded, mint an org the browser can never see). Liveness
+ * alone cannot surface that — a healthy MCP serving the WRONG identity looks
+ * identical to a correct one until the request fails.
+ */
+async function readMcpIdentityPubkey(): Promise<string | null> {
+  try {
+    const raw = await readFile(path.join(wevibeDir(), 'identity.json'), 'utf8');
+    const parsed = JSON.parse(raw) as { ed25519PublicKey?: unknown };
+    return typeof parsed.ed25519PublicKey === 'string' && parsed.ed25519PublicKey.length > 0
+      ? parsed.ed25519PublicKey
+      : null;
+  } catch {
+    // Missing/unreadable/malformed sidecar is not a health failure — the MCP may
+    // be alive and simply not yet provisioned. Report null and let callers decide.
+    return null;
   }
 }
 
@@ -65,6 +94,8 @@ export async function GET(request: NextRequest) {
     clearTimeout(timeoutId);
   }
 
+  const mcpPubkey = await readMcpIdentityPubkey();
+
   logOp('dashboard.mcp_health', 'info', {
     trace,
     phase: 'outcome',
@@ -74,6 +105,10 @@ export async function GET(request: NextRequest) {
     upstream_status: response.status,
     dur_ms: Date.now() - startedAt,
     token_present: Boolean(sessionToken),
+    mcp_pubkey_fp: mcpPubkey ? mcpPubkey.slice(0, 8) : '-',
   });
-  return NextResponse.json({ alive: true, status: response.status }, { status: 200 });
+  return NextResponse.json(
+    { alive: true, status: response.status, mcpPubkey },
+    { status: 200 },
+  );
 }

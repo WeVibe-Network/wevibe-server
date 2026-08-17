@@ -431,30 +431,6 @@ export class WalletUnlockMismatchError extends Error {
   }
 }
 
-/**
- * Back-push a freshly-minted identity seed to the local WeVibe MCP so it can
- * serve it to coding-suite agents. NON-FATAL: minting must succeed even when
- * the local MCP is offline or rejects the adoption. Never throws. Never logs
- * the seed itself.
- */
-async function backPushIdentityToLocalMcp(seed: Uint8Array): Promise<void> {
-  try {
-    const seedHex = bytesToHex(seed);
-    const resp = await fetch('/api/identity/adopt', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seed_hex: seedHex }),
-    });
-    if (!resp.ok) {
-      console.warn(
-        `WeVibe: back-push identity to local MCP failed (identity still created locally): HTTP ${resp.status}`,
-      );
-    }
-  } catch (error) {
-    console.warn('WeVibe: back-push identity to local MCP failed (identity still created locally):', error);
-  }
-}
-
 export async function createGuestIdentity(walletAddress?: string): Promise<{ pubkeyHex: string }> {
   if (!walletAddress && !isPasskeySupported()) {
     throw new Error('Passkeys are not supported in this browser. A WebAuthn + PRF-capable passkey is required.');
@@ -532,8 +508,6 @@ export async function createGuestIdentity(walletAddress?: string): Promise<{ pub
         console.warn('WeVibe: identity blob upload to hub failed (identity still created locally):', e);
       }
     }
-
-    await backPushIdentityToLocalMcp(seed);
 
     return { pubkeyHex };
   } catch (error) {

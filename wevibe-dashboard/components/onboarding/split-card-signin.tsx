@@ -8,8 +8,8 @@ import Card from '@/components/ui/card';
 import {
   adoptIdentityFromLocalMcp,
   adoptIdentityFromWallet,
+  clearIdentity,
   createGuestIdentity,
-  NoWalletIdentityError,
   WalletUnlockMismatchError,
 } from '@/lib/wevibe-auth';
 import { buildWalletErrorDetail, copyToClipboard } from '@/lib/copy-error';
@@ -52,14 +52,21 @@ function showHardWalletError(err: unknown, detected: WalletProvider[]): void {
 /**
  * Distinct toast for the wallet-unlock-mismatch case: a DIFFERENT wallet
  * signed than the one that created the identity, so the KEK cannot unwrap.
- * Deliberately offers NO create/mint path — minting here would orphan the
- * existing identity, which is the mis-framing this pathway fixes.
+ * Minting silently here would orphan the existing identity, so the default
+ * stays "sign with the right wallet" — but the local record MUST be clearable,
+ * otherwise a stale record with no matching wallet is an unrecoverable dead
+ * end with no path back to sign-in. "Reset" drops the LOCAL record only; the
+ * hub blob is untouched and the original wallet can still adopt it.
  */
-function showWalletUnlockError(): void {
+function showWalletUnlockError(onReset: () => void): void {
   toast.error("This wallet doesn't unlock this identity", {
     description:
-      'Sign in with the wallet that created this identity, or use the passkey option.',
-    duration: 8000,
+      'Sign in with the wallet that created this identity, or reset to start fresh on this device.',
+    duration: 12000,
+    action: {
+      label: 'Reset identity',
+      onClick: onReset,
+    },
   });
 }
 
@@ -81,34 +88,48 @@ export function SplitCardSignin({ onReady }: { onReady: () => void | Promise<voi
       const conn = await connectWallet(wallets[0]);
       const address = conn.address;
 
-      // 1. Cross-device hub blob adopt.
+      // 1. Adopt the LOCAL leader MCP's identity first. This is the convergent
+      //    case and must win: org-setup runs through the MCP and signs with the
+      //    MCP's own identity, so a browser holding any OTHER key creates an org
+      //    it cannot then see (/my-org resolves orgs by the BROWSER pubkey).
+      //    Minting ahead of this is what produces orphaned orgs.
+      try {
+        await adoptIdentityFromLocalMcp(address);
+        await onReady();
+        return;
+      } catch {
+        // no local identity / MCP offline → fall through to the cross-device path.
+      }
+
+      // 2. Adopt an existing wallet-wrapped identity from the hub (cross-device,
+      //    no local MCP on this machine).
       try {
         await adoptIdentityFromWallet(address);
         await onReady();
         return;
       } catch (err) {
         if (err instanceof WalletUnlockMismatchError) {
-          throw err; // hard stop — wrong wallet signs; never mint
+          throw err; // hard stop — wrong wallet signs; never mint over an existing identity
         }
-        // NoWalletIdentityError (no blob) or transient hub/network error → try local MCP.
+        // NoWalletIdentityError (no blob) or transient hub/network error → mint.
       }
 
-      // 2. Local MCP adopt (the live case).
-      try {
-        await adoptIdentityFromLocalMcp(address);
-        await onReady();
-        return;
-      } catch {
-        // no local identity / MCP offline → fall through to mint.
-      }
-
-      // 3. Mint + upload wallet blob + back-push to local MCP (all inside createGuestIdentity).
+      // 3. Genuinely no identity anywhere — mint + upload the wallet-wrapped blob.
       await createGuestIdentity(address);
       await onReady();
     } catch (err) {
       const detected = typeof window === 'undefined' ? [] : detectWallets();
       if (err instanceof WalletUnlockMismatchError) {
-        showWalletUnlockError();
+        showWalletUnlockError(() => {
+          void (async () => {
+            try {
+              await clearIdentity();
+              toast.success('Identity reset — sign in again with any wallet');
+            } catch (resetErr) {
+              showHardWalletError(resetErr, detected);
+            }
+          })();
+        });
       } else {
         showHardWalletError(err, detected);
       }
