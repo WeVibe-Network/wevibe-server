@@ -116,7 +116,7 @@ func RecordServeEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.Contains(errMsg, "memory_content_hash") || strings.Contains(errMsg, "serve_key_pubkey") ||
 			strings.Contains(errMsg, "serve_sig") || strings.Contains(errMsg, "nonce") ||
-			strings.Contains(errMsg, "contributor_id") ||
+			strings.Contains(errMsg, "episode_ref") || strings.Contains(errMsg, "contributor_id") ||
 			strings.Contains(errMsg, "epoch_id") {
 			http.Error(w, fmt.Sprintf(`{"error":"validation: %s"}`, errMsg), http.StatusBadRequest)
 			return
@@ -984,6 +984,7 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 		ServeKeyPubkey   string `json:"serve_key_pubkey"`
 		ServeSig         string `json:"serve_sig"`
 		Nonce            string `json:"nonce"`
+		EpisodeRef       string `json:"episode_ref"`
 		ServeFingerprint string `json:"serve_fingerprint"`
 		Reason           string `json:"reason"`
 	}
@@ -1009,6 +1010,7 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 		ServeKeyPubkey:    req.ServeKeyPubkey,
 		ServeSig:          req.ServeSig,
 		Nonce:             req.Nonce,
+		EpisodeRef:        req.EpisodeRef,
 		ServeFingerprint:  req.ServeFingerprint,
 		Reason:            req.Reason,
 	}, signed.Pubkey)
@@ -1020,6 +1022,7 @@ func RecordDenialEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.Contains(errMsg, "memory_content_hash") || strings.Contains(errMsg, "serve_key_pubkey") ||
 			strings.Contains(errMsg, "serve_sig") || strings.Contains(errMsg, "nonce") ||
+			strings.Contains(errMsg, "episode_ref") ||
 			strings.Contains(errMsg, "serve_fingerprint") || strings.Contains(errMsg, "reason") {
 			http.Error(w, fmt.Sprintf(`{"error":"validation: %s"}`, errMsg), http.StatusBadRequest)
 			return

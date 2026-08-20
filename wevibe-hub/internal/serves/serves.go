@@ -63,6 +63,7 @@ type RecordDenialRequest struct {
 	ServeKeyPubkey    string `json:"serve_key_pubkey"`
 	ServeSig          string `json:"serve_sig"`
 	Nonce             string `json:"nonce"`
+	EpisodeRef        string `json:"episode_ref"`
 	ServeFingerprint  string `json:"serve_fingerprint"`
 	Reason            string `json:"reason"`
 }
@@ -294,6 +295,9 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 	if len(nonce) == 0 {
 		return nil, fmt.Errorf("nonce must decode to at least 1 byte")
 	}
+	if err := validateEpisodeRef(req.EpisodeRef); err != nil {
+		return nil, err
+	}
 	if req.ServeFingerprint == "" {
 		return nil, fmt.Errorf("serve_fingerprint is required")
 	}
@@ -318,18 +322,19 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 	// DenialEntry proto has no matched_keywords field at chain commit 533d18b).
 	// CO-033b may add denial matched_keywords if a chain proto change lands.
 	err = pool.QueryRow(ctx, `
-		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '', 0, '{}'::TEXT[], $9, $10, $11, 'pending')
+		INSERT INTO serve_events (org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, episode_ref, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', 0, '{}'::TEXT[], $10, $11, $12, 'pending')
 		ON CONFLICT (org_id, event_type, serve_key_pubkey, memory_content_hash, epoch_id) DO UPDATE SET
 			serve_sig = EXCLUDED.serve_sig,
 			nonce = EXCLUDED.nonce,
+			episode_ref = EXCLUDED.episode_ref,
 			serve_fingerprint = EXCLUDED.serve_fingerprint,
 			contributor_id = EXCLUDED.contributor_id,
 			reporter_pubkey = EXCLUDED.reporter_pubkey,
 			reason = EXCLUDED.reason,
 			created_at = EXCLUDED.created_at
 		RETURNING id, created_at
-	`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKeyPubkey, req.ServeSig, req.Nonce, req.ServeFingerprint, reporterPubkey, reporterPubkey, req.Reason, EventTypeDenial).Scan(&id, &createdAt)
+	`, req.OrgID, req.EpochID, req.MemoryContentHash, req.ServeKeyPubkey, req.ServeSig, req.Nonce, req.EpisodeRef, req.ServeFingerprint, reporterPubkey, reporterPubkey, req.Reason, EventTypeDenial).Scan(&id, &createdAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			return nil, fmt.Errorf("duplicate denial event: already recorded for this org/epoch/key/memory")
@@ -339,11 +344,11 @@ func RecordDenial(ctx context.Context, pool *pgxpool.Pool, req RecordDenialReque
 
 	var record ServeEventRecord
 	err = pool.QueryRow(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, episode_ref, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events WHERE id = $1
 	`, id).Scan(
 		&record.ID, &record.OrgID, &record.EpochID, &record.MemoryContentHash,
-		&record.ServeKeyPubkey, &record.ServeSig, &record.Nonce, &record.ServeFingerprint, &record.ContributorID, &record.ModelID,
+		&record.ServeKeyPubkey, &record.ServeSig, &record.Nonce, &record.EpisodeRef, &record.ServeFingerprint, &record.ContributorID, &record.ModelID,
 		&record.TurnCount, &record.MatchedKeywords, &record.ReporterPubkey, &record.Reason, &record.EventType, &record.Status, &record.TxHash,
 		&record.CreatedAt, &record.SubmittedAt,
 	)
@@ -560,7 +565,7 @@ func GetPendingServes(ctx context.Context, pool *pgxpool.Pool, orgID string, lim
 
 func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, limit int, holdHours int) ([]ServeEventRecord, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
+		SELECT id, org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce, episode_ref, serve_fingerprint, contributor_id, model_id, turn_count, matched_keywords, reporter_pubkey, reason, event_type, status, tx_hash, created_at, submitted_at
 		FROM serve_events
 		WHERE org_id = $1 AND status = 'pending' AND event_type = 'denial'
 			AND ($3::int <= 0 OR created_at <= NOW() - make_interval(hours => $3))
@@ -577,7 +582,7 @@ func GetPendingDenials(ctx context.Context, pool *pgxpool.Pool, orgID string, li
 		var r ServeEventRecord
 		err := rows.Scan(
 			&r.ID, &r.OrgID, &r.EpochID, &r.MemoryContentHash,
-			&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
+			&r.ServeKeyPubkey, &r.ServeSig, &r.Nonce, &r.EpisodeRef, &r.ServeFingerprint, &r.ContributorID, &r.ModelID,
 			&r.TurnCount, &r.MatchedKeywords, &r.ReporterPubkey, &r.Reason, &r.EventType, &r.Status, &r.TxHash,
 			&r.CreatedAt, &r.SubmittedAt,
 		)

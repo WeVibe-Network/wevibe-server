@@ -201,8 +201,8 @@ func TestGetPendingCallbacks_ClosedByDecisions(t *testing.T) {
 		_, err := env.pool.Exec(context.Background(), `
 			INSERT INTO serve_events (
 				org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
-				serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
-			) VALUES ($1, 0, $2, $3, $4, 'n-pc-serve', $8, $5, ARRAY['x'], $6, 'incorrect', 'serve', 'pending', $7)
+				episode_ref, serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+			) VALUES ($1, 0, $2, $3, $4, 'n-pc-serve', 'e401', $8, $5, ARRAY['x'], $6, 'incorrect', 'serve', 'pending', $7)
 		`, env.orgID, memory, strings.Repeat("1", 64), strings.Repeat("2", 128), env.member.pubkeyHex, env.member.pubkeyHex, deliveredAt.Add(5*time.Minute),
 			fmt.Sprintf("fp-pc-serve-%d", time.Now().UnixNano()))
 		if err != nil {

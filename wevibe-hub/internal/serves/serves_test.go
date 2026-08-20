@@ -238,6 +238,73 @@ func TestRecordServe_PersistsEpisodeRef(t *testing.T) {
 	}
 }
 
+// TestRecordDenial_PersistsEpisodeRef mirrors TestRecordServe_PersistsEpisodeRef
+// for the denial path: the episode_ref supplied on the request must round-trip
+// into the serve_events row. episode_ref is NOT NULL in the DDL, so before the
+// fix every RecordDenial INSERT failed with SQLSTATE 23502 and no denial was
+// ever persisted or relayed. Guards both the RecordDenial INSERT column/value
+// alignment and the GetPendingDenials read path.
+func TestRecordDenial_PersistsEpisodeRef(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	orgID := fmt.Sprintf("test-org-denial-episode-%d", time.Now().UnixNano())
+	seedOrg(t, pool, orgID)
+
+	req := RecordDenialRequest{
+		OrgID:             orgID,
+		EpochID:           0,
+		MemoryContentHash: fmt.Sprintf("%064x", time.Now().UnixNano()),
+		ServeKeyPubkey:    strings.Repeat("b", 64),
+		ServeSig:          strings.Repeat("c", 128),
+		Nonce:             "0c",
+		EpisodeRef:        "0d0e0f10",
+		ServeFingerprint:  strings.Repeat("e", 64),
+		Reason:            "incorrect",
+	}
+	reporterPubkey := strings.Repeat("d", 64)
+	seedMember(t, pool, orgID, reporterPubkey, "member")
+
+	record, err := RecordDenial(ctx, pool, req, reporterPubkey)
+	if err != nil {
+		t.Fatalf("RecordDenial failed: %v", err)
+	}
+	if record.EpisodeRef != req.EpisodeRef {
+		t.Fatalf("episode_ref on returned record: got=%q want=%q", record.EpisodeRef, req.EpisodeRef)
+	}
+
+	// Read back directly from serve_events to confirm the column persisted,
+	// not just the post-INSERT SELECT inside RecordDenial.
+	var persistedEpisodeRef string
+	err = pool.QueryRow(ctx, `
+		SELECT episode_ref FROM serve_events WHERE id = $1
+	`, record.ID).Scan(&persistedEpisodeRef)
+	if err != nil {
+		t.Fatalf("read episode_ref from serve_events: %v", err)
+	}
+	if persistedEpisodeRef != req.EpisodeRef {
+		t.Fatalf("episode_ref persisted in serve_events: got=%q want=%q", persistedEpisodeRef, req.EpisodeRef)
+	}
+
+	// Round-trip via the pending-denials read path as well.
+	pending, err := GetPendingDenials(ctx, pool, orgID, 10, 0)
+	if err != nil {
+		t.Fatalf("GetPendingDenials failed: %v", err)
+	}
+	var got *ServeEventRecord
+	for i := range pending {
+		if pending[i].ID == record.ID {
+			got = &pending[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("expected to find persisted denial row in pending denials, got nil")
+	}
+	if got.EpisodeRef != req.EpisodeRef {
+		t.Fatalf("episode_ref from pending denials: got=%q want=%q", got.EpisodeRef, req.EpisodeRef)
+	}
+}
+
 func TestRecordOutcome_DedupsAndPendingRelay(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -368,12 +435,12 @@ func TestPendingRelayHoldEligibility(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO serve_events (
 			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
-			serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+			episode_ref, serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
 		) VALUES
-			($1, 0, $2, $3, $4, 'n-serve-fresh', $16, $5, ARRAY['alpha'], $6, 'incorrect', 'serve', 'pending', NOW()),
-			($1, 0, $7, $8, $9, 'n-serve-old',   $17, $5, ARRAY['beta'],  $6, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
-			($1, 0, $10, $11, $12, 'n-deny-fresh', $18, $5, ARRAY['gamma'], $6, 'incorrect', 'denial', 'pending', NOW()),
-			($1, 0, $13, $14, $15, 'n-deny-old',   $19, $5, ARRAY['delta'], $6, 'incorrect', 'denial', 'pending', NOW() - interval '25 hours')
+			($1, 0, $2, $3, $4, 'n-serve-fresh', 'e101', $16, $5, ARRAY['alpha'], $6, 'incorrect', 'serve', 'pending', NOW()),
+			($1, 0, $7, $8, $9, 'n-serve-old',   'e102', $17, $5, ARRAY['beta'],  $6, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
+			($1, 0, $10, $11, $12, 'n-deny-fresh', 'e103', $18, $5, ARRAY['gamma'], $6, 'incorrect', 'denial', 'pending', NOW()),
+			($1, 0, $13, $14, $15, 'n-deny-old',   'e104', $19, $5, ARRAY['delta'], $6, 'incorrect', 'denial', 'pending', NOW() - interval '25 hours')
 	`, orgID,
 		fmt.Sprintf("%064x", 101), fmt.Sprintf("%064x", 201), strings.Repeat("a", 128), contributor, reporter,
 		fmt.Sprintf("%064x", 102), fmt.Sprintf("%064x", 202), strings.Repeat("b", 128),
@@ -433,8 +500,8 @@ func TestHasPendingEventsRespectsHoldWindow(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO serve_events (
 			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
-			serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
-		) VALUES ($1, 0, $2, $3, $4, 'n-hold', $7, $5, ARRAY['hold'], $6, 'incorrect', 'serve', 'pending', NOW())
+			episode_ref, serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+		) VALUES ($1, 0, $2, $3, $4, 'n-hold', 'e201', $7, $5, ARRAY['hold'], $6, 'incorrect', 'serve', 'pending', NOW())
 	`, orgID, memoryHash, fmt.Sprintf("%064x", 302), strings.Repeat("e", 128), contributor, reporter, fmt.Sprintf("%064x", 305))
 	if err != nil {
 		t.Fatalf("insert pending row: %v", err)
@@ -496,11 +563,11 @@ func TestListOrgsWithEligiblePendingRespectsHoldAndExemptions(t *testing.T) {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO serve_events (
 			org_id, epoch_id, memory_content_hash, serve_key_pubkey, serve_sig, nonce,
-			serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
+			episode_ref, serve_fingerprint, contributor_id, matched_keywords, reporter_pubkey, reason, event_type, status, created_at
 		) VALUES
-			($1, 0, $4, $5, $6, 'a-fresh', $15, $7, ARRAY['a'], $8, 'incorrect', 'serve', 'pending', NOW()),
-			($2, 0, $9, $10, $11, 'b-old',  $16, $7, ARRAY['b'], $8, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
-			($3, 0, $12, $13, $14, 'c-fresh', $17, $7, ARRAY['c'], $8, 'incorrect', 'serve', 'pending', NOW())
+			($1, 0, $4, $5, $6, 'a-fresh', 'e301', $15, $7, ARRAY['a'], $8, 'incorrect', 'serve', 'pending', NOW()),
+			($2, 0, $9, $10, $11, 'b-old',  'e302', $16, $7, ARRAY['b'], $8, 'incorrect', 'serve', 'pending', NOW() - interval '25 hours'),
+			($3, 0, $12, $13, $14, 'c-fresh', 'e303', $17, $7, ARRAY['c'], $8, 'incorrect', 'serve', 'pending', NOW())
 	`,
 		orgA,
 		orgB,
