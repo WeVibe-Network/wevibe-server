@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"math"
 	"net/http"
 	"strconv"
@@ -36,26 +35,25 @@ type listRecallQueriesResponse struct {
 }
 
 type recallQueryDetail struct {
-	QueryID          string          `json:"query_id"`
-	OrgID            string          `json:"org_id"`
-	AgentPubkey      string          `json:"agent_pubkey"`
-	SessionID        string          `json:"session_id"`
-	QueryText        *string         `json:"query_text"`
-	KeywordWeights   json.RawMessage `json:"keyword_weights"`
-	RelevanceFloor   float64         `json:"relevance_floor"`
-	SurfaceBudget    int             `json:"surface_budget"`
-	EmbeddingModelID string          `json:"embedding_model_id"`
-	VectorDim        int             `json:"vector_dim"`
-	LimitN           int             `json:"limit_n"`
-	CandidateCount   int             `json:"candidate_count"`
-	ReturnedCount    int             `json:"returned_count"`
-	Contested        bool            `json:"contested"`
-	CreatedAt        string          `json:"created_at"`
+	QueryID          string  `json:"query_id"`
+	OrgID            string  `json:"org_id"`
+	AgentPubkey      string  `json:"agent_pubkey"`
+	SessionID        string  `json:"session_id"`
+	QueryText        *string `json:"query_text"`
+	RelevanceFloor   float64 `json:"relevance_floor"`
+	SurfaceBudget    int     `json:"surface_budget"`
+	EmbeddingModelID string  `json:"embedding_model_id"`
+	VectorDim        int     `json:"vector_dim"`
+	LimitN           int     `json:"limit_n"`
+	CandidateCount   int     `json:"candidate_count"`
+	ReturnedCount    int     `json:"returned_count"`
+	Contested        bool    `json:"contested"`
+	CreatedAt        string  `json:"created_at"`
 }
 
 type recallQueryCandidate struct {
 	MemoryCID       string   `json:"memory_cid"`
-	KeywordScore    float64  `json:"keyword_score"`
+	KeywordOverlap  float64  `json:"keyword_overlap"`
 	VectorScore     float64  `json:"vector_score"`
 	Gamma           float64  `json:"gamma"`
 	Delta           float64  `json:"delta"`
@@ -207,7 +205,6 @@ func GetRecallQueryDetail(w http.ResponseWriter, r *http.Request) {
 
 	var query recallQueryDetail
 	var createdAt time.Time
-	var keywordWeights json.RawMessage
 
 	err := pool.QueryRow(r.Context(), `
 		SELECT
@@ -216,7 +213,6 @@ func GetRecallQueryDetail(w http.ResponseWriter, r *http.Request) {
 			agent_pubkey,
 			session_id,
 			query_text,
-			keyword_weights,
 			relevance_floor,
 			surface_budget,
 			embedding_model_id,
@@ -234,7 +230,6 @@ func GetRecallQueryDetail(w http.ResponseWriter, r *http.Request) {
 		&query.AgentPubkey,
 		&query.SessionID,
 		&query.QueryText,
-		&keywordWeights,
 		&query.RelevanceFloor,
 		&query.SurfaceBudget,
 		&query.EmbeddingModelID,
@@ -254,16 +249,12 @@ func GetRecallQueryDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(keywordWeights) == 0 {
-		keywordWeights = json.RawMessage("[]")
-	}
-	query.KeywordWeights = keywordWeights
 	query.CreatedAt = createdAt.Format(time.RFC3339)
 
 	rows, err := pool.Query(r.Context(), `
 		SELECT
 			memory_cid,
-			keyword_score,
+			keyword_overlap,
 			vector_score,
 			gamma,
 			delta,
@@ -287,7 +278,7 @@ func GetRecallQueryDetail(w http.ResponseWriter, r *http.Request) {
 		var candidate recallQueryCandidate
 		if err := rows.Scan(
 			&candidate.MemoryCID,
-			&candidate.KeywordScore,
+			&candidate.KeywordOverlap,
 			&candidate.VectorScore,
 			&candidate.Gamma,
 			&candidate.Delta,

@@ -553,6 +553,8 @@ CREATE TABLE IF NOT EXISTS query_candidate_scores (
     vector_score      DOUBLE PRECISION NOT NULL DEFAULT 0,
     standing_bps      INTEGER          NOT NULL DEFAULT 0,
     keyword_overlap   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    gamma             DOUBLE PRECISION NOT NULL DEFAULT 0,
+    delta             DOUBLE PRECISION NOT NULL DEFAULT 0,
     capped_boost      DOUBLE PRECISION NOT NULL DEFAULT 0,
     combined_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
     matched_keywords  TEXT[]           NOT NULL DEFAULT '{}',
