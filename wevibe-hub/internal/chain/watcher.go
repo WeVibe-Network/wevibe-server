@@ -515,6 +515,7 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 		    can_moderate = $3,
 		    chain_confirmed = TRUE,
 		    active = TRUE,
+		    membership_active = (is_trial IS FALSE),
 		    updated_at = NOW()
 		WHERE org_id = $4 AND pubkey = $5
 	`, role, canContribute, canModerate, orgID, pubkey)
@@ -566,7 +567,8 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 				is_trial,
 				trial_expires_at,
 				chain_confirmed,
-				active
+				active,
+				membership_active
 			)
 			VALUES (
 				$1,
@@ -580,7 +582,8 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 				$9,
 				CASE WHEN $9 THEN NOW() + ($10 * INTERVAL '1 day') ELSE NULL END,
 				TRUE,
-				TRUE
+				TRUE,
+				CASE WHEN $9 THEN FALSE ELSE TRUE END
 			)
 			ON CONFLICT (org_id, pubkey) DO UPDATE
 			SET role = EXCLUDED.role,
@@ -644,7 +647,8 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			is_trial,
 			trial_expires_at,
 			chain_confirmed,
-			active
+			active,
+			membership_active
 		)
 		VALUES (
 			$1,
@@ -657,6 +661,7 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			'member',
 			FALSE,
 			NULL,
+			TRUE,
 			TRUE,
 			TRUE
 		)
