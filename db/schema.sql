@@ -45,16 +45,19 @@ CREATE TABLE IF NOT EXISTS orgs (
     description                 TEXT        NOT NULL DEFAULT '',
     tech_stack                  TEXT        NOT NULL DEFAULT '',
     focus_areas                 TEXT        NOT NULL DEFAULT '',
-    current_epoch               INTEGER     NOT NULL DEFAULT 0,
+    -- Static crypto manifest, re-homed onto the org row (the per-epoch
+    -- manifest table is retired). One immutable manifest per org; served
+    -- to MCP for recall decrypt.
+    pk_mod                      TEXT        NOT NULL DEFAULT '',
+    umbral_pk                   BYTEA       NOT NULL DEFAULT ''::bytea,
+    manifest_signed_by          TEXT        NOT NULL DEFAULT '',
+    manifest_signature          BYTEA       NOT NULL DEFAULT ''::bytea,
     fee_model                   JSONB       NOT NULL DEFAULT '{}',
     egress_mode                 TEXT        NOT NULL DEFAULT 'unrestricted'
                                         CHECK (egress_mode IN ('local_only', 'allowlist', 'unrestricted')),
     allowed_providers           TEXT[]      NOT NULL DEFAULT '{}',
     status                      TEXT        NOT NULL DEFAULT 'active'
                                         CHECK (status IN ('active', 'suspended', 'closed')),
-    rotation_status             TEXT        NOT NULL DEFAULT 'active'
-                                        CHECK (rotation_status IN ('active', 'rotation_pending')),
-    rotation_pending_since      TIMESTAMPTZ,
     stripe_customer_id          TEXT,
     stripe_subscription_id      TEXT,
     last_batch_extraction_at    TIMESTAMPTZ,
@@ -87,9 +90,6 @@ CREATE TABLE IF NOT EXISTS members (
                                             CHECK (role IN ('leader', 'member')),
     can_contribute              BOOLEAN     NOT NULL DEFAULT FALSE,
     can_moderate                BOOLEAN     NOT NULL DEFAULT FALSE,
-    join_epoch                  INTEGER     NOT NULL,
-    history_access_from_epoch   INTEGER     NOT NULL DEFAULT 0,
-    authorized_until_epoch      INTEGER,
     -- `active`            : org-membership soft-delete (CloseOrg/TransferLeadership toggle this)
     -- `chain_confirmed`   : TRUE once watcher observed MsgAddMember (or leader MsgRegisterOrg).
     --                       A member is fully usable only when active = TRUE AND chain_confirmed = TRUE.
@@ -114,20 +114,6 @@ CREATE INDEX IF NOT EXISTS idx_members_active ON members(org_id, active);
 CREATE INDEX IF NOT EXISTS idx_members_membership_active ON members(org_id, membership_active);
 CREATE INDEX IF NOT EXISTS idx_members_pubkey ON members(pubkey);
 CREATE INDEX IF NOT EXISTS idx_members_wallet ON members(wallet_address) WHERE wallet_address IS NOT NULL;
-
--- ── Epoch manifests ────────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS epoch_manifests (
-    org_id                  TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
-    epoch_id                INTEGER     NOT NULL,
-    pk_mod                  TEXT        NOT NULL,
-    umbral_pk               BYTEA,
-    previous_manifest_hash  TEXT,
-    signed_by               TEXT        NOT NULL,
-    signature               TEXT        NOT NULL,
-    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (org_id, epoch_id)
-);
 
 -- ── Pending submissions ────────────────────────────────────────────────────
 -- Lifecycle: pending → pending_keyword → pending_chain → committed (terminal)
@@ -265,32 +251,6 @@ CREATE TABLE IF NOT EXISTS report_votes (
 
 CREATE INDEX IF NOT EXISTS idx_report_votes_report ON report_votes(org_id, report_id);
 
--- ── Rotation buffer ────────────────────────────────────────────────────────
--- Submissions received while org is in rotation_pending state.
--- These are NOT assigned a final epoch and NOT admitted to moderation queue.
--- After rotation completes, they are moved to pending_submissions under the new epoch.
-
-CREATE TABLE IF NOT EXISTS rotation_buffer (
-    buffer_id           TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
-    org_id              TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
-    epoch_id            INTEGER     NOT NULL,
-    contributor_pubkey  TEXT        NOT NULL,
-    ciphertext_hex      TEXT        NOT NULL,
-    plaintext_hash      TEXT        NOT NULL,
-    salt                TEXT        NOT NULL,
-    ciphertext_hash     TEXT        NOT NULL,
-    wrapped_dek_hash    TEXT        NOT NULL,
-    wrapped_dek_mod     TEXT        NOT NULL,
-    contributor_sig     TEXT        NOT NULL,
-    submission_hash     TEXT        NOT NULL,
-    stack_hint          TEXT[]      NOT NULL DEFAULT '{}',
-    memory_type         TEXT        NOT NULL DEFAULT 'memory'
-                                    CHECK (memory_type = 'memory'),
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_rotation_buffer_org ON rotation_buffer(org_id);
-
 -- ── Usage receipts ─────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS usage_receipts (
@@ -356,7 +316,6 @@ CREATE INDEX IF NOT EXISTS idx_credit_txn_org ON credit_transactions(org_id, cre
 CREATE TABLE IF NOT EXISTS key_envelopes (
     org_id          TEXT        NOT NULL REFERENCES orgs(org_id) ON DELETE CASCADE,
     pubkey          TEXT        NOT NULL,
-    epoch_id        INTEGER     NOT NULL,
     enc_envelope    TEXT        NOT NULL,
     search_envelope TEXT        NOT NULL,
     mod_envelope    TEXT,

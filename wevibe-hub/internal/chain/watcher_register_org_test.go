@@ -63,7 +63,6 @@ func TestProcessTx_RegisterOrg_SyncsOrgProfile(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 

@@ -224,8 +224,6 @@ interface MemberOrgEntry {
   org_id: string;
   org_name: string;
   role: 'leader' | 'moderator' | 'member' | 'contributor';
-  current_epoch: number;
-  history_access_from_epoch: number;
   egress_mode: string;
   allowed_providers: string[];
   mod_pubkey?: string;
@@ -558,7 +556,7 @@ Kept (still hub HTTP calls):
 
 - `getOrgChainConfig(orgId)` — hub `GET /v1/orgs/{orgID}/chain-config`. Read-only proxy to the chain query; no chain write.
 - `updateOrgConfig(orgId, patch)` — hub `PATCH /v1/orgs/{orgID}/config` for off-chain mirror updates. Does NOT broadcast to chain — chain writes remain dashboard wallet-direct via `directBroadcast`.
-- `topUpCredits`, `transferLeadership`, `closeOrg`, `rotateEpoch` — off-chain hub operations, unchanged.
+- `topUpCredits`, `transferLeadership`, `closeOrg` — off-chain hub operations, unchanged.
 - Keyword-pipeline methods listed under "Hub Client Methods (lib/hub-client.ts)" above.
 
 Removed in CO-011a.4 + CO-214 cleanup (chain-bound writes are wallet-direct via `chain-client.ts :: directBroadcast`):

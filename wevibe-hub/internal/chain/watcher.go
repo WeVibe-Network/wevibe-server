@@ -462,36 +462,20 @@ func (w *ChainWatcher) processSetMemberCapabilitiesBookkeeping(ctx context.Conte
 }
 
 func (w *ChainWatcher) processRemoveMemberBookkeeping(ctx context.Context, txHash string, blockHeight int64, blockTime time.Time, orgID string, pubkey string) error {
-	currentEpoch, err := orgs.GetCurrentEpoch(ctx, w.db, orgID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			w.logger.Warn("org row not found during remove-member bookkeeping; skipping member deactivation",
-				"org_id", orgID,
-				"pubkey", pubkey,
-				"tx_hash", txHash)
-		} else {
-			w.logger.Warn("failed to load current epoch during remove-member bookkeeping; skipping member deactivation",
+	if err := members.RemoveMember(ctx, w.db, orgID, pubkey); err != nil {
+		errLower := strings.ToLower(err.Error())
+		if errors.Is(err, pgx.ErrNoRows) || strings.Contains(errLower, "not found") || strings.Contains(errLower, "inactive") {
+			w.logger.Info("remove-member bookkeeping already applied",
 				"org_id", orgID,
 				"pubkey", pubkey,
 				"tx_hash", txHash,
 				"err", err)
-		}
-	} else {
-		if err := members.RemoveMember(ctx, w.db, orgID, pubkey, currentEpoch); err != nil {
-			errLower := strings.ToLower(err.Error())
-			if errors.Is(err, pgx.ErrNoRows) || strings.Contains(errLower, "not found") || strings.Contains(errLower, "inactive") {
-				w.logger.Info("remove-member bookkeeping already applied",
-					"org_id", orgID,
-					"pubkey", pubkey,
-					"tx_hash", txHash,
-					"err", err)
-			} else {
-				w.logger.Warn("failed to mark member inactive during remove-member bookkeeping",
-					"org_id", orgID,
-					"pubkey", pubkey,
-					"tx_hash", txHash,
-					"err", err)
-			}
+		} else {
+			w.logger.Warn("failed to mark member inactive during remove-member bookkeeping",
+				"org_id", orgID,
+				"pubkey", pubkey,
+				"tx_hash", txHash,
+				"err", err)
 		}
 	}
 
@@ -518,14 +502,6 @@ func (w *ChainWatcher) processRemoveMemberBookkeeping(ctx context.Context, txHas
 				"tx_hash", txHash,
 				"err", err)
 		}
-	}
-
-	if err := orgs.SetRotationPending(ctx, w.db, orgID); err != nil {
-		w.logger.Warn("failed to set rotation pending during remove-member bookkeeping",
-			"org_id", orgID,
-			"pubkey", pubkey,
-			"tx_hash", txHash,
-			"err", err)
 	}
 
 	return nil
@@ -567,14 +543,13 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 		return fmt.Errorf("failed to load join request for promoted member: %w", joinReqErr)
 	}
 
-	var currentEpoch int
 	var trialDays int
 	if err := w.db.QueryRow(ctx, `
-		SELECT current_epoch, COALESCE(trial_days, 7)
+		SELECT COALESCE(trial_days, 7)
 		FROM orgs
 		WHERE org_id = $1
-	`, orgID).Scan(&currentEpoch, &trialDays); err != nil {
-		return fmt.Errorf("failed to load org epoch/trial settings: %w", err)
+	`, orgID).Scan(&trialDays); err != nil {
+		return fmt.Errorf("failed to load org trial settings: %w", err)
 	}
 
 	if joinReqErr == nil {
@@ -587,7 +562,6 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 				role,
 				can_contribute,
 				can_moderate,
-				join_epoch,
 				member_tier,
 				is_trial,
 				trial_expires_at,
@@ -602,10 +576,9 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 				$5,
 				$6,
 				$7,
-				$8,
-				COALESCE($9, 'member'),
-				$10,
-				CASE WHEN $10 THEN NOW() + ($11 * INTERVAL '1 day') ELSE NULL END,
+				COALESCE($8, 'member'),
+				$9,
+				CASE WHEN $9 THEN NOW() + ($10 * INTERVAL '1 day') ELSE NULL END,
 				TRUE,
 				TRUE
 			)
@@ -616,7 +589,7 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			    chain_confirmed = TRUE,
 			    active = TRUE,
 			    updated_at = NOW()
-		`, orgID, pubkey, x25519Pubkey, prePubkey, role, canContribute, canModerate, currentEpoch, approvalTier, approvalIsTrial, trialDays); err != nil {
+		`, orgID, pubkey, x25519Pubkey, prePubkey, role, canContribute, canModerate, approvalTier, approvalIsTrial, trialDays); err != nil {
 			return fmt.Errorf("failed to upsert confirmed member from join request: %w", err)
 		}
 
@@ -667,7 +640,6 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			role,
 			can_contribute,
 			can_moderate,
-			join_epoch,
 			member_tier,
 			is_trial,
 			trial_expires_at,
@@ -682,7 +654,6 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 			$4,
 			$5,
 			$6,
-			$7,
 			'member',
 			FALSE,
 			NULL,
@@ -696,7 +667,7 @@ func (w *ChainWatcher) processAddMemberBookkeeping(ctx context.Context, txHash s
 		    chain_confirmed = TRUE,
 		    active = TRUE,
 		    updated_at = NOW()
-	`, orgID, pubkey, x25519Pubkey, role, canContribute, canModerate, currentEpoch); err != nil {
+	`, orgID, pubkey, x25519Pubkey, role, canContribute, canModerate); err != nil {
 		return fmt.Errorf("failed to upsert confirmed invited member: %w", err)
 	}
 

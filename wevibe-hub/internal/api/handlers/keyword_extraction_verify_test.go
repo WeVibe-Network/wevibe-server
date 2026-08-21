@@ -432,8 +432,8 @@ func TestVerifyKeywords_TransitionsToPendingChainAndPersistsEmbedding(t *testing
 func insertLeaderForVerify(t *testing.T, pool *pgxpool.Pool, orgID, pubkey string) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch)
-		VALUES ($1, $2, $3, 'leader', 0)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role)
+		VALUES ($1, $2, $3, 'leader')
 		ON CONFLICT (org_id, pubkey) DO UPDATE SET role = EXCLUDED.role
 	`, orgID, pubkey, randHex(t, 32))
 	if err != nil {

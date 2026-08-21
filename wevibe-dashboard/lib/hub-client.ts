@@ -302,11 +302,9 @@ export interface OrgSummary {
   hub_serving_key_address?: string;
   hub_endpoints?: string[];
   hub_response_pubkey?: string;
-  current_epoch: number;
   egress_mode: string;
   allowed_providers: string[];
   status: string;
-  rotation_status: string;
   created_at: string;
 }
 
@@ -577,26 +575,6 @@ export async function getRecoveryShare(orgId: string): Promise<RecoveryShare | n
   } catch {
     return null;
   }
-}
-
-export interface EpochManifest {
-  org_id: string;
-  epoch_id: number;
-  pk_mod: string;
-  signed_by: string;
-  signature: string;
-  created_at: string;
-}
-
-export async function getEpochManifest(orgId: string, epochId: string): Promise<EpochManifest> {
-  return hubFetch<EpochManifest>(`/v1/orgs/${orgId}/epoch/${epochId}/manifest`);
-}
-
-export async function rotateEpoch(orgId: string): Promise<{ status: string; buffered_moved: number }> {
-  return hubFetch<{ status: string; buffered_moved: number }>(`/v1/orgs/${orgId}/epoch/rotate`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  });
 }
 
 // === CO-238 Task F: Batch Keyword Extraction Pipeline ===
@@ -937,7 +915,6 @@ export interface ProfileModeratorStats {
 
 export interface ProfileLeaderStats {
   total_chain_commits: number;
-  total_epoch_rotations: number;
 }
 
 export interface ProfileMembership {
@@ -1056,7 +1033,6 @@ export interface DiscoverOrg {
   leader_pubkey: string;
   member_count: number;
   created_at: string;
-  current_epoch: number;
   last_activity_at: string | null;
 }
 

@@ -37,7 +37,6 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) string {
 		pool.Exec(context.Background(), "DELETE FROM credit_transactions WHERE org_id=$1", orgID)
 		pool.Exec(context.Background(), "DELETE FROM org_credits WHERE org_id=$1", orgID)
 		pool.Exec(context.Background(), "DELETE FROM members WHERE org_id=$1", orgID)
-		pool.Exec(context.Background(), "DELETE FROM epoch_manifests WHERE org_id=$1", orgID)
 		pool.Exec(context.Background(), "DELETE FROM orgs WHERE org_id=$1", orgID)
 	})
 	return orgID
@@ -46,8 +45,8 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) string {
 func insertTestMember(t *testing.T, pool *pgxpool.Pool, orgID, pubkey string) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch)
-		VALUES ($1, $2, 'x25519', 'member', 0)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role)
+		VALUES ($1, $2, 'x25519', 'member')
 	`, orgID, pubkey)
 	if err != nil {
 		t.Fatalf("insert test member: %v", err)

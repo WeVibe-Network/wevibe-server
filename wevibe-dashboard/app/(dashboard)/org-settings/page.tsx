@@ -1525,14 +1525,6 @@ export default function SettingsPage() {
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-wv-dim">Recall &amp; Epoch Status</h3>
                 <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Current epoch</dt>
-                    <dd className="mt-1 text-sm text-wv-text">{activeOrg.current_epoch}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-wv-dim">History access from epoch</dt>
-                    <dd className="mt-1 text-sm text-wv-text">{activeOrg.history_access_from_epoch}</dd>
-                  </div>
-                  <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-wv-dim">Egress mode</dt>
                     <dd className="mt-1 text-sm text-wv-text">{activeOrg.egress_mode}</dd>
                   </div>

@@ -1,5 +1,5 @@
 import { Page } from '@playwright/test';
-import { TEST_ORG, TEST_MEMBERS, TEST_KEYWORDS, TEST_EPOCH_MANIFEST } from './test-data';
+import { TEST_ORG, TEST_MEMBERS, TEST_KEYWORDS } from './test-data';
 
 export interface MockHubController {
   setLeaderPubkey(pk: string): void;
@@ -116,22 +116,6 @@ export async function mockHubApi(page: Page): Promise<MockHubController> {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ status: 'ok' }),
-      });
-    }
-
-    if (request.method() === 'GET' && url.includes('/epoch/')) {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify(TEST_EPOCH_MANIFEST),
-      });
-    }
-
-    if (request.method() === 'POST' && url.includes('/epoch/rotate')) {
-      return route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ status: 'ok', buffered_moved: 0 }),
       });
     }
 

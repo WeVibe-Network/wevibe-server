@@ -402,8 +402,8 @@ func seedMember(t *testing.T, pool *pgxpool.Pool, orgID, pubkey, role string) {
 	t.Helper()
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, active)
-		VALUES ($1, $2, $3, $4, 0, TRUE)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, active)
+		VALUES ($1, $2, $3, $4, TRUE)
 	`, orgID, pubkey, strings.Repeat("1", 64), role)
 	if err != nil {
 		t.Fatalf("seed member: %v", err)

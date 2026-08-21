@@ -223,7 +223,6 @@ export default function MyOrgPage() {
   const orgBreadth = stats?.org_breadth ?? 0;
 
   const members = orgSummary?.member_count ?? 0;
-  const currentEpoch = orgSummary?.current_epoch ?? activeOrg.current_epoch;
   const orgStatus = orgSummary?.status ?? '—';
   const hubCredits = orgFinances?.hub_credits ?? 0;
   const chainTreasury = orgFinances?.chain_treasury ?? 0;
@@ -359,7 +358,6 @@ export default function MyOrgPage() {
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-wv-faint">ORG</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <LeaderTile label="MEMBERS" value={formatCount(members)} loading={orgSummaryLoading} />
-            <LeaderTile label="EPOCH" value={formatCount(currentEpoch)} loading={orgSummaryLoading} />
             <LeaderTile label="STATUS" value={orgStatus} loading={orgSummaryLoading} />
             <LeaderTile label="HUB CREDITS" value={formatCount(hubCredits)} loading={orgFinancesLoading} />
             <LeaderTile label="CHAIN TREASURY" value={formatVibeWithDenom(chainTreasury)} loading={orgFinancesLoading} />

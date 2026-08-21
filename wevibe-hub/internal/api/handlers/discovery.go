@@ -43,7 +43,7 @@ func DiscoverOrgs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	query := `
-		SELECT o.org_id, o.org_name, o.domain, o.leader_pubkey, o.current_epoch, o.created_at,
+		SELECT o.org_id, o.org_name, o.domain, o.leader_pubkey, o.created_at,
 			   COUNT(m.pubkey) FILTER (WHERE m.active = true) as member_count,
 			   o.last_chain_submission_at
 		FROM orgs o
@@ -77,7 +77,7 @@ func DiscoverOrgs(w http.ResponseWriter, r *http.Request) {
 		var org protocol.DiscoverOrg
 		var createdAt time.Time
 		var lastActivity *time.Time
-		if err := rows.Scan(&org.OrgID, &org.OrgName, &org.Domain, &org.LeaderPubkey, &org.CurrentEpoch, &createdAt, &org.MemberCount, &lastActivity); err != nil {
+		if err := rows.Scan(&org.OrgID, &org.OrgName, &org.Domain, &org.LeaderPubkey, &createdAt, &org.MemberCount, &lastActivity); err != nil {
 			log.Printf("WARNING: discovery row scan failed, skipping row: %v", err)
 			continue
 		}

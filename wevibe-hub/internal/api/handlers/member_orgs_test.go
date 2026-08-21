@@ -64,7 +64,6 @@ func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey s
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	inviteReq := protocol.InviteMemberRequest{
 		Pubkey:       memberPubkey,
 		X25519Pubkey: strings.Repeat("e", 64),
@@ -72,14 +71,13 @@ func setupOrgWithMember(t *testing.T, pool *pgxpool.Pool) (orgID, memberPubkey s
 		SignedBy:     leaderPubkey,
 		Signature:    strings.Repeat("f", 128),
 	}
-	_, err = members.InviteMember(ctx, pool, orgID, epoch, inviteReq)
+	_, err = members.InviteMember(ctx, pool, orgID, inviteReq)
 	if err != nil {
 		t.Fatalf("InviteMember failed: %v", err)
 	}
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 
@@ -217,8 +215,7 @@ func TestGetMemberOrgs_InactiveMemberExcluded(t *testing.T) {
 
 	orgID, memberPubkey, priv := setupOrgWithMember(t, pool)
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
-	members.RemoveMember(ctx, pool, orgID, memberPubkey, epoch)
+	members.RemoveMember(ctx, pool, orgID, memberPubkey)
 
 	timestamp := time.Now().Format(time.RFC3339)
 	sig := signTimestamp(priv, timestamp)
@@ -283,7 +280,6 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 			t.Fatalf("CreateOrg failed: %v", err)
 		}
 
-		epoch, _ := orgs.GetCurrentEpoch(ctx, pool, data.orgID)
 		inviteReq := protocol.InviteMemberRequest{
 			Pubkey:       memberPubkey,
 			X25519Pubkey: strings.Repeat("e", 64),
@@ -291,7 +287,7 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 			SignedBy:     data.leader,
 			Signature:    strings.Repeat("f", 128),
 		}
-		_, err = members.InviteMember(ctx, pool, data.orgID, epoch, inviteReq)
+		_, err = members.InviteMember(ctx, pool, data.orgID, inviteReq)
 		if err != nil {
 			t.Fatalf("InviteMember failed: %v", err)
 		}
@@ -300,7 +296,6 @@ func TestGetMemberOrgs_MultipleOrgs(t *testing.T) {
 	t.Cleanup(func() {
 		for _, data := range orgsData {
 			pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", data.orgID)
-			pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", data.orgID)
 			pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", data.orgID)
 		}
 	})

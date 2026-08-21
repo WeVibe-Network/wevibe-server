@@ -24,7 +24,6 @@ const (
 type StoreKFragRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OrgId         string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
-	EpochId       uint64                 `protobuf:"varint,2,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
 	MemberPk      []byte                 `protobuf:"bytes,3,opt,name=member_pk,json=memberPk,proto3" json:"member_pk,omitempty"`
 	Kfrag         []byte                 `protobuf:"bytes,4,opt,name=kfrag,proto3" json:"kfrag,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -66,13 +65,6 @@ func (x *StoreKFragRequest) GetOrgId() string {
 		return x.OrgId
 	}
 	return ""
-}
-
-func (x *StoreKFragRequest) GetEpochId() uint64 {
-	if x != nil {
-		return x.EpochId
-	}
-	return 0
 }
 
 func (x *StoreKFragRequest) GetMemberPk() []byte {
@@ -129,7 +121,6 @@ type ReEncryptRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Identifies which stored kfrag to use.
 	OrgId    string `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
-	EpochId  uint64 `protobuf:"varint,2,opt,name=epoch_id,json=epochId,proto3" json:"epoch_id,omitempty"`
 	MemberPk []byte `protobuf:"bytes,3,opt,name=member_pk,json=memberPk,proto3" json:"member_pk,omitempty"`
 	// Serialized Umbral Capsule from the encrypted content.
 	Capsule       []byte `protobuf:"bytes,4,opt,name=capsule,proto3" json:"capsule,omitempty"`
@@ -172,13 +163,6 @@ func (x *ReEncryptRequest) GetOrgId() string {
 		return x.OrgId
 	}
 	return ""
-}
-
-func (x *ReEncryptRequest) GetEpochId() uint64 {
-	if x != nil {
-		return x.EpochId
-	}
-	return 0
 }
 
 func (x *ReEncryptRequest) GetMemberPk() []byte {
@@ -528,16 +512,14 @@ var File_sidecar_proto protoreflect.FileDescriptor
 
 const file_sidecar_proto_rawDesc = "" +
 	"\n" +
-	"\rsidecar.proto\x12\tumbral.v1\"x\n" +
+	"\rsidecar.proto\x12\tumbral.v1\"]\n" +
 	"\x11StoreKFragRequest\x12\x15\n" +
-	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x19\n" +
-	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
+	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x1b\n" +
 	"\tmember_pk\x18\x03 \x01(\fR\bmemberPk\x12\x14\n" +
 	"\x05kfrag\x18\x04 \x01(\fR\x05kfrag\"\x14\n" +
-	"\x12StoreKFragResponse\"{\n" +
+	"\x12StoreKFragResponse\"`\n" +
 	"\x10ReEncryptRequest\x12\x15\n" +
-	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x19\n" +
-	"\bepoch_id\x18\x02 \x01(\x04R\aepochId\x12\x1b\n" +
+	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x1b\n" +
 	"\tmember_pk\x18\x03 \x01(\fR\bmemberPk\x12\x18\n" +
 	"\acapsule\x18\x04 \x01(\fR\acapsule\")\n" +
 	"\x11ReEncryptResponse\x12\x14\n" +

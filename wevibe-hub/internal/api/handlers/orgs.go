@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -184,7 +183,7 @@ func CreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	modEnv := req.ModEnvelope
-	if err := envelopes.Store(r.Context(), pool, orgID, req.LeaderPubkey, 0, req.EncEnvelope, req.SearchEnvelope, &modEnv); err != nil {
+	if err := envelopes.Store(r.Context(), pool, orgID, req.LeaderPubkey, req.EncEnvelope, req.SearchEnvelope, &modEnv); err != nil {
 		http.Error(w, `{"error":"failed to store leader envelope"}`, http.StatusInternalServerError)
 		return
 	}
@@ -245,118 +244,6 @@ func GetOrg(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
-}
-
-func RotateEpoch(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	start := time.Now()
-	status := "err"
-	var count int
-	var outcomeEpoch int
-	defer func() {
-		wlog.Op(ctx, "hub.rotate_epoch", slog.LevelInfo,
-			slog.String("phase", "outcome"),
-			slog.String("status", status),
-			slog.Int("count", count),
-			slog.Int("new_epoch", outcomeEpoch),
-			slog.Int64("dur_ms", time.Since(start).Milliseconds()))
-	}()
-
-	if pool == nil {
-		http.Error(w, `{"error":"database unavailable"}`, http.StatusServiceUnavailable)
-		return
-	}
-
-	orgID := chi.URLParam(r, "orgID")
-	if orgID == "" {
-		http.Error(w, `{"error":"org_id required"}`, http.StatusBadRequest)
-		return
-	}
-	wlog.Op(ctx, "hub.rotate_epoch", slog.LevelInfo,
-		slog.String("phase", "entry"),
-		slog.String("org", orgID))
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
-		return
-	}
-
-	var req protocol.RotateEpochRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
-		return
-	}
-
-	if req.NewPkMod == "" || req.SignedBy == "" || req.Signature == "" {
-		http.Error(w, `{"error":"missing required fields"}`, http.StatusBadRequest)
-		return
-	}
-
-	if len(req.Envelopes) == 0 {
-		http.Error(w, `{"error":"envelopes array is required for rotation"}`, http.StatusBadRequest)
-		return
-	}
-
-	leaderPubkey, err := orgs.GetLeaderPubkey(r.Context(), pool, orgID)
-	if err == pgx.ErrNoRows {
-		http.Error(w, `{"error":"org not found"}`, http.StatusNotFound)
-		return
-	}
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	if leaderPubkey != req.SignedBy {
-		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-		return
-	}
-
-	canonical := verify.RotateEpochMessage(orgID, req.NewPkMod, req.SignedBy, req.Envelopes)
-	if err := verify.RequestSignature(req.SignedBy, req.Signature, canonical); err != nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	if err := orgs.RotateEpoch(r.Context(), pool, orgID, req); err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	newEpoch, err := orgs.GetCurrentEpoch(r.Context(), pool, orgID)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-	outcomeEpoch = newEpoch
-
-	if chainClient != nil {
-		log.Printf("epoch rotated: org=%s epoch=%d (chain will compute merkle root at next epoch tick)", orgID, newEpoch)
-	}
-
-	if err := envelopes.BatchReplace(r.Context(), pool, orgID, newEpoch, req.Envelopes); err != nil {
-		http.Error(w, `{"error":"failed to store rotation envelopes"}`, http.StatusInternalServerError)
-		return
-	}
-
-	bufferedCount, err := orgs.FinalizeRotationBuffer(r.Context(), pool, orgID, newEpoch)
-	if err != nil {
-		log.Printf("WARNING: failed to finalize rotation buffer for org %s: %v", orgID, err)
-	}
-
-	if err := orgs.ClearRotationPending(r.Context(), pool, orgID); err != nil {
-		log.Printf("WARNING: failed to clear rotation_pending for org %s: %v", orgID, err)
-	}
-	status = "ok"
-	count = bufferedCount
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":         "ok",
-		"buffered_moved": bufferedCount,
-	})
 }
 
 func GetEpochManifest(w http.ResponseWriter, r *http.Request) {

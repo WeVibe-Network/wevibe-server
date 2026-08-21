@@ -15,7 +15,6 @@ test.describe('Dashboard Navigation', () => {
     await expect(sidebar.getByTestId('nav-billing')).toBeVisible();
     await expect(sidebar.getByTestId('nav-settings')).toBeVisible();
     await expect(sidebar.getByTestId('nav-recovery')).toBeVisible();
-    await expect(sidebar.getByTestId('nav-epoch')).toBeVisible();
   });
 
   test('each nav link navigates to correct page', async ({ page }) => {
@@ -26,7 +25,6 @@ test.describe('Dashboard Navigation', () => {
       { testId: 'nav-billing', url: '/billing', heading: /billing|credit/i },
       { testId: 'nav-settings', url: '/settings', heading: /settings/i },
       { testId: 'nav-recovery', url: '/recovery', heading: /recovery/i },
-      { testId: 'nav-epoch', url: '/epochs', heading: /epoch/i },
     ];
 
     for (const p of pages) {

@@ -18,7 +18,6 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/chain"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/receipts"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/retrieval"
@@ -213,18 +212,6 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	currentEpoch, err := orgs.GetCurrentEpoch(ctx, pool, req.OrgID)
-	if err != nil {
-		log.Printf("[recall] ERROR resolve current epoch FAILED org=%s: %v", req.OrgID, err)
-		WriteError(w, http.StatusInternalServerError, "epoch_resolve_failed", "failed to resolve epoch access", err.Error())
-		return
-	}
-
-	accessibleEpochs := make([]int32, 0, currentEpoch-member.HistoryAccessFromEpoch+1)
-	for e := member.HistoryAccessFromEpoch; e <= currentEpoch; e++ {
-		accessibleEpochs = append(accessibleEpochs, int32(e))
-	}
-
 	if len(req.KeywordWeights) == 0 && len(req.Vector) == 0 {
 		log.Printf("[recall] DENY/ERROR empty query payload org=%s agent=%s", req.OrgID, agentLogID)
 		WriteError(w, http.StatusBadRequest, "invalid_request", "keywords or vector required")
@@ -233,7 +220,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[recall] qdrant QueryByKeywords start org=%s agent=%s vecDim=%d kw=%d model=%s limit=%d includeDormant=%v", req.OrgID, agentLogID, len(req.Vector), len(req.KeywordWeights), req.EmbeddingModelID, req.Limit, req.IncludeDormant)
 	results, contested, scorecard, err := retrieval.QueryByKeywords(
-		ctx, qdrantClient, req.OrgID, accessibleEpochs,
+		ctx, qdrantClient, req.OrgID,
 		req.KeywordWeights, req.Vector, req.EmbeddingModelID, uint64(req.Limit), req.IncludeDormant, effectiveFloor, effectiveBudget,
 	)
 	if err != nil {
@@ -272,7 +259,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 	if len(results) == 0 {
 		receipt, receiptErr := receipts.CreateReceipt(
 			ctx, pool, nodePrivkeyHex,
-			req.OrgID, 0, accessibleEpochs,
+			req.OrgID, 0, []int32{0},
 			req.AgentPubkey, map[string]any{"query": "memory_query"},
 			[]string{}, bodySignatureHex,
 		)
@@ -385,9 +372,9 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		cfrag, err := umbralService.ReEncryptForMember(ctx, req.OrgID, uint64(cm.Epoch), memberPKBytes, payload.capsule)
+		cfrag, err := umbralService.ReEncryptForMember(ctx, req.OrgID, memberPKBytes, payload.capsule)
 		if err != nil {
-			log.Printf("[recall] umbral ReEncrypt FAILED org=%s cid=%s epoch=%d member_pk_fp=%s capsule_fp=%s trace=%s: %v", req.OrgID, res.CID, cm.Epoch, wlog.Fingerprint(memberPKBytes), wlog.Fingerprint(payload.capsule), trace, err)
+			log.Printf("[recall] umbral ReEncrypt FAILED org=%s cid=%s member_pk_fp=%s capsule_fp=%s trace=%s: %v", req.OrgID, res.CID, wlog.Fingerprint(memberPKBytes), wlog.Fingerprint(payload.capsule), trace, err)
 			requiresReencryption = append(requiresReencryption, res.CID)
 			merged = append(merged, res)
 			continue
@@ -395,7 +382,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 		res.Capsule = hex.EncodeToString(payload.capsule)
 		res.Cfrag = hex.EncodeToString(cfrag)
 		reencryptedCount++
-		log.Printf("[recall] umbral ReEncrypt ok org=%s cid=%s epoch=%d member_pk_fp=%s capsule_fp=%s cfrag_len=%d trace=%s", req.OrgID, res.CID, cm.Epoch, wlog.Fingerprint(memberPKBytes), wlog.Fingerprint(payload.capsule), len(cfrag), trace)
+		log.Printf("[recall] umbral ReEncrypt ok org=%s cid=%s member_pk_fp=%s capsule_fp=%s cfrag_len=%d trace=%s", req.OrgID, res.CID, wlog.Fingerprint(memberPKBytes), wlog.Fingerprint(payload.capsule), len(cfrag), trace)
 
 		merged = append(merged, res)
 	}
@@ -451,7 +438,7 @@ func QueryMemories(w http.ResponseWriter, r *http.Request) {
 
 	receipt, err := receipts.CreateReceipt(
 		ctx, pool, nodePrivkeyHex,
-		req.OrgID, 0, accessibleEpochs,
+		req.OrgID, 0, []int32{0},
 		req.AgentPubkey, map[string]any{"query": "memory_query"},
 		extractCIDs(results), bodySignatureHex,
 	)

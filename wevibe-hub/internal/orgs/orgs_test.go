@@ -61,7 +61,6 @@ func TestCreateOrg_GetOrg(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -115,7 +114,6 @@ func TestOrgExists(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -152,43 +150,6 @@ func TestGetLeaderPubkey(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
-	})
-}
-
-func TestGetCurrentEpoch(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
-	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-	req := protocol.CreateOrgRequest{
-		LeaderPubkey:       strings.Repeat("a", 64),
-		LeaderX25519Pubkey: strings.Repeat("b", 64),
-		LeaderWallet:       "wevibe1orgstest4",
-		OrgName:            "Test Org",
-		Domain:             "test.example.com",
-		FeeModel:           protocol.FeeModel{},
-		Signature:          strings.Repeat("c", 128),
-		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
-	}
-
-	_, err := CreateOrg(ctx, pool, orgID, req)
-	if err != nil {
-		t.Fatalf("CreateOrg failed: %v", err)
-	}
-
-	epoch, err := GetCurrentEpoch(ctx, pool, orgID)
-	if err != nil {
-		t.Fatalf("GetCurrentEpoch failed: %v", err)
-	}
-	if epoch != 0 {
-		t.Errorf("expected epoch 0, got %d", epoch)
-	}
-
-	t.Cleanup(func() {
-		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -207,138 +168,45 @@ func TestFullOrgLifecycle(t *testing.T) {
 		FeeModel:           protocol.FeeModel{},
 		Signature:          strings.Repeat("c", 128),
 		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
+		PkMod:              "test-pk-mod",
+		UmbralPK:           strings.Repeat("ab", 33),
 	}
 
 	org, err := CreateOrg(ctx, pool, orgID, req)
 	if err != nil {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
-	if org.CurrentEpoch != 0 {
-		t.Errorf("expected epoch 0, got %d", org.CurrentEpoch)
-	}
-
-	rotateReq := protocol.RotateEpochRequest{
-		NewPkMod:  strings.Repeat("d", 64),
-		SignedBy:  strings.Repeat("a", 64),
-		Signature: strings.Repeat("e", 128),
-	}
-	err = RotateEpoch(ctx, pool, orgID, rotateReq)
-	if err != nil {
-		t.Fatalf("RotateEpoch failed: %v", err)
-	}
-
-	epoch, err := GetCurrentEpoch(ctx, pool, orgID)
-	if err != nil {
-		t.Fatalf("GetCurrentEpoch failed: %v", err)
-	}
-	if epoch != 1 {
-		t.Errorf("expected epoch 1, got %d", epoch)
+	if org.OrgID != orgID {
+		t.Errorf("expected org_id %s, got %s", orgID, org.OrgID)
 	}
 
 	manifest, err := GetEpochManifest(ctx, pool, orgID, -1)
 	if err != nil {
 		t.Fatalf("GetEpochManifest failed: %v", err)
 	}
-	if manifest.EpochID != 1 {
-		t.Errorf("expected manifest epoch 1, got %d", manifest.EpochID)
+	if manifest.PkMod != "test-pk-mod" {
+		t.Errorf("expected manifest pk_mod 'test-pk-mod', got %q", manifest.PkMod)
+	}
+	if manifest.UmbralPK != strings.Repeat("ab", 33) {
+		t.Errorf("expected manifest umbral_pk to round-trip, got %q", manifest.UmbralPK)
+	}
+	if manifest.SignedBy != req.LeaderPubkey {
+		t.Errorf("expected manifest signed_by %s, got %s", req.LeaderPubkey, manifest.SignedBy)
+	}
+	if manifest.Signature != req.Signature {
+		t.Errorf("expected manifest signature %s, got %s", req.Signature, manifest.Signature)
 	}
 
 	manifest, err = GetEpochManifest(ctx, pool, orgID, 0)
 	if err != nil {
 		t.Fatalf("GetEpochManifest(epoch 0) failed: %v", err)
 	}
-	if manifest.EpochID != 0 {
-		t.Errorf("expected manifest epoch 0, got %d", manifest.EpochID)
+	if manifest.PkMod != "test-pk-mod" {
+		t.Errorf("expected same static manifest for any epoch param, got pk_mod %q", manifest.PkMod)
 	}
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
-}
-
-func TestEpochExists_CurrentEpoch(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
-	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-	req := protocol.CreateOrgRequest{
-		LeaderPubkey:       strings.Repeat("a", 64),
-		LeaderX25519Pubkey: strings.Repeat("b", 64),
-		LeaderWallet:       "wevibe1orgstest6",
-		OrgName:            "Test Org",
-		Domain:             "test.example.com",
-		FeeModel:           protocol.FeeModel{},
-		Signature:          strings.Repeat("c", 128),
-		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
-	}
-
-	_, err := CreateOrg(ctx, pool, orgID, req)
-	if err != nil {
-		t.Fatalf("CreateOrg failed: %v", err)
-	}
-
-	exists, err := EpochExists(ctx, pool, orgID, 0)
-	if err != nil {
-		t.Fatalf("EpochExists failed: %v", err)
-	}
-	if !exists {
-		t.Error("expected epoch 0 to exist for new org")
-	}
-
-	t.Cleanup(func() {
-		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
-	})
-}
-
-func TestEpochExists_NonexistentEpoch(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
-	orgID := "test-org-" + fmt.Sprintf("%d", time.Now().UnixNano())
-
-	req := protocol.CreateOrgRequest{
-		LeaderPubkey:       strings.Repeat("a", 64),
-		LeaderX25519Pubkey: strings.Repeat("b", 64),
-		LeaderWallet:       "wevibe1orgstest7",
-		OrgName:            "Test Org",
-		Domain:             "test.example.com",
-		FeeModel:           protocol.FeeModel{},
-		Signature:          strings.Repeat("c", 128),
-		ModEnvelope:        "dGVzdC1tb2QtZW52ZWxvcGU=",
-	}
-
-	_, err := CreateOrg(ctx, pool, orgID, req)
-	if err != nil {
-		t.Fatalf("CreateOrg failed: %v", err)
-	}
-
-	exists, err := EpochExists(ctx, pool, orgID, 999)
-	if err != nil {
-		t.Fatalf("EpochExists failed: %v", err)
-	}
-	if exists {
-		t.Error("expected epoch 999 to not exist")
-	}
-
-	t.Cleanup(func() {
-		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
-	})
-}
-
-func TestEpochExists_NonexistentOrg(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
-
-	exists, err := EpochExists(ctx, pool, "fake-org", 0)
-	if err != nil {
-		t.Fatalf("EpochExists failed: %v", err)
-	}
-	if exists {
-		t.Error("expected epoch 0 to not exist for fake org")
-	}
 }

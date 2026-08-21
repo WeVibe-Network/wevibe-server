@@ -116,7 +116,6 @@ export default function DiscoverPage() {
                     <p>Domain: {org.domain}</p>
                     <p>Leader: {truncatePubkey(org.leader_pubkey)}</p>
                     <p>Members: {org.member_count}</p>
-                    <p>Epoch: {org.current_epoch}</p>
                     <p>Last active: <ClientTime value={org.last_activity_at} mode="relative" fallback="Never" /></p>
                   </div>
                   <div className="mt-3">

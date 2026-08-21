@@ -34,14 +34,14 @@ const (
 // This service runs as a separate process to maintain GPL-3.0 / Apache-2.0 license boundary.
 // All byte fields are serialized Umbral types using MessagePack (DefaultSerialize/DefaultDeserialize).
 type UmbralSidecarClient interface {
-	// StoreKFrag stores a pre-generated kfrag for (org_id, epoch_id, member_pubkey).
+	// StoreKFrag stores a pre-generated kfrag for (org_id, member_pubkey).
 	// Used when kfrags are generated on the leader machine.
 	StoreKFrag(ctx context.Context, in *StoreKFragRequest, opts ...grpc.CallOption) (*StoreKFragResponse, error)
 	// ReEncrypt applies a stored kfrag to a capsule, producing a cfrag.
 	// Called by the hub during memory retrieval.
-	// Returns an error if no kfrag exists for the specified (org_id, epoch_id, member_pubkey).
+	// Returns an error if no kfrag exists for the specified (org_id, member_pubkey).
 	ReEncrypt(ctx context.Context, in *ReEncryptRequest, opts ...grpc.CallOption) (*ReEncryptResponse, error)
-	// DeleteKFrags deletes all stored kfrags for a member across all epochs in an org.
+	// DeleteKFrags deletes all stored kfrags for a member in an org.
 	// Called by the hub when a member is removed (triggered by MemberRemoved chain event).
 	// Idempotent — returns success even if no kfrags exist.
 	DeleteKFrags(ctx context.Context, in *DeleteKFragsRequest, opts ...grpc.CallOption) (*DeleteKFragsResponse, error)
@@ -118,14 +118,14 @@ func (c *umbralSidecarClient) Health(ctx context.Context, in *HealthRequest, opt
 // This service runs as a separate process to maintain GPL-3.0 / Apache-2.0 license boundary.
 // All byte fields are serialized Umbral types using MessagePack (DefaultSerialize/DefaultDeserialize).
 type UmbralSidecarServer interface {
-	// StoreKFrag stores a pre-generated kfrag for (org_id, epoch_id, member_pubkey).
+	// StoreKFrag stores a pre-generated kfrag for (org_id, member_pubkey).
 	// Used when kfrags are generated on the leader machine.
 	StoreKFrag(context.Context, *StoreKFragRequest) (*StoreKFragResponse, error)
 	// ReEncrypt applies a stored kfrag to a capsule, producing a cfrag.
 	// Called by the hub during memory retrieval.
-	// Returns an error if no kfrag exists for the specified (org_id, epoch_id, member_pubkey).
+	// Returns an error if no kfrag exists for the specified (org_id, member_pubkey).
 	ReEncrypt(context.Context, *ReEncryptRequest) (*ReEncryptResponse, error)
-	// DeleteKFrags deletes all stored kfrags for a member across all epochs in an org.
+	// DeleteKFrags deletes all stored kfrags for a member in an org.
 	// Called by the hub when a member is removed (triggered by MemberRemoved chain event).
 	// Idempotent — returns success even if no kfrags exist.
 	DeleteKFrags(context.Context, *DeleteKFragsRequest) (*DeleteKFragsResponse, error)

@@ -65,11 +65,9 @@ func TestSidecarIntegration_LeaderMintedKFragLifecycle(t *testing.T) {
 	}
 
 	orgID := "test-org-leader-mint-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	epochID := uint64(42)
 
 	_, err = c.sidecar.StoreKFrag(ctx, &umbralpb.StoreKFragRequest{
 		OrgId:    orgID,
-		EpochId:  epochID,
 		MemberPk: memberPK,
 		Kfrag:    mustDecodeHex(t, "kfrag", kfragHex),
 	})
@@ -79,7 +77,6 @@ func TestSidecarIntegration_LeaderMintedKFragLifecycle(t *testing.T) {
 
 	reEncryptResp, err := c.ReEncrypt(ctx, &umbralpb.ReEncryptRequest{
 		OrgId:    orgID,
-		EpochId:  epochID,
 		MemberPk: memberPK,
 		Capsule:  mustDecodeHex(t, "capsule", capsuleHex),
 	})
@@ -130,8 +127,8 @@ func TestSidecarIntegration_DeleteOrgKFragsIdempotent(t *testing.T) {
 
 	orgID := "test-org-delete-org-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 
-	mustStoreKFrag(t, ctx, c, orgID, 1, epochSKHex, memberOnePKHex)
-	mustStoreKFrag(t, ctx, c, orgID, 2, epochSKHex, memberTwoPKHex)
+	mustStoreKFrag(t, ctx, c, orgID, epochSKHex, memberOnePKHex)
+	mustStoreKFrag(t, ctx, c, orgID, epochSKHex, memberTwoPKHex)
 
 	deletedResp, err := c.DeleteOrgKFrags(ctx, &umbralpb.DeleteOrgKFragsRequest{OrgId: orgID})
 	if err != nil {
@@ -150,14 +147,13 @@ func TestSidecarIntegration_DeleteOrgKFragsIdempotent(t *testing.T) {
 	}
 }
 
-func mustStoreKFrag(t *testing.T, ctx context.Context, c *client, orgID string, epochID uint64, epochSKHex, memberPKHex string) {
+func mustStoreKFrag(t *testing.T, ctx context.Context, c *client, orgID string, epochSKHex, memberPKHex string) {
 	t.Helper()
 	kfragHex := generateKFrag(t, epochSKHex, memberPKHex)
 	memberPK := mustDecodeHex(t, "member public key", memberPKHex)
 
 	_, err := c.sidecar.StoreKFrag(ctx, &umbralpb.StoreKFragRequest{
 		OrgId:    orgID,
-		EpochId:  epochID,
 		MemberPk: memberPK,
 		Kfrag:    mustDecodeHex(t, "kfrag", kfragHex),
 	})

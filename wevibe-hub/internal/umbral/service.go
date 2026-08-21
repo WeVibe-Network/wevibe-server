@@ -26,10 +26,9 @@ func NewService(client *client) *Service {
 	return &Service{client: client}
 }
 
-func (s *Service) StoreKFrag(ctx context.Context, orgID string, epochID uint64, memberPK, kfrag []byte) error {
+func (s *Service) StoreKFrag(ctx context.Context, orgID string, memberPK, kfrag []byte) error {
 	_, err := s.client.sidecar.StoreKFrag(ctx, &umbralpb.StoreKFragRequest{
 		OrgId:    orgID,
-		EpochId:  epochID,
 		MemberPk: memberPK,
 		Kfrag:    kfrag,
 	})
@@ -38,7 +37,6 @@ func (s *Service) StoreKFrag(ctx context.Context, orgID string, epochID uint64, 
 			slog.String("phase", "outcome"),
 			slog.String("status", "err"),
 			slog.String("org", orgID),
-			slog.Uint64("epoch", epochID),
 			slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
 			slog.String("err", err.Error()))
 		return err
@@ -47,16 +45,14 @@ func (s *Service) StoreKFrag(ctx context.Context, orgID string, epochID uint64, 
 		slog.String("phase", "outcome"),
 		slog.String("status", "ok"),
 		slog.String("org", orgID),
-		slog.Uint64("epoch", epochID),
 		slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
 		slog.Int("kfrag_len", len(kfrag)))
 	return nil
 }
 
-func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID uint64, memberPK, capsule []byte) ([]byte, error) {
+func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, memberPK, capsule []byte) ([]byte, error) {
 	req := &umbralpb.ReEncryptRequest{
 		OrgId:    orgID,
-		EpochId:  epochID,
 		MemberPk: memberPK,
 		Capsule:  capsule,
 	}
@@ -66,7 +62,6 @@ func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID 
 			slog.String("phase", "outcome"),
 			slog.String("status", "err"),
 			slog.String("org", orgID),
-			slog.Uint64("epoch", epochID),
 			slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
 			slog.String("capsule_fp", wlog.Fingerprint(capsule)),
 			slog.String("err", err.Error()))
@@ -82,7 +77,6 @@ func (s *Service) ReEncryptForMember(ctx context.Context, orgID string, epochID 
 		slog.String("phase", "outcome"),
 		slog.String("status", "ok"),
 		slog.String("org", orgID),
-		slog.Uint64("epoch", epochID),
 		slog.String("member_pk_fp", wlog.Fingerprint(memberPK)),
 		slog.String("capsule_fp", wlog.Fingerprint(capsule)),
 		slog.Int("cfrag_len", len(resp.Cfrag)))

@@ -517,13 +517,8 @@ func setupReportTestEnv(t *testing.T) reportTestEnv {
 		t.Fatalf("create org: %v", err)
 	}
 
-	epoch, err := orgs.GetCurrentEpoch(ctx, pool, orgID)
-	if err != nil {
-		t.Fatalf("get epoch: %v", err)
-	}
-
 	invite := func(actor testActor, role string, canModerate bool) {
-		_, err := members.InviteMember(ctx, pool, orgID, epoch, protocol.InviteMemberRequest{
+		_, err := members.InviteMember(ctx, pool, orgID, protocol.InviteMemberRequest{
 			Pubkey:         actor.pubkeyHex,
 			X25519Pubkey:   randomHex(32),
 			Role:           role,
@@ -546,7 +541,6 @@ func setupReportTestEnv(t *testing.T) reportTestEnv {
 		ctx := context.Background()
 		pool.Exec(ctx, "DELETE FROM reports WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 

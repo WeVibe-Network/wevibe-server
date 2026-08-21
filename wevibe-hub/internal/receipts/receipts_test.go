@@ -88,7 +88,6 @@ func TestReceiptCreation(t *testing.T) {
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM usage_receipts WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }

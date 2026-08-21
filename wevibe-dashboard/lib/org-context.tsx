@@ -19,8 +19,6 @@ export interface MemberOrgEntry {
   role: OrgRole;
   can_contribute?: boolean;
   can_moderate?: boolean;
-  current_epoch: number;
-  history_access_from_epoch: number;
   egress_mode: string;
   allowed_providers: string[];
   mod_pubkey?: string;

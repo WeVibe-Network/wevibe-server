@@ -95,13 +95,7 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	currentEpoch, err := orgs.GetCurrentEpoch(r.Context(), pool, orgID)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-
-	member, err := members.InviteMember(r.Context(), pool, orgID, currentEpoch, req)
+	member, err := members.InviteMember(r.Context(), pool, orgID, req)
 	if err != nil {
 		if errors.Is(err, members.ErrInvalidPrePubkey) {
 			WriteError(w, http.StatusBadRequest, "invalid_pre_pubkey", "pre_pubkey must be valid hex and exactly 33 bytes")
@@ -121,7 +115,7 @@ func InviteMember(w http.ResponseWriter, r *http.Request) {
 		modEnv = &req.ModEnvelope
 	}
 
-	if err := envelopes.Store(r.Context(), pool, orgID, req.Pubkey, currentEpoch, req.EncEnvelope, req.SearchEnvelope, modEnv); err != nil {
+	if err := envelopes.Store(r.Context(), pool, orgID, req.Pubkey, req.EncEnvelope, req.SearchEnvelope, modEnv); err != nil {
 		http.Error(w, `{"error":"failed to store member envelope"}`, http.StatusInternalServerError)
 		return
 	}
@@ -214,7 +208,6 @@ func GetKeyEnvelope(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(protocol.KeyEnvelopeResponse{
 		OrgID:          orgID,
-		EpochID:        env.EpochID,
 		EncEnvelope:    env.EncEnvelope,
 		SearchEnvelope: env.SearchEnvelope,
 		ModEnvelope:    env.ModEnvelope,
@@ -376,7 +369,6 @@ type disableMemberRecallRequest struct {
 }
 
 type storeMemberKFragRequest struct {
-	EpochID   uint64 `json:"epoch_id"`
 	PrePubkey string `json:"pre_pubkey"`
 	Kfrag     string `json:"kfrag"`
 }
@@ -571,8 +563,7 @@ func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
 		slog.String("phase", "entry"),
 		slog.String("org", orgID),
 		slog.String("member", memberPubkey),
-		slog.String("member_pk_fp", wlog.Fingerprint(prePubkey)),
-		slog.Uint64("epoch", req.EpochID))
+		slog.String("member_pk_fp", wlog.Fingerprint(prePubkey)))
 
 	kfrag, err := hex.DecodeString(req.Kfrag)
 	if err != nil {
@@ -585,14 +576,13 @@ func StoreMemberKFrag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := umbralService.StoreKFrag(r.Context(), orgID, req.EpochID, prePubkey, kfrag); err != nil {
+	if err := umbralService.StoreKFrag(r.Context(), orgID, prePubkey, kfrag); err != nil {
 		wlog.Op(ctx, "hub.store_kfrag", slog.LevelError,
 			slog.String("phase", "store-err"),
 			slog.String("org", orgID),
 			slog.String("member_pk_fp", wlog.Fingerprint(prePubkey)),
-			slog.Uint64("epoch", req.EpochID),
 			slog.String("err", err.Error()))
-		log.Printf("[kfrag] StoreKFrag failed org=%s epoch=%d: %v", orgID, req.EpochID, err)
+		log.Printf("[kfrag] StoreKFrag failed org=%s: %v", orgID, err)
 		WriteError(w, http.StatusInternalServerError, "kfrag_store_failed", "failed to store recall key in sidecar", err.Error())
 		return
 	}

@@ -127,7 +127,6 @@ func TestServiceReEncryptForMember_EdgeCases(t *testing.T) {
 	}
 
 	const orgID = "org-edge"
-	const epochID = uint64(42)
 	memberPK := []byte{0x01, 0x02, 0x03}
 	capsule := []byte{0xa0, 0xa1}
 
@@ -143,16 +142,13 @@ func TestServiceReEncryptForMember_EdgeCases(t *testing.T) {
 				},
 			})
 
-			gotCfrag, err := svc.ReEncryptForMember(context.Background(), orgID, epochID, memberPK, capsule)
+			gotCfrag, err := svc.ReEncryptForMember(context.Background(), orgID, memberPK, capsule)
 
 			if gotReq == nil {
 				t.Fatal("expected ReEncrypt request to be forwarded")
 			}
 			if gotReq.OrgId != orgID {
 				t.Fatalf("OrgId mismatch: got %q want %q", gotReq.OrgId, orgID)
-			}
-			if gotReq.EpochId != epochID {
-				t.Fatalf("EpochId mismatch: got %d want %d", gotReq.EpochId, epochID)
 			}
 			if !reflect.DeepEqual(gotReq.MemberPk, memberPK) {
 				t.Fatalf("MemberPk mismatch: got %v want %v", gotReq.MemberPk, memberPK)
@@ -175,7 +171,6 @@ func TestServiceStoreKFrag_ForwardsInputsAndPropagatesErrors(t *testing.T) {
 	testCases := []struct {
 		name       string
 		orgID      string
-		epochID    uint64
 		memberPK   []byte
 		kfrag      []byte
 		sidecarErr error
@@ -183,14 +178,12 @@ func TestServiceStoreKFrag_ForwardsInputsAndPropagatesErrors(t *testing.T) {
 		{
 			name:     "nil payloads are forwarded without panic",
 			orgID:    "",
-			epochID:  0,
 			memberPK: nil,
 			kfrag:    nil,
 		},
 		{
 			name:       "empty payloads and sidecar error are returned unchanged",
 			orgID:      "org",
-			epochID:    9,
 			memberPK:   []byte{},
 			kfrag:      []byte{},
 			sidecarErr: sidecarFailure,
@@ -209,7 +202,7 @@ func TestServiceStoreKFrag_ForwardsInputsAndPropagatesErrors(t *testing.T) {
 				},
 			})
 
-			err := svc.StoreKFrag(context.Background(), tc.orgID, tc.epochID, tc.memberPK, tc.kfrag)
+			err := svc.StoreKFrag(context.Background(), tc.orgID, tc.memberPK, tc.kfrag)
 			if tc.sidecarErr == nil {
 				if err != nil {
 					t.Fatalf("expected nil error, got %v", err)
@@ -223,9 +216,6 @@ func TestServiceStoreKFrag_ForwardsInputsAndPropagatesErrors(t *testing.T) {
 			}
 			if gotReq.OrgId != tc.orgID {
 				t.Fatalf("OrgId mismatch: got %q want %q", gotReq.OrgId, tc.orgID)
-			}
-			if gotReq.EpochId != tc.epochID {
-				t.Fatalf("EpochId mismatch: got %d want %d", gotReq.EpochId, tc.epochID)
 			}
 			if !reflect.DeepEqual(gotReq.MemberPk, tc.memberPK) {
 				t.Fatalf("MemberPk mismatch: got %v want %v", gotReq.MemberPk, tc.memberPK)

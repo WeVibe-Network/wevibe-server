@@ -207,12 +207,6 @@ export default function ProfilePage() {
               </p>
               <p className="text-xs font-mono uppercase tracking-[0.08em] text-wv-dim">Chain Commits</p>
             </div>
-            <div className="rounded-lg bg-wv-panel-2 px-4 py-3 text-center">
-              <p className="text-2xl font-semibold text-wv-text">
-                {profile.leader_stats.total_epoch_rotations}
-              </p>
-              <p className="text-xs font-mono uppercase tracking-[0.08em] text-wv-dim">Epoch Rotations</p>
-            </div>
           </div>
         </div>
       )}

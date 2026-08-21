@@ -15,7 +15,6 @@ import (
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/auth"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/members"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/moderation"
-	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/orgs"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/protocol"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/verify"
 	"github.com/wevibe-network/wevibe-server/wevibe-hub/internal/wlog"
@@ -102,51 +101,8 @@ func SubmitMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.EpochID < 0 {
-		http.Error(w, `{"error":"epoch_id is required and must be non-negative"}`, http.StatusBadRequest)
-		return
-	}
-	epochExists, err := orgs.EpochExists(r.Context(), pool, orgID, req.EpochID)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-	if !epochExists {
-		http.Error(w, `{"error":"epoch_id does not exist for this org"}`, http.StatusBadRequest)
-		return
-	}
-
-	isPending, err := orgs.IsRotationPending(r.Context(), pool, orgID)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-	if isPending {
-		pendingSince, err := orgs.GetRotationPendingSince(r.Context(), pool, orgID)
-		if err != nil {
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-
-		const rotationGracePeriod = 72 * time.Hour
-		if pendingSince != nil && time.Since(*pendingSince) > rotationGracePeriod {
-			http.Error(w, `{"error":"submissions blocked: epoch rotation required. Contact org leader."}`, http.StatusServiceUnavailable)
-			return
-		}
-
-		if err := orgs.BufferSubmission(r.Context(), pool, orgID, req); err != nil {
-			http.Error(w, `{"error":"failed to buffer submission"}`, http.StatusInternalServerError)
-			return
-		}
-
-		status = "ok"
-		count = 1
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(protocol.SubmitMemoryResponse{
-			SubmissionHash: req.SubmissionHash,
-			Status:         "buffered",
-		})
+	if req.EpochID != 0 {
+		http.Error(w, `{"error":"epoch_id must be 0"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -242,25 +198,6 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isPending, err := orgs.IsRotationPending(r.Context(), pool, orgID)
-	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-		return
-	}
-	if isPending {
-		pendingSince, err := orgs.GetRotationPendingSince(r.Context(), pool, orgID)
-		if err != nil {
-			http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
-			return
-		}
-
-		const rotationGracePeriod = 72 * time.Hour
-		if pendingSince != nil && time.Since(*pendingSince) > rotationGracePeriod {
-			http.Error(w, `{"error":"submissions blocked: epoch rotation required. Contact org leader."}`, http.StatusServiceUnavailable)
-			return
-		}
-	}
-
 	type batchResult struct {
 		SubmissionHash       string             `json:"submission_hash"`
 		Status               string             `json:"status"`
@@ -294,32 +231,9 @@ func SubmitMemoryBatch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if submission.EpochID < 0 {
-			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "epoch_id is required and must be non-negative"})
+		if submission.EpochID != 0 {
+			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "epoch_id must be 0"})
 			failed++
-			continue
-		}
-
-		epochExists, err := orgs.EpochExists(r.Context(), pool, orgID, submission.EpochID)
-		if err != nil {
-			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "internal error"})
-			failed++
-			continue
-		}
-		if !epochExists {
-			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "epoch_id does not exist for this org"})
-			failed++
-			continue
-		}
-
-		if isPending {
-			if err := orgs.BufferSubmission(r.Context(), pool, orgID, submission); err != nil {
-				results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "error", Error: "failed to buffer submission"})
-				failed++
-				continue
-			}
-			results = append(results, batchResult{SubmissionHash: submission.SubmissionHash, Status: "buffered"})
-			submitted++
 			continue
 		}
 

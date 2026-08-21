@@ -479,7 +479,7 @@ func (c *QdrantClient) UpsertPoint(ctx context.Context, entry protocol.IndexEntr
 	return nil
 }
 
-func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []int32, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
+func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, vector []float32, keywordWeights []protocol.KeywordWithWeight, embeddingModelID string, limit uint64, includeDormant bool, relevanceFloor float64, surfaceBudget int) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
 	filterConditions := []map[string]any{
 		{"key": "org_id", "match": map[string]any{"value": orgID}},
 	}
@@ -610,14 +610,6 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 	}
 
 	currentEpoch := uint64(0)
-	for _, e := range epochs {
-		if e < 0 {
-			continue
-		}
-		if uint64(e) > currentEpoch {
-			currentEpoch = uint64(e)
-		}
-	}
 	ranker := getRanker()
 
 	type queryPointRichData struct {
@@ -654,16 +646,6 @@ func (c *QdrantClient) QueryPoints(ctx context.Context, orgID string, epochs []i
 			epochID = int32(epoch)
 		}
 		memoryCreatedEpoch := getRESTUint64(payload, "epoch_id")
-		authorized := false
-		for _, e := range epochs {
-			if e == epochID {
-				authorized = true
-				break
-			}
-		}
-		if !authorized {
-			continue
-		}
 
 		vectorScore := r.Score
 
@@ -1204,7 +1186,6 @@ func QueryByKeywords(
 	ctx context.Context,
 	client *QdrantClient,
 	orgID string,
-	accessibleEpochs []int32,
 	keywordWeights []protocol.KeywordWithWeight,
 	vector []float32,
 	embeddingModelID string,
@@ -1213,7 +1194,7 @@ func QueryByKeywords(
 	relevanceFloor float64,
 	surfaceBudget int,
 ) ([]protocol.MemoryResult, bool, []CandidateScore, error) {
-	return client.QueryPoints(ctx, orgID, accessibleEpochs, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget)
+	return client.QueryPoints(ctx, orgID, vector, keywordWeights, embeddingModelID, limit, includeDormant, relevanceFloor, surfaceBudget)
 }
 
 type OrgMemoryPayload struct {

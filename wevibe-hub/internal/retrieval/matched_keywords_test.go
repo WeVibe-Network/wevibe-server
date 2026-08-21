@@ -66,7 +66,6 @@ func TestQueryByKeywords_MatchedKeywordsPerResult(t *testing.T) {
 		context.Background(),
 		client,
 		"org-1",
-		[]int32{1},
 		[]protocol.KeywordWithWeight{{Keyword: "beta", Weight: 1}, {Keyword: "delta", Weight: 1}},
 		make([]float32, EMBED_DIM),
 		"",
@@ -102,7 +101,6 @@ func TestQueryByKeywords_MatchedKeywords_FullOverlap(t *testing.T) {
 		context.Background(),
 		client,
 		"org-1",
-		[]int32{1},
 		[]protocol.KeywordWithWeight{{Keyword: "alpha", Weight: 1}, {Keyword: "beta", Weight: 1}},
 		make([]float32, EMBED_DIM),
 		"",
@@ -141,7 +139,6 @@ func TestQueryByKeywords_MatchedKeywords_NoOverlap_NotFiltered(t *testing.T) {
 		context.Background(),
 		client,
 		"org-1",
-		[]int32{1},
 		[]protocol.KeywordWithWeight{{Keyword: "beta", Weight: 1}},
 		make([]float32, EMBED_DIM),
 		"",
@@ -169,7 +166,7 @@ func TestQueryByKeywords_BelowStandingDropped(t *testing.T) {
 	client, cleanup := newMockQueryClient(t, searchResults)
 	defer cleanup()
 
-	results, _, scores, err := QueryByKeywords(context.Background(), client, "org-1", []int32{1}, []protocol.KeywordWithWeight{{Keyword: "alpha", Weight: 1}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
+	results, _, scores, err := QueryByKeywords(context.Background(), client, "org-1", []protocol.KeywordWithWeight{{Keyword: "alpha", Weight: 1}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
 	}

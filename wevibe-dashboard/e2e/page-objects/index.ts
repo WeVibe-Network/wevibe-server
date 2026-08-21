@@ -11,7 +11,6 @@ export class SidebarPage {
   readonly settingsLink: Locator;
   readonly keywordsLink: Locator;
   readonly recoveryLink: Locator;
-  readonly epochLink: Locator;
   readonly createOrgLink: Locator;
 
   constructor(page: Page) {
@@ -25,7 +24,6 @@ export class SidebarPage {
     this.settingsLink = page.getByTestId('nav-settings');
     this.keywordsLink = page.getByTestId('nav-keywords');
     this.recoveryLink = page.getByTestId('nav-recovery');
-    this.epochLink = page.getByTestId('nav-epoch');
     this.createOrgLink = page.getByTestId('nav-create-org');
   }
 
@@ -85,17 +83,5 @@ export class RecoveryPage {
 
   async retrieveShare() {
     await this.page.getByTestId('recovery-retrieve-button').click();
-  }
-}
-
-export class EpochPage {
-  readonly page: Page;
-
-  constructor(page: Page) {
-    this.page = page;
-  }
-
-  async rotateEpoch() {
-    await this.page.getByTestId('epoch-rotate-button').click();
   }
 }

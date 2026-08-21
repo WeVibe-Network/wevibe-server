@@ -14,7 +14,7 @@ import (
 
 var ErrInvalidPrePubkey = errors.New("invalid pre_pubkey")
 
-func InviteMember(ctx context.Context, pool *pgxpool.Pool, orgID string, currentEpoch int, req protocol.InviteMemberRequest) (*protocol.MemberRecord, error) {
+func InviteMember(ctx context.Context, pool *pgxpool.Pool, orgID string, req protocol.InviteMemberRequest) (*protocol.MemberRecord, error) {
 	var prePubkey []byte
 	if req.PrePubkey != "" {
 		decoded, err := hex.DecodeString(req.PrePubkey)
@@ -28,9 +28,9 @@ func InviteMember(ctx context.Context, pool *pgxpool.Pool, orgID string, current
 	}
 
 	_, err := pool.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, pre_pubkey, role, can_contribute, can_moderate, join_epoch)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, orgID, req.Pubkey, req.X25519Pubkey, prePubkey, req.Role, req.CanContribute, req.CanModerate, currentEpoch)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, pre_pubkey, role, can_contribute, can_moderate)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, orgID, req.Pubkey, req.X25519Pubkey, prePubkey, req.Role, req.CanContribute, req.CanModerate)
 	if err != nil {
 		return nil, fmt.Errorf("insert member: %w", err)
 	}
@@ -71,12 +71,12 @@ func GetPrePubkey(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string)
 func GetMember(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (*protocol.MemberRecord, error) {
 	var m protocol.MemberRecord
 	err := pool.QueryRow(ctx, `
-		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate, join_epoch,
-			   history_access_from_epoch, authorized_until_epoch, active, membership_active, joined_at, wallet_address
+		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate,
+			   active, membership_active, joined_at, wallet_address
 		FROM members WHERE org_id = $1 AND pubkey = $2
 	`, orgID, pubkey).Scan(
-		&m.OrgID, &m.Pubkey, &m.X25519Pubkey, &m.Role, &m.CanContribute, &m.CanModerate, &m.JoinEpoch,
-		&m.HistoryAccessFromEpoch, &m.AuthorizedUntilEpoch, &m.Active, &m.MembershipActive, &m.JoinedAt, &m.WalletAddress,
+		&m.OrgID, &m.Pubkey, &m.X25519Pubkey, &m.Role, &m.CanContribute, &m.CanModerate,
+		&m.Active, &m.MembershipActive, &m.JoinedAt, &m.WalletAddress,
 	)
 	if err != nil {
 		return nil, err
@@ -84,12 +84,12 @@ func GetMember(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (*
 	return &m, nil
 }
 
-func RemoveMember(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string, currentEpoch int) error {
+func RemoveMember(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) error {
 	_, err := pool.Exec(ctx, `
 		UPDATE members
-		SET active = false, authorized_until_epoch = $1, updated_at = NOW()
-		WHERE org_id = $2 AND pubkey = $3
-	`, currentEpoch, orgID, pubkey)
+		SET active = false, updated_at = NOW()
+		WHERE org_id = $1 AND pubkey = $2
+	`, orgID, pubkey)
 	return err
 }
 
@@ -108,8 +108,8 @@ func LinkWallet(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey, walletAd
 
 func ListMembers(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]protocol.MemberRecord, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate, join_epoch,
-		       history_access_from_epoch, authorized_until_epoch, active, membership_active, joined_at, wallet_address,
+		SELECT org_id, pubkey, x25519_pubkey, role, can_contribute, can_moderate,
+		       active, membership_active, joined_at, wallet_address,
 		       dismissed_reports_count
 		FROM members WHERE org_id = $1 ORDER BY joined_at
 	`, orgID)
@@ -119,28 +119,22 @@ func ListMembers(ctx context.Context, pool *pgxpool.Pool, orgID string) ([]proto
 	return pgx.CollectRows(rows, pgx.RowToStructByName[protocol.MemberRecord])
 }
 
-func VerifyMemberAccess(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string, requestedEpoch int) (bool, error) {
+// VerifyMemberAccess reports whether the member row exists and is active.
+// The per-epoch access window is retired with epoch rotation — membership
+// activity is the only gate.
+func VerifyMemberAccess(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (bool, error) {
 	var m protocol.MemberRecord
 	err := pool.QueryRow(ctx, `
-		SELECT history_access_from_epoch, authorized_until_epoch, active
+		SELECT active
 		FROM members WHERE org_id = $1 AND pubkey = $2
-	`, orgID, pubkey).Scan(&m.HistoryAccessFromEpoch, &m.AuthorizedUntilEpoch, &m.Active)
+	`, orgID, pubkey).Scan(&m.Active)
 	if err == pgx.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if requestedEpoch < m.HistoryAccessFromEpoch {
-		return false, nil
-	}
-	if m.Active {
-		return true, nil
-	}
-	if m.AuthorizedUntilEpoch != nil && requestedEpoch <= *m.AuthorizedUntilEpoch {
-		return true, nil
-	}
-	return false, nil
+	return m.Active, nil
 }
 
 func GetMemberCapabilities(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (canContribute bool, canModerate bool, err error) {
@@ -194,8 +188,8 @@ func IsLeader(ctx context.Context, pool *pgxpool.Pool, orgID, pubkey string) (bo
 
 func ListOrgsForMember(ctx context.Context, pool *pgxpool.Pool, pubkey string) ([]protocol.MemberOrgEntry, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT m.org_id, o.org_name, m.role, m.can_contribute, m.can_moderate, o.current_epoch,
-		       m.history_access_from_epoch, o.egress_mode, o.allowed_providers, m.wallet_address
+		SELECT m.org_id, o.org_name, m.role, m.can_contribute, m.can_moderate, o.pk_mod,
+		       o.egress_mode, o.allowed_providers, m.wallet_address
 		FROM members m
 		JOIN orgs o ON o.org_id = m.org_id
 		WHERE m.pubkey = $1 AND m.active = true
@@ -209,25 +203,17 @@ func ListOrgsForMember(ctx context.Context, pool *pgxpool.Pool, pubkey string) (
 	for rows.Next() {
 		var e protocol.MemberOrgEntry
 		var allowedProviders []string
+		var pkMod string
 		if err := rows.Scan(
-			&e.OrgID, &e.OrgName, &e.Role, &e.CanContribute, &e.CanModerate, &e.CurrentEpoch,
-			&e.HistoryAccessFromEpoch, &e.EgressMode, &allowedProviders, &e.WalletAddress,
+			&e.OrgID, &e.OrgName, &e.Role, &e.CanContribute, &e.CanModerate, &pkMod,
+			&e.EgressMode, &allowedProviders, &e.WalletAddress,
 		); err != nil {
 			return nil, err
 		}
 		e.AllowedProviders = allowedProviders
-
-		var modPubkey *string
-		err := pool.QueryRow(ctx, `
-			SELECT em.pk_mod
-			FROM epoch_manifests em
-			JOIN orgs o ON o.org_id = em.org_id AND o.current_epoch = em.epoch_id
-			WHERE em.org_id = $1
-		`, e.OrgID).Scan(&modPubkey)
-		if err != nil && err != pgx.ErrNoRows {
-			return nil, err
+		if pkMod != "" {
+			e.ModPubkey = &pkMod
 		}
-		e.ModPubkey = modPubkey
 
 		entries = append(entries, e)
 	}

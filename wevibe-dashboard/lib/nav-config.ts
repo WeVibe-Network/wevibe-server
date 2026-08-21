@@ -31,7 +31,6 @@ export const MAIN_NAV_BY_STATE: Record<string, MainSection[]> = {
       key: 'org-settings',
       sub: [
         { label: 'General', href: '/org-settings' },
-        { label: 'Epochs', href: '/epochs' },
         { label: 'Billing', href: '/billing' },
         { label: 'Recovery', href: '/recovery' },
         { label: 'Recall Health', href: '/recall-health' },

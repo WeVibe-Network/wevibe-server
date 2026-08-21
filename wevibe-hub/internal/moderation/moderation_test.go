@@ -45,9 +45,7 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) (orgID, leaderPubkey string)
 		orgID, leaderPubkey, "wevibe1moderationtest1", "Test Org", "test.local"); err != nil {
 		t.Fatalf("insert org: %v", err)
 	}
-	pool.Exec(ctx, `INSERT INTO epoch_manifests (org_id, epoch_id, pk_mod, signed_by, signature) VALUES ($1,0,$2,$2,'sig')`,
-		orgID, leaderPubkey)
-	pool.Exec(ctx, `INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch) VALUES ($1,$2,$2,'leader',0)`,
+	pool.Exec(ctx, `INSERT INTO members (org_id, pubkey, x25519_pubkey, role) VALUES ($1,$2,$2,'leader')`,
 		orgID, leaderPubkey)
 
 	t.Cleanup(func() {
@@ -55,8 +53,7 @@ func setupTestOrg(t *testing.T, pool *pgxpool.Pool) (orgID, leaderPubkey string)
 		pool.Exec(ctx2, "DELETE FROM audit_log WHERE org_id=$1", orgID)
 		pool.Exec(ctx2, "DELETE FROM pending_submissions WHERE org_id=$1", orgID)
 		pool.Exec(ctx2, "DELETE FROM members WHERE org_id=$1", orgID)
-		pool.Exec(ctx2, "DELETE FROM epoch_manifests WHERE org_id=$1", orgID)
-		pool.Exec(ctx2, "DELETE FROM orgs WHERE org_id=$1", orgID)
+			pool.Exec(ctx2, "DELETE FROM orgs WHERE org_id=$1", orgID)
 	})
 	return orgID, leaderPubkey
 }
@@ -66,7 +63,7 @@ func addModerator(t *testing.T, pool *pgxpool.Pool, orgID string) string {
 	pub, _, _ := ed25519.GenerateKey(nil)
 	pubkey := hex.EncodeToString(pub)
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate, join_epoch) VALUES ($1,$2,$2,'member',true,0)`,
+		`INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate) VALUES ($1,$2,$2,'member',true)`,
 		orgID, pubkey); err != nil {
 		t.Fatalf("insert moderator: %v", err)
 	}
@@ -76,7 +73,7 @@ func addModerator(t *testing.T, pool *pgxpool.Pool, orgID string) string {
 func insertMember(t *testing.T, pool *pgxpool.Pool, orgID, pubkey string) {
 	t.Helper()
 	pool.Exec(context.Background(),
-		`INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch) VALUES ($1,$2,$2,'member',0) ON CONFLICT DO NOTHING`,
+		`INSERT INTO members (org_id, pubkey, x25519_pubkey, role) VALUES ($1,$2,$2,'member') ON CONFLICT DO NOTHING`,
 		orgID, pubkey)
 }
 

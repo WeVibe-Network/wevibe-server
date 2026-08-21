@@ -54,7 +54,6 @@ func TestInviteMember_GetMember(t *testing.T) {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	inviteReq := protocol.InviteMemberRequest{
 		Pubkey:       memberPubkey,
 		X25519Pubkey: strings.Repeat("e", 64),
@@ -63,7 +62,7 @@ func TestInviteMember_GetMember(t *testing.T) {
 		Signature:    strings.Repeat("f", 128),
 	}
 
-	member, err := InviteMember(ctx, pool, orgID, epoch, inviteReq)
+	member, err := InviteMember(ctx, pool, orgID, inviteReq)
 	if err != nil {
 		t.Fatalf("InviteMember failed: %v", err)
 	}
@@ -84,7 +83,6 @@ func TestInviteMember_GetMember(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -117,7 +115,6 @@ func TestGetMember_NotFound(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -144,7 +141,6 @@ func TestRemoveMember(t *testing.T) {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	inviteReq := protocol.InviteMemberRequest{
 		Pubkey:       memberPubkey,
 		X25519Pubkey: strings.Repeat("e", 64),
@@ -152,12 +148,12 @@ func TestRemoveMember(t *testing.T) {
 		SignedBy:     leaderPubkey,
 		Signature:    strings.Repeat("f", 128),
 	}
-	_, err = InviteMember(ctx, pool, orgID, epoch, inviteReq)
+	_, err = InviteMember(ctx, pool, orgID, inviteReq)
 	if err != nil {
 		t.Fatalf("InviteMember failed: %v", err)
 	}
 
-	err = RemoveMember(ctx, pool, orgID, memberPubkey, epoch)
+	err = RemoveMember(ctx, pool, orgID, memberPubkey)
 	if err != nil {
 		t.Fatalf("RemoveMember failed: %v", err)
 	}
@@ -172,7 +168,6 @@ func TestRemoveMember(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -206,7 +201,6 @@ func TestListMembers(t *testing.T) {
 		t.Errorf("expected 1 member (leader), got %d", len(membersList))
 	}
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	inviteReq := protocol.InviteMemberRequest{
 		Pubkey:       strings.Repeat("d", 64),
 		X25519Pubkey: strings.Repeat("e", 64),
@@ -214,7 +208,7 @@ func TestListMembers(t *testing.T) {
 		SignedBy:     leaderPubkey,
 		Signature:    strings.Repeat("f", 128),
 	}
-	_, err = InviteMember(ctx, pool, orgID, epoch, inviteReq)
+	_, err = InviteMember(ctx, pool, orgID, inviteReq)
 	if err != nil {
 		t.Fatalf("InviteMember failed: %v", err)
 	}
@@ -229,7 +223,6 @@ func TestListMembers(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -255,15 +248,15 @@ func TestVerifyMemberAccess(t *testing.T) {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
 
-	ok, err := VerifyMemberAccess(ctx, pool, orgID, leaderPubkey, 0)
+	ok, err := VerifyMemberAccess(ctx, pool, orgID, leaderPubkey)
 	if err != nil {
 		t.Fatalf("VerifyMemberAccess failed: %v", err)
 	}
 	if !ok {
-		t.Error("expected leader to have access to epoch 0")
+		t.Error("expected leader to have access")
 	}
 
-	ok, err = VerifyMemberAccess(ctx, pool, orgID, "nonexistent", 0)
+	ok, err = VerifyMemberAccess(ctx, pool, orgID, "nonexistent")
 	if err != nil {
 		t.Fatalf("VerifyMemberAccess failed: %v", err)
 	}
@@ -273,7 +266,6 @@ func TestVerifyMemberAccess(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -317,7 +309,6 @@ func TestIsLeader(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -344,7 +335,6 @@ func TestFullMemberLifecycle(t *testing.T) {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	inviteReq := protocol.InviteMemberRequest{
 		Pubkey:       memberPubkey,
 		X25519Pubkey: strings.Repeat("e", 64),
@@ -352,7 +342,7 @@ func TestFullMemberLifecycle(t *testing.T) {
 		SignedBy:     leaderPubkey,
 		Signature:    strings.Repeat("f", 128),
 	}
-	member, err := InviteMember(ctx, pool, orgID, epoch, inviteReq)
+	member, err := InviteMember(ctx, pool, orgID, inviteReq)
 	if err != nil {
 		t.Fatalf("InviteMember failed: %v", err)
 	}
@@ -360,7 +350,7 @@ func TestFullMemberLifecycle(t *testing.T) {
 		t.Error("expected new member to be active")
 	}
 
-	ok, err := VerifyMemberAccess(ctx, pool, orgID, memberPubkey, 0)
+	ok, err := VerifyMemberAccess(ctx, pool, orgID, memberPubkey)
 	if err != nil {
 		t.Fatalf("VerifyMemberAccess failed: %v", err)
 	}
@@ -368,7 +358,7 @@ func TestFullMemberLifecycle(t *testing.T) {
 		t.Error("expected member to have access")
 	}
 
-	err = RemoveMember(ctx, pool, orgID, memberPubkey, epoch)
+	err = RemoveMember(ctx, pool, orgID, memberPubkey)
 	if err != nil {
 		t.Fatalf("RemoveMember failed: %v", err)
 	}
@@ -383,7 +373,6 @@ func TestFullMemberLifecycle(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -424,7 +413,6 @@ func TestListOrgsForMember(t *testing.T) {
 		t.Errorf("expected role 'leader', got %s", entries[0].Role)
 	}
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	inviteReq := protocol.InviteMemberRequest{
 		Pubkey:       memberPubkey,
 		X25519Pubkey: strings.Repeat("e", 64),
@@ -432,7 +420,7 @@ func TestListOrgsForMember(t *testing.T) {
 		SignedBy:     leaderPubkey,
 		Signature:    strings.Repeat("f", 128),
 	}
-	_, err = InviteMember(ctx, pool, orgID, epoch, inviteReq)
+	_, err = InviteMember(ctx, pool, orgID, inviteReq)
 	if err != nil {
 		t.Fatalf("InviteMember failed: %v", err)
 	}
@@ -450,7 +438,6 @@ func TestListOrgsForMember(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }
@@ -490,7 +477,6 @@ func TestListOrgsForMember_InactiveExcluded(t *testing.T) {
 		t.Fatalf("CreateOrg failed: %v", err)
 	}
 
-	epoch, _ := orgs.GetCurrentEpoch(ctx, pool, orgID)
 	inviteReq := protocol.InviteMemberRequest{
 		Pubkey:       memberPubkey,
 		X25519Pubkey: strings.Repeat("e", 64),
@@ -498,7 +484,7 @@ func TestListOrgsForMember_InactiveExcluded(t *testing.T) {
 		SignedBy:     leaderPubkey,
 		Signature:    strings.Repeat("f", 128),
 	}
-	_, err = InviteMember(ctx, pool, orgID, epoch, inviteReq)
+	_, err = InviteMember(ctx, pool, orgID, inviteReq)
 	if err != nil {
 		t.Fatalf("InviteMember failed: %v", err)
 	}
@@ -511,7 +497,7 @@ func TestListOrgsForMember_InactiveExcluded(t *testing.T) {
 		t.Fatalf("expected 1 org before removal, got %d", len(entries))
 	}
 
-	RemoveMember(ctx, pool, orgID, memberPubkey, epoch)
+	RemoveMember(ctx, pool, orgID, memberPubkey)
 
 	entries, err = ListOrgsForMember(ctx, pool, memberPubkey)
 	if err != nil {
@@ -523,7 +509,6 @@ func TestListOrgsForMember_InactiveExcluded(t *testing.T) {
 
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 }

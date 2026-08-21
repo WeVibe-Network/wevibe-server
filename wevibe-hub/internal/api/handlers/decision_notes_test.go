@@ -76,10 +76,10 @@ func seedDecisionNotesEnv(t *testing.T) (*pgxpool.Pool, string, localActor, loca
 	}
 
 	_, err = pool.Exec(context.Background(), `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, join_epoch, active)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, active)
 		VALUES
-			($1, $2, $2, 'leader', 0, TRUE),
-			($1, $3, $3, 'member', 0, TRUE)
+			($1, $2, $2, 'leader', TRUE),
+			($1, $3, $3, 'member', TRUE)
 	`, orgID, leader.pubkeyHex, member.pubkeyHex)
 	if err != nil {
 		t.Fatalf("insert members: %v", err)

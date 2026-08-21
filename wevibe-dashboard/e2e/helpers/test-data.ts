@@ -3,11 +3,9 @@ export const TEST_ORG = {
   org_name: 'Test Organization',
   domain: 'testing',
   leader_pubkey: 'leader-pubkey-abcd1234',
-  current_epoch: 1,
   egress_mode: 'unrestricted',
   allowed_providers: [],
   status: 'active',
-  rotation_status: 'active',
   required_approvals: 1,
   created_at: '2026-01-01T00:00:00Z',
 };
@@ -19,7 +17,6 @@ export const TEST_MEMBERS = [
     x25519_pubkey: 'x25519-leader-key',
     role: 'leader',
     join_epoch: 0,
-    history_access_from_epoch: 0,
     authorized_until_epoch: null,
     active: true,
     joined_at: '2026-01-01T00:00:00Z',
@@ -31,7 +28,6 @@ export const TEST_MEMBERS = [
     x25519_pubkey: 'x25519-mod-key',
     role: 'moderator',
     join_epoch: 1,
-    history_access_from_epoch: 1,
     authorized_until_epoch: null,
     active: true,
     joined_at: '2026-01-02T00:00:00Z',
@@ -43,7 +39,6 @@ export const TEST_MEMBERS = [
     x25519_pubkey: 'x25519-member-key',
     role: 'member',
     join_epoch: 1,
-    history_access_from_epoch: 1,
     authorized_until_epoch: null,
     active: true,
     joined_at: '2026-01-03T00:00:00Z',
@@ -56,7 +51,6 @@ export const TEST_MEMBERS = [
     display_name: 'Contributor Test User',
     role: 'contributor',
     join_epoch: 1,
-    history_access_from_epoch: 1,
     authorized_until_epoch: null,
     active: true,
     joined_at: '2026-01-04T00:00:00Z',
@@ -69,15 +63,6 @@ export const TEST_KEYWORDS = [
   { keyword: 'kubernetes', deprecated: false, created_at: '2026-01-01T00:00:00Z', usage_count: 0 },
   { keyword: 'nginx', deprecated: true, created_at: '2026-01-01T00:00:00Z', usage_count: 0 },
 ];
-
-export const TEST_EPOCH_MANIFEST = {
-  org_id: 'test-org-1',
-  epoch_id: 1,
-  pk_mod: 'test-pk-mod-key',
-  signed_by: 'leader-pubkey-abcd1234',
-  signature: 'test-signature',
-  created_at: '2026-01-01T00:00:00Z',
-};
 
 export const TEST_RECOVERY_SHARE = {
   org_id: 'test-org-1',

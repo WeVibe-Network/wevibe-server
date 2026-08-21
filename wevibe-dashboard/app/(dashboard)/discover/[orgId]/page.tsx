@@ -123,11 +123,6 @@ export default function OrgDetailPage({ params }: PageProps) {
           </div>
 
           <div>
-            <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Current Epoch</h3>
-            <p className="text-wv-text font-mono">{org.current_epoch}</p>
-          </div>
-
-          <div>
             <h3 className="text-sm font-mono font-medium uppercase tracking-[0.08em] text-wv-dim mb-1">Status</h3>
             <p className="text-wv-text capitalize font-mono">{org.status}</p>
           </div>

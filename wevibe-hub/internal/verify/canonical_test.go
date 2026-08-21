@@ -141,63 +141,6 @@ func TestInviteMemberMessage_Deterministic(t *testing.T) {
 	}
 }
 
-func TestRotateEpochMessage_Deterministic(t *testing.T) {
-	modEnv := "mod_data"
-	envs := []protocol.MemberEnvelopePair{
-		{Pubkey: "charlie", EncEnvelope: "enc_c", SearchEnvelope: "srch_c", ModEnvelope: nil},
-		{Pubkey: "alice", EncEnvelope: "enc_a", SearchEnvelope: "srch_a", ModEnvelope: &modEnv},
-		{Pubkey: "bob", EncEnvelope: "enc_b", SearchEnvelope: "srch_b", ModEnvelope: nil},
-	}
-
-	msg := RotateEpochMessage("org-1", "new_pk_mod_hex", "leader_hex", envs)
-	lines := splitLines(string(msg))
-
-	if len(lines) != 5 {
-		t.Fatalf("expected 5 lines, got %d", len(lines))
-	}
-	if lines[0] != "wevibe.rotate_epoch.v1" {
-		t.Errorf("line 0: %q", lines[0])
-	}
-
-	inner := "enc_envelope:enc_a\nmod_envelope:mod_data\npubkey:alice\nsearch_envelope:srch_a" +
-		"\n--\n" +
-		"enc_envelope:enc_b\nmod_envelope:\npubkey:bob\nsearch_envelope:srch_b" +
-		"\n--\n" +
-		"enc_envelope:enc_c\nmod_envelope:\npubkey:charlie\nsearch_envelope:srch_c"
-	expectedHash := sha256Hex([]byte(inner))
-
-	if lines[1] != "envelopes_hash:"+expectedHash {
-		t.Errorf("envelopes_hash mismatch:\ngot:  %q\nwant: envelopes_hash:%s", lines[1], expectedHash)
-	}
-	if lines[2] != "new_pk_mod:new_pk_mod_hex" {
-		t.Errorf("line 2: %q", lines[2])
-	}
-	if lines[3] != "org_id:org-1" {
-		t.Errorf("line 3: %q", lines[3])
-	}
-	if lines[4] != "signed_by:leader_hex" {
-		t.Errorf("line 4: %q", lines[4])
-	}
-}
-
-func TestRotateEpochMessage_OrderIndependent(t *testing.T) {
-	envs1 := []protocol.MemberEnvelopePair{
-		{Pubkey: "bob", EncEnvelope: "enc_b", SearchEnvelope: "srch_b"},
-		{Pubkey: "alice", EncEnvelope: "enc_a", SearchEnvelope: "srch_a"},
-	}
-	envs2 := []protocol.MemberEnvelopePair{
-		{Pubkey: "alice", EncEnvelope: "enc_a", SearchEnvelope: "srch_a"},
-		{Pubkey: "bob", EncEnvelope: "enc_b", SearchEnvelope: "srch_b"},
-	}
-
-	msg1 := RotateEpochMessage("o", "p", "s", envs1)
-	msg2 := RotateEpochMessage("o", "p", "s", envs2)
-
-	if string(msg1) != string(msg2) {
-		t.Fatal("RotateEpochMessage should be order-independent on envelopes input")
-	}
-}
-
 func TestRemoveMemberMessage_Deterministic(t *testing.T) {
 	msg := RemoveMemberMessage("org-test-1", "member_pubkey_hex", "leader_pubkey_hex")
 
@@ -535,14 +478,6 @@ func TestFeeModelHash_EmptyIsBraces(t *testing.T) {
 	expected := sha256Hex([]byte("{}"))
 	if h1 != expected {
 		t.Errorf("expected SHA-256 of '{}': got %s, want %s", h1, expected)
-	}
-}
-
-func TestEnvelopesHash_EmptySlice(t *testing.T) {
-	h := envelopesHash(nil)
-	expected := sha256Hex([]byte(""))
-	if h != expected {
-		t.Errorf("empty envelopes hash: got %s, want %s", h, expected)
 	}
 }
 

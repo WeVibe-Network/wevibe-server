@@ -110,7 +110,7 @@ func TestQueryByKeywords_WithQdrant(t *testing.T) {
 	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	ctx := context.Background()
-	_, _, _, err = QueryByKeywords(ctx, client, "test-org", []int32{1}, []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 1.0}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
+	_, _, _, err = QueryByKeywords(ctx, client, "test-org", []protocol.KeywordWithWeight{{Keyword: "token1", Weight: 1.0}}, make([]float32, EMBED_DIM), "", 10, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryByKeywords failed: %v", err)
 	}
@@ -153,7 +153,6 @@ func TestAddAndQueryRoundtrip(t *testing.T) {
 	}
 
 	results, _, _, err := QueryByKeywords(ctx, client, "roundtrip-org",
-		[]int32{0},
 		[]protocol.KeywordWithWeight{{Keyword: uniqueToken, Weight: 1.0}},
 		vec,
 		"",
@@ -243,12 +242,12 @@ func TestQueryPoints_EmbeddingModelFilterAppliedConditionally(t *testing.T) {
 	orgID := "filter-org"
 	vector := make([]float32, EMBED_DIM)
 
-	_, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "nomic-embed-text:v1.5", 5, false, 0, 0)
+	_, _, _, err := client.QueryPoints(context.Background(), orgID, vector, nil, "nomic-embed-text:v1.5", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints with embedding model id failed: %v", err)
 	}
 
-	_, _, _, err = client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
+	_, _, _, err = client.QueryPoints(context.Background(), orgID, vector, nil, "", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints without embedding model id failed: %v", err)
 	}
@@ -297,7 +296,7 @@ func TestQueryPointsMissingCollectionReturnsEmpty(t *testing.T) {
 	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
 	vector := make([]float32, EMBED_DIM)
-	results, contested, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, vector, nil, "", 5, false, 0, 0)
+	results, contested, _, err := client.QueryPoints(context.Background(), orgID, vector, nil, "", 5, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints returned unexpected error: %v", err)
 	}
@@ -470,7 +469,7 @@ func queryPointsFromPayloadForTest(t *testing.T, payloadOverride map[string]any)
 	client := &QdrantClient{restURL: server.URL, apiKey: "test-api-key-for-unit-tests-only"}
 	client.SetPendingDenialDB(emptyPendingDenialDB{})
 
-	results, _, _, err := client.QueryPoints(context.Background(), orgID, []int32{1}, make([]float32, EMBED_DIM), nil, "", 1, false, 0, 0)
+	results, _, _, err := client.QueryPoints(context.Background(), orgID, make([]float32, EMBED_DIM), nil, "", 1, false, 0, 0)
 	if err != nil {
 		t.Fatalf("QueryPoints failed: %v", err)
 	}

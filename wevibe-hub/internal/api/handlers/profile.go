@@ -42,8 +42,7 @@ type ModeratorStats struct {
 }
 
 type LeaderStats struct {
-	TotalChainCommits   uint64 `json:"total_chain_commits"`
-	TotalEpochRotations uint64 `json:"total_epoch_rotations"`
+	TotalChainCommits uint64 `json:"total_chain_commits"`
 }
 
 func GetProfile(w http.ResponseWriter, r *http.Request) {

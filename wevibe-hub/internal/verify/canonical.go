@@ -43,17 +43,6 @@ func InviteMemberMessage(orgID, pubkey, x25519Pubkey, role, signedBy, encEnvelop
 	}, "\n"))
 }
 
-func RotateEpochMessage(orgID, newPkMod, signedBy string, envelopes []protocol.MemberEnvelopePair) []byte {
-	envHash := envelopesHash(envelopes)
-	return []byte(strings.Join([]string{
-		"wevibe.rotate_epoch.v1",
-		fmt.Sprintf("envelopes_hash:%s", envHash),
-		fmt.Sprintf("new_pk_mod:%s", newPkMod),
-		fmt.Sprintf("org_id:%s", orgID),
-		fmt.Sprintf("signed_by:%s", signedBy),
-	}, "\n"))
-}
-
 func RemoveMemberMessage(orgID, pubkey, signedBy string) []byte {
 	return []byte(strings.Join([]string{
 		"wevibe.remove_member.v1",
@@ -116,33 +105,6 @@ func feeModelHash(feeModel protocol.FeeModel) string {
 	canonical := b.String()
 
 	h := sha256.Sum256([]byte(canonical))
-	return hex.EncodeToString(h[:])
-}
-
-func envelopesHash(envelopes []protocol.MemberEnvelopePair) string {
-	sorted := make([]protocol.MemberEnvelopePair, len(envelopes))
-	copy(sorted, envelopes)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Pubkey < sorted[j].Pubkey
-	})
-
-	var entries []string
-	for _, e := range sorted {
-		modEnv := ""
-		if e.ModEnvelope != nil {
-			modEnv = *e.ModEnvelope
-		}
-		entry := strings.Join([]string{
-			fmt.Sprintf("enc_envelope:%s", e.EncEnvelope),
-			fmt.Sprintf("mod_envelope:%s", modEnv),
-			fmt.Sprintf("pubkey:%s", e.Pubkey),
-			fmt.Sprintf("search_envelope:%s", e.SearchEnvelope),
-		}, "\n")
-		entries = append(entries, entry)
-	}
-
-	joined := strings.Join(entries, "\n--\n")
-	h := sha256.Sum256([]byte(joined))
 	return hex.EncodeToString(h[:])
 }
 

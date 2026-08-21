@@ -67,8 +67,8 @@ func setupOrgForModerationWithActor(t *testing.T, pool *pgxpool.Pool) (orgID str
 	}
 
 	_, err = pool.Exec(ctx, `
-		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_contribute, join_epoch)
-		VALUES ($1, $2, $3, 'member', true, 0)
+		INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_contribute)
+		VALUES ($1, $2, $3, 'member', true)
 	`, orgID, contributor.pubHex, randHex(t, 32))
 	if err != nil {
 		t.Fatalf("insert contributor member: %v", err)
@@ -77,7 +77,6 @@ func setupOrgForModerationWithActor(t *testing.T, pool *pgxpool.Pool) (orgID str
 	t.Cleanup(func() {
 		pool.Exec(ctx, "DELETE FROM pending_submissions WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM members WHERE org_id = $1", orgID)
-		pool.Exec(ctx, "DELETE FROM epoch_manifests WHERE org_id = $1", orgID)
 		pool.Exec(ctx, "DELETE FROM orgs WHERE org_id = $1", orgID)
 	})
 
@@ -202,50 +201,9 @@ func TestSubmitMemory_AcceptsValidEpochZeroSubmission(t *testing.T) {
 	}
 }
 
-func TestSubmitMemory_RejectsNegativeEpoch(t *testing.T) {
-	pool := testPoolMod(t)
-	handlers.SetPool(pool)
-
-	orgID, contributor := setupOrgForModerationWithActor(t, pool)
-
-	reqBody := protocol.SubmitMemoryRequest{
-		OrgID:             orgID,
-		EpochID:           -1,
-		Ciphertext:        strings.Repeat("a", 64),
-		WrappedDekMod:     strings.Repeat("b", 64),
-		SubmissionHash:    strings.Repeat("c", 64),
-		PlaintextHash:     strings.Repeat("e", 64),
-		Salt:              strings.Repeat("1", 64),
-		CiphertextHash:    strings.Repeat("2", 64),
-		WrappedDekHash:    strings.Repeat("3", 64),
-		ContributorPubkey: contributor.pubHex,
-		ContributorSig:    strings.Repeat("d", 128),
-		MemoryType:        protocol.MemoryTypeMemory,
-	}
-	body, _ := json.Marshal(reqBody)
-
-	r := chi.NewRouter()
-	r.Route("/v1/orgs/{orgID}", func(r chi.Router) {
-		r.Use(auth.RequireVerifiedMembership(pool))
-		r.Post("/submit", handlers.SubmitMemory)
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/orgs/"+orgID+"/submit", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", contributor.authHeader(time.Now()))
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), "epoch_id is required") {
-		t.Errorf("expected epoch_id error message, got: %s", w.Body.String())
-	}
-}
-
-func TestSubmitMemory_RejectsNonexistentEpoch(t *testing.T) {
+// Epoch rotation is retired: the only admissible epoch is the constant 0.
+// A single gate rejects every nonzero epoch_id (negative or positive).
+func TestSubmitMemory_RejectsNonzeroEpoch(t *testing.T) {
 	pool := testPoolMod(t)
 	handlers.SetPool(pool)
 
@@ -283,8 +241,8 @@ func TestSubmitMemory_RejectsNonexistentEpoch(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "epoch_id does not exist") {
-		t.Errorf("expected error about nonexistent epoch, got: %s", w.Body.String())
+	if !strings.Contains(w.Body.String(), "epoch_id must be 0") {
+		t.Errorf("expected epoch_id must be 0 error, got: %s", w.Body.String())
 	}
 }
 
@@ -299,15 +257,15 @@ func TestVoteOnSubmission_AdvisoryTallies(t *testing.T) {
 	mod2 := newVoteActor(t)
 
 	_, err := pool.Exec(ctx, `
-	        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate, join_epoch)
-	        VALUES ($1, $2, $3, 'member', true, 0)
+	        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate)
+	        VALUES ($1, $2, $3, 'member', true)
 	    `, orgID, mod1.pubHex, randHex(t, 32))
 	if err != nil {
 		t.Fatalf("insert moderator 1: %v", err)
 	}
 	_, err = pool.Exec(ctx, `
-	        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate, join_epoch)
-	        VALUES ($1, $2, $3, 'member', true, 0)
+	        INSERT INTO members (org_id, pubkey, x25519_pubkey, role, can_moderate)
+	        VALUES ($1, $2, $3, 'member', true)
 	    `, orgID, mod2.pubHex, randHex(t, 32))
 	if err != nil {
 		t.Fatalf("insert moderator 2: %v", err)

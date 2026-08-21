@@ -41,11 +41,9 @@ type OrgInfo struct {
 	TechStack        string    `json:"tech_stack"`
 	FocusAreas       string    `json:"focus_areas"`
 	LeaderPubkey     string    `json:"leader_pubkey"`
-	CurrentEpoch     int       `json:"current_epoch"`
 	EgressMode       string    `json:"egress_mode"`
 	AllowedProviders []string  `json:"allowed_providers"`
 	Status           string    `json:"status"`
-	RotationStatus   string    `json:"rotation_status"`
 	CreatedAt        time.Time `json:"created_at"`
 }
 
@@ -56,7 +54,6 @@ type DiscoverOrg struct {
 	LeaderPubkey   string  `json:"leader_pubkey"`
 	MemberCount    int     `json:"member_count"`
 	CreatedAt      string  `json:"created_at"`
-	CurrentEpoch   int     `json:"current_epoch"`
 	LastActivityAt *string `json:"last_activity_at"`
 }
 
@@ -81,17 +78,8 @@ type CreateOrgRequest struct {
 	ModEnvelope        string   `json:"mod_envelope"`
 }
 
-type RotateEpochRequest struct {
-	NewPkMod  string               `json:"new_pk_mod"`
-	UmbralPK  string               `json:"umbral_pk,omitempty"`
-	SignedBy  string               `json:"signed_by"`
-	Signature string               `json:"signature"`
-	Envelopes []MemberEnvelopePair `json:"envelopes"`
-}
-
 type EpochManifestResponse struct {
 	OrgID     string    `json:"org_id" db:"org_id"`
-	EpochID   int       `json:"epoch_id" db:"epoch_id"`
 	PkMod     string    `json:"pk_mod" db:"pk_mod"`
 	UmbralPK  string    `json:"umbral_pk,omitempty" db:"umbral_pk"`
 	SignedBy  string    `json:"signed_by" db:"signed_by"`
@@ -106,9 +94,6 @@ type MemberRecord struct {
 	Role                   string    `json:"role" db:"role"`
 	CanContribute          bool      `json:"can_contribute" db:"can_contribute"`
 	CanModerate            bool      `json:"can_moderate" db:"can_moderate"`
-	JoinEpoch              int       `json:"join_epoch" db:"join_epoch"`
-	HistoryAccessFromEpoch int       `json:"history_access_from_epoch" db:"history_access_from_epoch"`
-	AuthorizedUntilEpoch   *int      `json:"authorized_until_epoch" db:"authorized_until_epoch"`
 	Active                 bool      `json:"active" db:"active"`
 	MembershipActive       bool      `json:"membership_active" db:"membership_active"`
 	JoinedAt               time.Time `json:"joined_at" db:"joined_at"`
@@ -133,17 +118,9 @@ type InviteMemberRequest struct {
 
 type KeyEnvelopeResponse struct {
 	OrgID          string  `json:"org_id"`
-	EpochID        int     `json:"epoch_id"`
 	EncEnvelope    string  `json:"enc_envelope"`
 	SearchEnvelope string  `json:"search_envelope"`
 	ModEnvelope    *string `json:"mod_envelope"`
-}
-
-type MemberEnvelopePair struct {
-	Pubkey         string  `json:"pubkey"`
-	EncEnvelope    string  `json:"enc_envelope"`
-	SearchEnvelope string  `json:"search_envelope"`
-	ModEnvelope    *string `json:"mod_envelope,omitempty"`
 }
 
 type SubmitMemoryRequest struct {
@@ -388,17 +365,15 @@ type IndexEntry struct {
 }
 
 type MemberOrgEntry struct {
-	OrgID                  string   `json:"org_id"`
-	OrgName                string   `json:"org_name"`
-	Role                   string   `json:"role"`
-	CanContribute          bool     `json:"can_contribute"`
-	CanModerate            bool     `json:"can_moderate"`
-	CurrentEpoch           int      `json:"current_epoch"`
-	HistoryAccessFromEpoch int      `json:"history_access_from_epoch"`
-	EgressMode             string   `json:"egress_mode"`
-	AllowedProviders       []string `json:"allowed_providers"`
-	ModPubkey              *string  `json:"mod_pubkey"`
-	WalletAddress          *string  `json:"wallet_address,omitempty"`
+	OrgID            string   `json:"org_id"`
+	OrgName          string   `json:"org_name"`
+	Role             string   `json:"role"`
+	CanContribute    bool     `json:"can_contribute"`
+	CanModerate      bool     `json:"can_moderate"`
+	EgressMode       string   `json:"egress_mode"`
+	AllowedProviders []string `json:"allowed_providers"`
+	ModPubkey        *string  `json:"mod_pubkey"`
+	WalletAddress    *string  `json:"wallet_address,omitempty"`
 }
 
 type MemberOrgsResponse struct {

@@ -231,13 +231,9 @@ export default function MemoryReview({
           }
         }
 
-        const epochResp = await fetch(`${hubUrl}/v1/orgs/${orgId}`);
-        if (!epochResp.ok) {
-          errors.push(`Failed to fetch org ${orgId} epoch: HTTP ${epochResp.status}`);
-          continue;
-        }
-        const epochData = (await epochResp.json()) as { current_epoch?: number };
-        const epochId = epochData.current_epoch ?? 0;
+        // Epoch is fixed at 0 (hub submit gate rejects any other value); the
+        // org's rotation epoch no longer exists on the wire.
+        const epochId = 0;
 
         const payloads: SubmitMemoryPayload[] = [];
 

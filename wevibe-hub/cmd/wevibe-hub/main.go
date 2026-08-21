@@ -297,8 +297,6 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireVerifiedMembership(handlers.GetPool()))
 
-			r.Post("/epoch/rotate", handlers.RotateEpoch)
-
 			r.Post("/members", handlers.InviteMember)
 			r.Get("/members", handlers.ListMembers)
 			r.Get("/members/{pubkey}", handlers.GetMember)
